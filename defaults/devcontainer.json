@@ -1,0 +1,8 @@
+{
+  "name": "devcontainer",
+  "initializeCommand": "printf 'ERROR: use dev/devcontainer to start this container.\\nSee the devcontainer submodule README.\\n' >&2; exit 1",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/src",
+  "remoteUser": "vscode"
+}

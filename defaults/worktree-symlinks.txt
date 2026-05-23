@@ -1,0 +1,3 @@
+# Paths under the main worktree to symlink into new worktrees.
+# The devcontainer submodule is always symlinked so dev/ scripts resolve.
+devcontainer

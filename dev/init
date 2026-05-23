@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bootstrap devcontainer into a consumer project.
+#
+# After adding the submodule:
+#   git submodule add <url> devcontainer
+#   devcontainer/dev/init
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+repo="$(git -C "$base" rev-parse --show-superproject-working-tree 2>/dev/null)" || true
+
+if [ -z "$repo" ]; then
+    echo "error: dev/init must be run from a consumer repo (as a submodule), not standalone" >&2
+    exit 1
+fi
+
+target="$repo/.devcontainer"
+mkdir -p "$target"
+
+echo "Bootstrapping devcontainer into $repo..."
+
+copied=0
+for f in install-system.sh setup-env.sh compose.override.yml devcontainer.json \
+         external-volumes.txt worktree-symlinks.txt worktree-copies.txt \
+         audit-prefixes.txt host-mounts.txt project.env.example; do
+    if [ ! -f "$target/$f" ]; then
+        cp "$base/defaults/$f" "$target/$f"
+        echo "  created .devcontainer/$f"
+        copied=$((copied + 1))
+    else
+        echo "  exists  .devcontainer/$f (skipped)"
+    fi
+done
+
+# Create dev symlink
+submodule_rel="$(python3 -c "import os; print(os.path.relpath('$base', '$repo'))")"
+if [ -L "$repo/dev" ]; then
+    rm "$repo/dev"
+    ln -s "$submodule_rel/dev" "$repo/dev"
+    echo "  updated dev -> $submodule_rel/dev"
+elif [ ! -e "$repo/dev" ]; then
+    ln -s "$submodule_rel/dev" "$repo/dev"
+    echo "  created dev -> $submodule_rel/dev"
+else
+    echo "  warning: $repo/dev already exists and is not a symlink (skipped)"
+fi
+
+echo ""
+echo "Bootstrapped $copied file(s). Next steps:"
+echo "  1. Edit .devcontainer/install-system.sh   — system packages for your project"
+echo "  2. Edit .devcontainer/setup-env.sh         — dependency install / sync"
+echo "  3. Edit .devcontainer/compose.override.yml — volumes, env vars"
+echo "  4. Edit .devcontainer/devcontainer.json    — container name, IDE settings"
+echo "  5. git add .devcontainer/ dev && git commit"
+echo "  6. dev/devcontainer up"
