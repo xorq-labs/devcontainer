@@ -30,7 +30,7 @@ while [[ "${1:-}" == -* ]]; do
     esac
 done
 
-# Resolve through symlinks so dev -> devcontainer/dev works
+# Resolve through symlinks and PATH to find the base repo
 _SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DEV_BASE_DIR="$(cd "$_SCRIPT_DIR/.." && pwd)"
 export DEV_BASE_DIR
@@ -39,10 +39,11 @@ export DEV_BASE_DIR
 DEV_MAIN_TREE="$(dev_main_tree)" || exit 1
 export DEV_MAIN_TREE
 
-# Consumer project config: .devcontainer/ in the main worktree
-DEV_PROJECT_DIR="$DEV_MAIN_TREE/.devcontainer"
-if [ ! -d "$DEV_PROJECT_DIR" ]; then
-    DEV_PROJECT_DIR="$DEV_BASE_DIR/defaults"
+# Project overlay resolution: DEV_PROJECT_DIR env var (explicit) takes
+# precedence, otherwise resolve_project_dir walks the standard tiers.
+DEV_PROJECT_NAME="${DEV_PROJECT_NAME:-$(basename "$DEV_MAIN_TREE")}"
+if [ -z "${DEV_PROJECT_DIR:-}" ]; then
+    DEV_PROJECT_DIR="$(resolve_project_dir "$DEV_BASE_DIR" "$DEV_MAIN_TREE" "$DEV_PROJECT_NAME")"
 fi
 export DEV_PROJECT_DIR
 
@@ -84,19 +85,11 @@ if [ -d "$DEV_WORKSPACE" ]; then
     fi
 fi
 
-# PROJECT_NAME scopes container names and shared volumes — must be consistent
-# across worktrees, so always read from the main tree's project.env.
-_main_project_env="$DEV_PROJECT_DIR/project.env"
-[ -f "$_main_project_env" ] && . "$_main_project_env"
-DEV_PROJECT_NAME="${PROJECT_NAME:-$(basename "$DEV_MAIN_TREE")}"
+# PROJECT_NAME and MODEL_VERSION from the project overlay's project.env.
+_project_env="$DEV_PROJECT_DIR/project.env"
+[ -f "$_project_env" ] && . "$_project_env"
+DEV_PROJECT_NAME="${PROJECT_NAME:-$DEV_PROJECT_NAME}"
 unset PROJECT_NAME
-# MODEL_VERSION can vary per worktree. Re-source the workspace's copy
-# (if different from main) so per-worktree overrides take effect.
-if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
-    _ws_project_env="$DEV_WORKSPACE/.devcontainer/project.env"
-    [ -f "$_ws_project_env" ] && . "$_ws_project_env"
-    unset PROJECT_NAME
-fi
 [ -n "${MODEL_VERSION:-}" ] && export DEV_MODEL_VERSION="$MODEL_VERSION"
 unset MODEL_VERSION
 export DEV_UID="$(id -u)"
@@ -214,10 +207,9 @@ show_config_changes() {
         echo "  (no baseline — cannot determine which files changed)"
         return
     fi
-    local files
+    local files current_hash saved_hash desc
     files="$(config_files)" || return 1
     while IFS= read -r f; do
-        local current_hash saved_hash desc
         current_hash="$(sha256sum "$f" | cut -d' ' -f1)"
         saved_hash="$(grep -F "  $f" "$saved" | head -1 | cut -d' ' -f1)"
         desc="$(config_file_desc "$f")"
@@ -339,7 +331,7 @@ ensure_up() {
         install_hooks
         ensure_external_volumes
         if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
-            (cd "$DEV_WORKSPACE" && "$DEV_MAIN_TREE/dev/setup-worktree")
+            (cd "$DEV_WORKSPACE" && "$DEV_BASE_DIR/dev/setup-worktree")
         fi
 
         if ! is_running; then
@@ -380,6 +372,10 @@ ensure_up() {
 }
 
 case "${1:-up}" in
+    init)
+        shift
+        exec "$DEV_BASE_DIR/dev/init" "$@"
+        ;;
     up)
         ensure_up
         ;;
@@ -504,6 +500,7 @@ case "${1:-up}" in
 Usage: devcontainer [-w dir] <command>
 
 Commands:
+  init [name]                         create a project overlay (default: workspace basename)
   up                                  start the dev container (default)
   down                                stop the dev container
   reset                               destroy container and all volumes

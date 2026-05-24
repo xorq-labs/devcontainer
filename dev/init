@@ -1,56 +1,94 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap devcontainer into a consumer project.
+# Create a project overlay for devcontainer.
 #
-# After adding the submodule:
-#   git submodule add <url> devcontainer
-#   devcontainer/dev/init
+# Usage (shipped overlay in devcontainer repo):
+#   devcontainer init [project-name]
+#
+# Usage (local overlay in workspace, gitignored):
+#   devcontainer init --local [project-name]
 
 base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-repo="$(git -C "$base" rev-parse --show-superproject-working-tree 2>/dev/null)" || true
+. "$base/lib/git.sh"
 
-if [ -z "$repo" ]; then
-    echo "error: dev/init must be run from a consumer repo (as a submodule), not standalone" >&2
-    exit 1
+local_mode=false
+project_name=""
+for arg in "$@"; do
+    case "$arg" in
+        --local) local_mode=true ;;
+        -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
+        *) project_name="$arg" ;;
+    esac
+done
+
+if [ -z "$project_name" ]; then
+    main_tree="$(dev_main_tree)" || {
+        echo "error: not in a git repo and no project name given" >&2
+        echo "usage: devcontainer init [--local] [project-name]" >&2
+        exit 1
+    }
+    project_name="$(basename "$main_tree")"
+else
+    main_tree="$(dev_main_tree 2>/dev/null)" || true
 fi
 
-target="$repo/.devcontainer"
+if $local_mode; then
+    if [ -z "${main_tree:-}" ]; then
+        echo "error: --local requires being inside a git repo" >&2
+        exit 1
+    fi
+    target="$main_tree/.devcontainer"
+    # Seed from shipped defaults if they exist, otherwise generic defaults.
+    if [ -d "$base/projects/$project_name" ]; then
+        source_dir="$base/projects/$project_name"
+    else
+        source_dir="$base/defaults"
+    fi
+    label=".devcontainer/ (local)"
+else
+    target="$base/projects/$project_name"
+    source_dir="$base/defaults"
+    label="projects/$project_name/"
+fi
+
 mkdir -p "$target"
 
-echo "Bootstrapping devcontainer into $repo..."
+echo "Creating project overlay: $label"
 
 copied=0
 for f in install-system.sh setup-env.sh compose.override.yml devcontainer.json \
          external-volumes.txt worktree-symlinks.txt worktree-copies.txt \
          audit-prefixes.txt host-mounts.txt project.env.example; do
     if [ ! -f "$target/$f" ]; then
-        cp "$base/defaults/$f" "$target/$f"
-        echo "  created .devcontainer/$f"
+        cp "$source_dir/$f" "$target/$f"
+        echo "  created $f"
         copied=$((copied + 1))
     else
-        echo "  exists  .devcontainer/$f (skipped)"
+        echo "  exists  $f (skipped)"
     fi
 done
 
-# Create dev symlink
-submodule_rel="$(python3 -c "import os; print(os.path.relpath('$base', '$repo'))")"
-if [ -L "$repo/dev" ]; then
-    rm "$repo/dev"
-    ln -s "$submodule_rel/dev" "$repo/dev"
-    echo "  updated dev -> $submodule_rel/dev"
-elif [ ! -e "$repo/dev" ]; then
-    ln -s "$submodule_rel/dev" "$repo/dev"
-    echo "  created dev -> $submodule_rel/dev"
-else
-    echo "  warning: $repo/dev already exists and is not a symlink (skipped)"
-fi
-
 echo ""
-echo "Bootstrapped $copied file(s). Next steps:"
-echo "  1. Edit .devcontainer/install-system.sh   — system packages for your project"
-echo "  2. Edit .devcontainer/setup-env.sh         — dependency install / sync"
-echo "  3. Edit .devcontainer/compose.override.yml — volumes, env vars"
-echo "  4. Edit .devcontainer/devcontainer.json    — container name, IDE settings"
-echo "  5. git add .devcontainer/ dev && git commit"
-echo "  6. dev/devcontainer up"
+echo "Created $copied file(s) in $target/"
+
+if $local_mode; then
+    echo ""
+    echo "This directory is picked up as a tier-2 override (workspace-local)."
+    echo "Add .devcontainer/ to .gitignore if you don't want to track it."
+    echo ""
+    echo "Next steps:"
+    echo "  1. Edit .devcontainer/install-system.sh   — system packages"
+    echo "  2. Edit .devcontainer/setup-env.sh         — dependency install / sync"
+    echo "  3. Edit .devcontainer/compose.override.yml — volumes, env vars"
+    echo "  4. Edit .devcontainer/devcontainer.json    — container name, IDE settings"
+    echo "  5. Run: devcontainer up"
+else
+    echo ""
+    echo "Next steps:"
+    echo "  1. Edit projects/$project_name/install-system.sh   — system packages"
+    echo "  2. Edit projects/$project_name/setup-env.sh         — dependency install / sync"
+    echo "  3. Edit projects/$project_name/compose.override.yml — volumes, env vars"
+    echo "  4. Edit projects/$project_name/devcontainer.json    — container name, IDE settings"
+    echo "  5. cd to the workspace and run: devcontainer up"
+fi

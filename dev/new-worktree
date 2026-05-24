@@ -5,19 +5,23 @@ branch="${1:?usage: new-worktree <branch-name>}"
 _base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$_base/lib/git.sh"
 main_tree="$(dev_main_tree)"
-project_env="$main_tree/.devcontainer/project.env"
+
+_project_name="$(basename "$main_tree")"
+_project_dir="$(resolve_project_dir "$_base" "$main_tree" "$_project_name")"
+project_env="$_project_dir/project.env"
 [ -f "$project_env" ] && . "$project_env"
-DEV_PROJECT_NAME="${PROJECT_NAME:-$(basename "$main_tree")}"
+DEV_PROJECT_NAME="${PROJECT_NAME:-$_project_name}"
 unset PROJECT_NAME
+
 dest="$(dirname "$main_tree")/${DEV_PROJECT_NAME}-${branch//\//-}"
 
 install_hooks
 git worktree add "$dest" "$branch" >&2
 git worktree lock "$dest" \
-    --reason "locked by dev/new-worktree to prevent container-side prune" \
+    --reason "locked by new-worktree to prevent container-side prune" \
     2>/dev/null || true
 cd "$dest"
-"$main_tree/dev/setup-worktree" >&2
-direnv allow >&2
+"$_base/dev/setup-worktree" >&2
+direnv allow >&2 2>/dev/null || true
 
 echo "$dest"

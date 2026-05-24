@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      args:
+        EXTRA_PATH: "${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/.venv/bin"
+    volumes:
+      - uv-cache:/home/vscode/.cache/uv
+      - venv:${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/.venv
+
+volumes:
+  uv-cache:
+    name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-uv-cache
+    external: true
+  venv:

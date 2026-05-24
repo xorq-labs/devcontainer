@@ -11,6 +11,8 @@ if [ "$main" = "$here" ]; then
     exit 0
 fi
 
+_project_dir="$(resolve_project_dir "$_base" "$main")"
+
 manifest="$here/.envrcs/.worktree-manifest"
 mkdir -p "$here/.envrcs"
 : > "$manifest"
@@ -32,16 +34,6 @@ heal_stale_symlink() {
     return 1
 }
 
-# Replace empty submodule dirs (uninitialized in worktree) with nothing,
-# so link_from_main can create a symlink in its place.
-heal_empty_submodule() {
-    if [ -d "$1" ] && [ ! -L "$1" ] && [ -z "$(ls -A "$1" 2>/dev/null)" ]; then
-        rmdir "$1"
-        return 0
-    fi
-    return 1
-}
-
 # Copy paths listed in worktree-copies.txt (globs expanded against $main).
 # NUL-delimited subshell with nullglob handles filenames with spaces safely.
 # Shell substitutions (`$(...)`, backticks, `~`, `$VAR`) in patterns are not
@@ -58,7 +50,7 @@ while IFS= read -r pattern; do
         fi
         echo "$rel" >> "$manifest"
     done < <(shopt -s nullglob; IFS=; for f in "$main"/$pattern; do printf '%s\0' "$f"; done)
-done < <(read_list "$main/.devcontainer/worktree-copies.txt")
+done < <(read_list "$_project_dir/worktree-copies.txt")
 
 # .gitignore: git opens it with O_NOFOLLOW (a symlink would ELOOP) — must be a copy.
 if [ -e "$main/.gitignore" ]; then
@@ -72,7 +64,6 @@ fi
 link_from_main() {
     local target="$1"
     heal_stale_symlink "$here/$target" && changes=$((changes + 1))
-    heal_empty_submodule "$here/$target" || true
     if [ -e "$main/$target" ]; then
         if ! is_present "$here/$target"; then
             mkdir -p "$(dirname "$here/$target")"
@@ -87,11 +78,11 @@ link_from_main() {
 # (devcontainer infrastructure, not project-specific) — always a symlink.
 link_from_main ".claude"
 
-# Symlink paths listed in worktree-symlinks.txt.
+# Symlink paths listed in worktree-symlinks.txt (from the project overlay).
 while IFS= read -r target; do
     [ -z "$target" ] && continue
     link_from_main "$target"
-done < <(read_list "$main/.devcontainer/worktree-symlinks.txt")
+done < <(read_list "$_project_dir/worktree-symlinks.txt")
 
 # Per-developer extras (gitignored).
 while IFS= read -r target; do
@@ -101,5 +92,5 @@ done < <(read_list "$main/.envrcs/.worktree-symlinks")
 
 if [ "$changes" -gt 0 ]; then
     echo "Manifest written to .envrcs/.worktree-manifest"
-    echo "To remove: dev/cleanup-worktree"
+    echo "To remove: cleanup-worktree"
 fi

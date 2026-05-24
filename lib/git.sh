@@ -13,6 +13,24 @@ dev_main_tree() {
     printf '%s\n' "$out" | head -1 | sed 's/^worktree //'
 }
 
+# Resolve the project overlay directory. Resolution order:
+#   1. workspace .devcontainer/ (project chose to override)
+#   2. devcontainer repo projects/<name>/ (shipped defaults)
+#   3. devcontainer repo defaults/ (generic fallback)
+# Usage: resolve_project_dir <base_dir> <main_tree> [project_name]
+# project_name defaults to basename of main_tree.
+resolve_project_dir() {
+    local base_dir="$1" main_tree="$2"
+    local name="${3:-$(basename "$main_tree")}"
+    if [ -d "$main_tree/.devcontainer" ]; then
+        printf '%s\n' "$main_tree/.devcontainer"
+    elif [ -d "$base_dir/projects/$name" ]; then
+        printf '%s\n' "$base_dir/projects/$name"
+    else
+        printf '%s\n' "$base_dir/defaults"
+    fi
+}
+
 # Symlink the committable post-checkout hook into .git/hooks/ so that every
 # `git worktree add` — whether from dev/new-worktree, an agent, or a human —
 # auto-locks the new worktree.  Refuses to clobber a non-symlink hook.
