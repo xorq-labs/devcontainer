@@ -70,10 +70,12 @@ Project-specific configuration lives in a **project overlay** — either `projec
 | `external-volumes.txt` | basenames of named volumes declared `external: true` in `compose.override.yml`; pre-created as `${DEV_PROJECT_NAME}-<basename>` so a fresh checkout doesn't error |
 | `worktree-symlinks.txt` | paths under the main worktree to symlink into new worktrees |
 | `worktree-copies.txt` | paths to copy (not symlink) into new worktrees; globs allowed |
+| `host-mounts.txt` | `<host-path>:<container-path>[:<options>]` bind mounts added to compose at runtime; tilde-expanded, missing host paths skipped with a warning |
+| `host-mounts.local.txt` | per-developer mount overrides (gitignored); same format as `host-mounts.txt` |
 | `audit-prefixes.txt` | first-word triggers for two-word grouping in the audit report (e.g. `git` → `git status`, `uv` → `uv run`) |
 | `project.env.example` | template for the gitignored `project.env` overrides |
 
-Copy `project.env.example` to `project.env` (gitignored) to set:
+Copy `project.env.example` to `project.env` (gitignored) in the overlay directory to set:
 
 - `PROJECT_NAME` — overrides the per-project namespace (defaults to the basename of the main checkout). Scopes the container name and shared docker volumes (`<PROJECT_NAME>-uv-cache`, etc.). Always read from the **main tree's** `project.env` to keep naming consistent across worktrees.
 - `MODEL_VERSION` — passed as `--model` on each `dev/devcontainer claude` invocation. Per-worktree: each worktree's `project.env` can set a different model (e.g. use a cheaper model for routine tasks). Re-read from the host on every call, not baked into the container. Leave unset to use Claude Code's default.
@@ -82,13 +84,41 @@ The container workspace is always `/workspaces/src` — threaded through compose
 
 ## Adapting to another project
 
-Create a project overlay with `devcontainer init [project-name]` (shipped in `projects/<name>/`) or `devcontainer init --local` (local in `.devcontainer/`), then edit the overlay:
+Clone this repo as a sibling of your project and symlink its `dev/` directory into your workspace:
+
+```bash
+# from the parent directory containing both repos
+ln -s ../devcontainer/dev myproject/dev
+echo dev >> myproject/.gitignore
+```
+
+Then add `PATH_add dev` to your `.envrc` (or `export PATH="$PWD/dev:$PATH"` in your shell). The `devcontainer` script resolves its own location through the symlink to find the Dockerfile, compose config, and libraries, so a single clone serves all projects. `socat` is optional on the host but required for SSH and GPG agent forwarding into the container.
+
+From your project directory, create a project overlay with `devcontainer init --local` (creates `.devcontainer/` in the workspace) or `devcontainer init [project-name]` (creates `projects/<name>/` in the devcontainer repo for shipping defaults), then edit the overlay:
 
 1. **`install-system.sh`** — apt packages and language toolchain. The default is a no-op. Replace with whatever your project needs (e.g. `build-essential` + `uv`, `golang-go`, `rustup`, `bun`).
-2. **`setup-env.sh`** — what runs after the container starts. The default is a no-op. Both subcommands (`first-run`, `sync-if-needed`) are called by `dev/devcontainer`; keep their interface and replace the bodies.
+2. **`setup-env.sh`** — what runs after the container starts. Takes one subcommand: `first-run` (called once after initial `up` — install dependencies, seed caches) or `sync-if-needed` (called on every `exec`/`claude` entry — re-sync if a lockfile changed, e.g. compare `uv.lock` mtime against `.venv/.last-sync`). Keep the case-statement interface and replace the bodies.
 3. **`compose.override.yml`** — named volumes, host bind mounts, env vars, and the `EXTRA_PATH` build arg. All project-specific compose customization belongs here, not in `docker-compose.yml`. Named-volume mount targets are auto-chowned to `vscode` on first run, so adding a volume requires no changes outside this file. Delete or rename volumes you don't need. Cross-worktree volumes (`external: true`) must also be listed in `external-volumes.txt` so `dev/devcontainer` pre-creates them with the project-namespaced name.
+
+    Skeleton for a Python project with a `.venv` and shared uv cache:
+
+    ```yaml
+    services:
+      app:
+        build:
+          args:
+            EXTRA_PATH: /workspaces/src/.venv/bin
+        volumes:
+          - uv-cache:/home/vscode/.cache/uv
+
+    volumes:
+      uv-cache:
+        external: true
+    ```
+
+    With `external: true`, add `uv-cache` to `external-volumes.txt` so the volume is pre-created as `${DEV_PROJECT_NAME}-uv-cache`.
 4. **`worktree-symlinks.txt`** / **`worktree-copies.txt`** — what `setup-worktree` propagates from the main worktree.
-5. **`devcontainer.json`** — VS Code's entry point. Edit `name`, `forwardPorts`, and `customizations.vscode` for your project. Lives alongside the overlay; can't import sub-files because of the devcontainer.json spec.
+5. **`devcontainer.json`** — only used when attaching VS Code to an already-running container (started via `dev/devcontainer up`). Edit `forwardPorts` and `customizations.vscode.extensions` for your project. The `initializeCommand` tripwire blocks VS Code's "Reopen in Container" flow, which is unsupported (see below). Lives alongside the overlay.
 6. **`Dockerfile`** — exposes build args you can override from `compose.override.yml` rather than editing the Dockerfile in place: `BASE_IMAGE` (default `mcr.microsoft.com/devcontainers/python:3.12-bookworm`) for non-Python base images; `EXTRA_PATH` (empty by default, set to the Python venv's bin dir in the project override) prepended to the container `PATH` so project tools resolve; and tool-version pins (`NODE_MAJOR`, `JUST_VERSION`, `SOPS_VERSION`, `CLAUDE_CODE_VERSION`) — bump these together with their companion checksum args where present (`NODESOURCE_SHA256`, `JUST_INSTALLER_SHA256`, `SOPS_SHA256`; Claude Code is installed via npm and has no checksum arg).
 
 All overlay files are optional. `install-system.sh` and `setup-env.sh` must exist (the Dockerfile `COPY`s them) but may be empty no-ops; `compose.override.yml` and the `*.txt` lists may be missing entirely — `read_list` treats a missing list as empty.

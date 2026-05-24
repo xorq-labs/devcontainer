@@ -1,2 +1,0 @@
-# Paths under the main worktree to symlink into new worktrees.
-# Override in projects/<name>/worktree-symlinks.txt.
