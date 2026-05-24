@@ -9,18 +9,45 @@ manifest="$here/.envrcs/.worktree-manifest"
 
 if [ -f "$manifest" ]; then
     cd "$here"
-    while IFS= read -r entry; do
-        [ -z "$entry" ] && continue
-        if [ -L "$entry" ]; then
-            rm -v "$entry"
-        elif [ -f "$entry" ]; then
-            rm -v "$entry" || true
-        elif [ -d "$entry" ]; then
-            echo "skipping $entry (expected symlink, found directory)" >&2
-        fi
+    while IFS=$'\t' read -r action entry; do
+        [ -z "$entry" ] && {
+            # Legacy manifest (bare path, no action column)
+            entry="$action"
+            action=""
+        }
+        case "$action" in
+            symlink)
+                if [ -L "$entry" ]; then
+                    rm -v "$entry"
+                elif [ -e "$entry" ]; then
+                    echo "skipping $entry (manifest says symlink, but it is not one)" >&2
+                fi
+                ;;
+            copy)
+                if [ -L "$entry" ]; then
+                    echo "skipping $entry (manifest says copy, found symlink)" >&2
+                elif [ -f "$entry" ]; then
+                    rm -v "$entry" || true
+                elif [ -d "$entry" ]; then
+                    echo "skipping $entry (manifest says copy, found directory)" >&2
+                fi
+                ;;
+            *)
+                # Legacy format: best-effort removal (old behavior)
+                if [ -L "$entry" ]; then
+                    rm -v "$entry"
+                elif [ -f "$entry" ]; then
+                    rm -v "$entry" || true
+                elif [ -d "$entry" ]; then
+                    echo "skipping $entry (expected symlink, found directory)" >&2
+                fi
+                ;;
+        esac
     done < "$manifest"
     # Remove any empty parent directories created by setup
-    while IFS= read -r entry; do
+    while IFS=$'\t' read -r action entry; do
+        # Legacy manifest: bare path with no tab lands entirely in $action
+        [ -z "$entry" ] && entry="$action"
         dir=$(dirname "$entry")
         rmdir -p "$dir" 2>/dev/null || true
     done < "$manifest"

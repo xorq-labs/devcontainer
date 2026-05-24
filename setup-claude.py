@@ -131,8 +131,8 @@ def setup_project_settings(host_project_key, container_project_key):
 
     host_memory = host_project_dir / "memory"
     container_memory = container_project_dir / "memory"
-    if host_memory.is_dir() and not container_memory.exists():
-        shutil.copytree(host_memory, container_memory)
+    if host_memory.is_dir():
+        shutil.copytree(host_memory, container_memory, dirs_exist_ok=True)
 
 
 def setup_sessions(workspace):

@@ -16,7 +16,7 @@ DEV_SSH_FORWARD_PIDFILE="/tmp/devcontainer-ssh-forward-${DEV_CONTAINER_NAME}.pid
 ssh_forward_port() {
     local hash
     hash="$(echo "$DEV_CONTAINER_NAME" | cksum | cut -d' ' -f1)"
-    echo $(( (hash % 16384) + 49152 ))
+    echo $(( (hash % 8192) + 49152 ))
 }
 
 stop_ssh_forward() {
@@ -94,8 +94,16 @@ setup_ssh_forward() {
         UNIX-LISTEN:/run/ssh-agent/agent.sock,fork,unlink-early,mode=600 \
         TCP:host.docker.internal:${port}
 
-    # Poll ssh-add -l until the bridge is reachable through the container.
-    for i in $(seq 1 30); do
+    # Two-phase readiness check: wait for the socket to appear (socat has
+    # bound), then verify the end-to-end agent path with ssh-add.
+    for i in $(seq 1 50); do
+        if dc_exec test -S /run/ssh-agent/agent.sock 2>/dev/null; then
+            break
+        fi
+        sleep 0.05
+    done
+
+    for i in $(seq 1 10); do
         if dc_exec ssh-add -l >/dev/null 2>&1; then
             return 0
         fi
@@ -111,8 +119,8 @@ DEV_GPG_FORWARD_PIDFILE="/tmp/devcontainer-gpg-forward-${DEV_CONTAINER_NAME}.pid
 
 gpg_forward_port() {
     local hash
-    hash="$(echo "${DEV_CONTAINER_NAME}-gpg" | cksum | cut -d' ' -f1)"
-    echo $(( (hash % 16384) + 49152 ))
+    hash="$(echo "$DEV_CONTAINER_NAME" | cksum | cut -d' ' -f1)"
+    echo $(( (hash % 8192) + 57344 ))
 }
 
 stop_gpg_forward() {
@@ -204,6 +212,13 @@ setup_gpg_forward() {
         UNIX-LISTEN:/run/gpg-agent/S.gpg-agent,fork,unlink-early,mode=600 \
         TCP:host.docker.internal:${port}
 
+    for i in $(seq 1 50); do
+        if dc_exec test -S /run/gpg-agent/S.gpg-agent 2>/dev/null; then
+            break
+        fi
+        sleep 0.05
+    done
+
     # Point container gpg at the forwarded socket
     dc_exec bash -c 'mkdir -p ~/.gnupg && chmod 700 ~/.gnupg && ln -sf /run/gpg-agent/S.gpg-agent ~/.gnupg/S.gpg-agent'
 
@@ -212,7 +227,7 @@ setup_gpg_forward() {
     # returns nothing and decryption fails with "No secret key".
     gpg --export 2>/dev/null | dc exec -T app gpg --import 2>/dev/null || true
 
-    for i in $(seq 1 30); do
+    for i in $(seq 1 10); do
         if dc_exec gpg --list-secret-keys 2>/dev/null | grep -q '^sec'; then
             return 0
         fi

@@ -48,7 +48,7 @@ while IFS= read -r pattern; do
             cp -Pv "$f" "$here/$rel"
             changes=$((changes + 1))
         fi
-        echo "$rel" >> "$manifest"
+        printf 'copy\t%s\n' "$rel" >> "$manifest"
     done < <(shopt -s nullglob; IFS=; for f in "$main"/$pattern; do printf '%s\0' "$f"; done)
 done < <(read_list "$_project_dir/worktree-copies.txt")
 
@@ -58,7 +58,7 @@ if [ -e "$main/.gitignore" ]; then
         cp -v "$main/.gitignore" "$here/.gitignore"
         changes=$((changes + 1))
     fi
-    echo ".gitignore" >> "$manifest"
+    printf 'copy\t%s\n' ".gitignore" >> "$manifest"
 fi
 
 link_from_main() {
@@ -70,7 +70,7 @@ link_from_main() {
             ln -sv "$main/$target" "$here/$target"
             changes=$((changes + 1))
         fi
-        echo "$target" >> "$manifest"
+        printf 'symlink\t%s\n' "$target" >> "$manifest"
     fi
 }
 

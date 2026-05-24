@@ -54,9 +54,8 @@ COMPOSE_OVERRIDE="$DEV_PROJECT_DIR/compose.override.yml"
 DEV_CONTAINER_WORKSPACE="/workspaces/src"
 
 DEV_WORKSPACE="${DEV_WORKSPACE:-.}"
-_CMD="${1:-up}"
 
-if [[ "$_CMD" =~ ^(down|reset|clean|status|logs)$ ]]; then
+if [[ "${1:-up}" =~ ^(down|reset|clean|status|logs)$ ]]; then
     if [ -d "$DEV_WORKSPACE" ]; then
         export DEV_WORKSPACE="$(cd "$DEV_WORKSPACE" && pwd)"
     else
@@ -163,6 +162,7 @@ config_files() {
         "$DEV_PROJECT_DIR/host-mounts.local.txt"; do
         [ -f "$hm" ] && printf '%s\n' "$hm"
     done
+    :
 }
 
 config_hash() {
@@ -177,6 +177,7 @@ config_hash() {
         # explicitly so a change forces rebuild. Anything else baked via env
         # interpolation must be added here.
         printf 'DEV_CONTAINER_WORKSPACE=%s\n' "$DEV_CONTAINER_WORKSPACE"
+        printf 'DEV_PROJECT_DIR=%s\n' "$DEV_PROJECT_DIR"
     } | sha256sum | cut -d' ' -f1
 }
 
@@ -400,7 +401,7 @@ case "${1:-up}" in
         dc down --volumes
         ;;
     clean)
-        read -rp "This will destroy $DEV_CONTAINER_NAME (container, volumes, images, and host-side artifacts). Continue? [y/N] " answer
+        read -rp "This will destroy $DEV_CONTAINER_NAME (container, volumes, images, audit log, and session captures). Continue? [y/N] " answer
         if [[ "$answer" != [yY]* ]]; then
             exit 0
         fi
