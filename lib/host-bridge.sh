@@ -144,11 +144,13 @@ setup_gpg_forward() {
         return 0
     fi
 
-    # agent-extra-socket is specifically designed for forwarding to remote machines
+    # Use the standard socket so the forwarded agent honors the host's
+    # passphrase cache.  The extra socket forces restricted mode, which
+    # re-prompts via pinentry on every private-key op regardless of cache.
     local host_gpg_socket
-    host_gpg_socket="$(gpgconf --list-dirs agent-extra-socket 2>/dev/null)" || true
+    host_gpg_socket="$(gpgconf --list-dirs agent-socket 2>/dev/null)" || true
     if [ -z "$host_gpg_socket" ] || [ ! -S "$host_gpg_socket" ]; then
-        echo "warning: no GPG agent extra socket detected — SOPS PGP decryption won't work inside the container" >&2
+        echo "warning: no GPG agent socket detected — SOPS PGP decryption won't work inside the container" >&2
         echo "  (ensure gpg-agent is running: gpgconf --launch gpg-agent)" >&2
         return 0
     fi
