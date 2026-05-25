@@ -79,6 +79,7 @@ Copy `project.env.example` to `project.env` (gitignored) in the overlay director
 
 - `PROJECT_NAME` — overrides the per-project namespace (defaults to the basename of the main checkout). Scopes the container name and shared docker volumes (`<PROJECT_NAME>-uv-cache`, etc.). Always read from the **main tree's** `project.env` to keep naming consistent across worktrees.
 - `MODEL_VERSION` — passed as `--model` on each `dev/devcontainer claude` invocation. Per-worktree: each worktree's `project.env` can set a different model (e.g. use a cheaper model for routine tasks). Re-read from the host on every call, not baked into the container. Leave unset to use Claude Code's default.
+- `DANGEROUSLY_SKIP_PERMISSIONS=1` — makes `dev/devcontainer claude` pass `--dangerously-skip-permissions` automatically. The explicit `claude-dangerously-skip-permissions` subcommand still works as a one-off override regardless of this setting.
 
 The container workspace is always `/workspaces/src` — threaded through compose, the Dockerfile, and setup-claude as `DEV_CONTAINER_WORKSPACE`, but changing it is not supported.
 

@@ -1,0 +1,6 @@
+# devcontainer per-user overrides (not committed)
+.gitignore
+project.env
+host-mounts.local.txt
+
+.claude

@@ -91,6 +91,8 @@ DEV_PROJECT_NAME="${PROJECT_NAME:-$DEV_PROJECT_NAME}"
 unset PROJECT_NAME
 [ -n "${MODEL_VERSION:-}" ] && export DEV_MODEL_VERSION="$MODEL_VERSION"
 unset MODEL_VERSION
+[ -n "${DANGEROUSLY_SKIP_PERMISSIONS:-}" ] && DEV_DANGEROUSLY_SKIP_PERMISSIONS=1
+unset DANGEROUSLY_SKIP_PERMISSIONS
 export DEV_UID="$(id -u)"
 export DEV_GID="$(id -g)"
 export DEV_MAIN_GIT="$DEV_MAIN_TREE/.git"
@@ -430,10 +432,16 @@ case "${1:-up}" in
         shift
         require_tty claude
         ensure_up
-        echo "Entering claude in $DEV_CONTAINER_NAME..."
+        danger_args=()
+        if [ -n "${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-}" ]; then
+            danger_args=(--dangerously-skip-permissions)
+            echo "Entering claude in $DEV_CONTAINER_NAME (--dangerously-skip-permissions)..."
+        else
+            echo "Entering claude in $DEV_CONTAINER_NAME..."
+        fi
         model_args=()
         [ -n "${DEV_MODEL_VERSION:-}" ] && model_args=(--model "$DEV_MODEL_VERSION")
-        dc_exec claude "${model_args[@]}" "$@"
+        dc_exec claude "${danger_args[@]}" "${model_args[@]}" "$@"
         ;;
     claude-dangerously-skip-permissions)
         shift
