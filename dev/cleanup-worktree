@@ -25,7 +25,14 @@ if [ -f "$manifest" ]; then
                 ;;
             copy)
                 if [ -L "$entry" ]; then
-                    echo "skipping $entry (manifest says copy, found symlink)" >&2
+                    _target="$(readlink -f "$entry" 2>/dev/null || true)"
+                    if [ -z "$_target" ] || [[ "$_target" != "$main/"* ]]; then
+                        # Symlink to an external path (cp -P preserved it) or
+                        # dangling — safe to remove.
+                        rm -v "$entry"
+                    else
+                        echo "skipping $entry (manifest says copy, found symlink into main tree)" >&2
+                    fi
                 elif [ -f "$entry" ]; then
                     if git ls-files --error-unmatch "$entry" &>/dev/null; then
                         git checkout -- "$entry"
