@@ -2,7 +2,9 @@
 set -euo pipefail
 
 apt-get update
-apt-get install -y --no-install-recommends build-essential
+apt-get install -y --no-install-recommends \
+    build-essential \
+    direnv
 rm -rf /var/lib/apt/lists/*
 
 UV_VERSION=0.7.8
