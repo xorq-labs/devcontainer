@@ -27,7 +27,11 @@ if [ -f "$manifest" ]; then
                 if [ -L "$entry" ]; then
                     echo "skipping $entry (manifest says copy, found symlink)" >&2
                 elif [ -f "$entry" ]; then
-                    rm -v "$entry" || true
+                    if git ls-files --error-unmatch "$entry" &>/dev/null; then
+                        git checkout -- "$entry"
+                    else
+                        rm -v "$entry" || true
+                    fi
                 elif [ -d "$entry" ]; then
                     echo "skipping $entry (manifest says copy, found directory)" >&2
                 fi
