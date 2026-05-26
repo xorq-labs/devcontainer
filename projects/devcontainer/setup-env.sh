@@ -5,8 +5,7 @@ case "$cmd" in
     first-run)
         if [ -f .pre-commit-config.yaml ]; then
             echo "Installing pre-commit hooks..."
-            pip install --no-cache-dir --break-system-packages pre-commit
-            pre-commit install 2>/dev/null || true
+            pre-commit install
         fi
 
         if ! grep -q "direnv hook bash" ~/.bashrc 2>/dev/null; then
