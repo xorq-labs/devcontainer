@@ -1,0 +1,21 @@
+{
+  "name": "devcontainer",
+  // Tripwire: blocks VS Code "Reopen in Container" (unsupported).
+  // Start the container via `dev/devcontainer up`, then attach VS Code.
+  "initializeCommand": "printf 'ERROR: use dev/devcontainer to start this container.\\nSee the devcontainer repo README.\\n' >&2; exit 1",
+  "workspaceFolder": "/workspaces/src",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "timonwong.shellcheck",
+        "exiasr.hadolint",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens"
+      ]
+    }
+  }
+}
