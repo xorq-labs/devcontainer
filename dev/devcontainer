@@ -203,7 +203,7 @@ config_file_desc() {
 
 save_config_hashes() {
     config_files | while IFS= read -r f; do
-        sha256sum "$f"
+        [ -f "$f" ] && sha256sum "$f"
     done > "/tmp/devcontainer-${DEV_CONTAINER_NAME}.file-hashes"
 }
 
@@ -216,8 +216,9 @@ show_config_changes() {
     local files current_hash saved_hash desc
     files="$(config_files)" || return 1
     while IFS= read -r f; do
+        [ -f "$f" ] || continue
         current_hash="$(sha256sum "$f" | cut -d' ' -f1)"
-        saved_hash="$(grep -F "  $f" "$saved" | head -1 | cut -d' ' -f1)"
+        saved_hash="$(grep -F "  $f" "$saved" | head -1 | cut -d' ' -f1)" || true
         desc="$(config_file_desc "$f")"
         [ -n "$desc" ] && desc=" ($desc)"
         if [ -z "$saved_hash" ]; then
