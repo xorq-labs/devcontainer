@@ -42,6 +42,7 @@ export DEV_MAIN_TREE
 # Project overlay resolution: DEV_PROJECT_DIR env var (explicit) takes
 # precedence, otherwise resolve_project_dir walks the standard tiers.
 DEV_PROJECT_NAME="${DEV_PROJECT_NAME:-$(basename "$DEV_MAIN_TREE")}"
+_lookup_name="$DEV_PROJECT_NAME"
 if [ -z "${DEV_PROJECT_DIR:-}" ]; then
     DEV_PROJECT_DIR="$(resolve_project_dir "$DEV_BASE_DIR" "$DEV_MAIN_TREE" "$DEV_PROJECT_NAME")"
 fi
@@ -55,7 +56,7 @@ DEV_CONTAINER_WORKSPACE="/workspaces/src"
 
 DEV_WORKSPACE="${DEV_WORKSPACE:-.}"
 
-if [[ "${1:-up}" =~ ^(down|reset|clean|status|logs)$ ]]; then
+if [[ "${1:-up}" =~ ^(down|reset|clean|status|logs|list|resolve)$ ]]; then
     if [ -d "$DEV_WORKSPACE" ]; then
         export DEV_WORKSPACE="$(cd "$DEV_WORKSPACE" && pwd)"
     else
@@ -559,6 +560,60 @@ case "${1:-up}" in
         fi
         echo "overlay: $_overlay_label"
         ;;
+    resolve)
+        echo "Resolved configuration for workspace: $DEV_WORKSPACE"
+        echo ""
+        echo "Overlay resolution:"
+        if [ -d "$DEV_MAIN_TREE/.devcontainer" ]; then
+            echo "  [matched] .devcontainer/ (workspace-local override)"
+        else
+            echo "  [skipped] .devcontainer/ — not present"
+        fi
+        _tier2="$DEV_BASE_DIR/projects/$_lookup_name"
+        if [ -d "$_tier2" ]; then
+            echo "  [matched] projects/$_lookup_name/"
+        else
+            echo "  [skipped] projects/$_lookup_name/ — not present"
+        fi
+        echo "  [fallback] defaults/"
+        echo ""
+        echo "  overlay:  $_overlay_label"
+        echo "  from:     $DEV_PROJECT_DIR"
+        echo ""
+        echo "Resolved values:"
+        echo "  PROJECT_NAME=$DEV_PROJECT_NAME"
+        echo "  MODEL_VERSION=${DEV_MODEL_VERSION:-<unset>}"
+        echo "  DANGEROUSLY_SKIP_PERMISSIONS=${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-<unset>}"
+        echo "  CONTAINER_NAME=$DEV_CONTAINER_NAME"
+        if [ -f "$_project_env" ]; then
+            echo ""
+            echo "Sources:"
+            echo "  project.env: $_project_env"
+        fi
+        ;;
+    list)
+        _wt_paths=()
+        _wt_branches=()
+        while IFS= read -r line; do
+            case "$line" in
+                worktree\ *) _wt_path="${line#worktree }" ;;
+                branch\ *)   _wt_branches+=("${line#branch refs/heads/}"); _wt_paths+=("$_wt_path") ;;
+                HEAD\ *)     _wt_branches+=("(detached)"); _wt_paths+=("$_wt_path") ;;
+            esac
+        done < <(git worktree list --porcelain)
+        printf '%-24s %-10s %s\n' "WORKTREE" "STATUS" "OVERLAY"
+        for i in "${!_wt_paths[@]}"; do
+            _wt="${_wt_paths[$i]}"
+            _br="${_wt_branches[$i]}"
+            _cname="${DEV_PROJECT_NAME}-dev-$(basename "$_wt")"
+            _st="stopped"
+            if docker inspect --format '{{.State.Running}}' "$_cname-app-1" 2>/dev/null | grep -q true; then
+                _st="running"
+            fi
+            _ov="$(project_dir_label "$(resolve_project_dir "$DEV_BASE_DIR" "$_wt" "$DEV_PROJECT_NAME")" "$DEV_BASE_DIR")"
+            printf '%-24s %-10s %s\n' "$_br" "$_st" "$_ov"
+        done
+        ;;
     logs)
         shift
         dc logs "$@"
@@ -574,6 +629,8 @@ Commands:
   reset                               destroy container and all volumes
   clean                               reset + remove images and host-side artifacts
   status                              show whether the container is running
+  list                                list all worktrees with container status and overlay
+  resolve                             show resolved overlay and configuration (dry run)
   logs [args...]                      show container logs
   exec [cmd...]                       run a command (default: bash)
   claude [args...]                    run claude

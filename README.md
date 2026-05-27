@@ -55,6 +55,12 @@ devcontainer clean
 # check whether the container is running
 devcontainer status
 
+# list all worktrees with container status and overlay
+devcontainer list
+
+# show resolved overlay and project.env values without starting anything
+devcontainer resolve
+
 # view container logs
 devcontainer logs
 ```
@@ -99,6 +105,42 @@ Copy `project.env.example` to `project.env` (gitignored) in the overlay director
 - `PROJECT_NAME` — overrides the per-project namespace (defaults to the basename of the main checkout). Scopes the container name and shared docker volumes (`<PROJECT_NAME>-uv-cache`, etc.). Always read from the **main tree's** `project.env` to keep naming consistent across worktrees.
 - `MODEL_VERSION` — passed as `--model` on each `dev/devcontainer claude` invocation. Per-worktree: each worktree's `project.env` can set a different model (e.g. use a cheaper model for routine tasks). Re-read from the host on every call, not baked into the container. Leave unset to use Claude Code's default.
 - `DANGEROUSLY_SKIP_PERMISSIONS=1` — makes `dev/devcontainer claude` pass `--dangerously-skip-permissions` automatically. The explicit `claude-dangerously-skip-permissions` subcommand still works as a one-off override regardless of this setting.
+
+**Inspecting the resolved configuration:**
+
+`devcontainer resolve` shows what overlay and settings would be used for the current workspace without starting anything — useful for verifying that a checkout maps to the expected `projects/<name>/` entry:
+
+```
+$ devcontainer resolve
+Resolved configuration for workspace: /home/dan/repos/github/xorq-dasher
+
+Overlay resolution:
+  [skipped] .devcontainer/ — not present
+  [skipped] projects/xorq-dasher/ — not present
+  [fallback] defaults/
+
+  overlay:  defaults/ (no project overlay matched)
+  from:     /home/dan/repos/github/devcontainer/defaults
+
+Resolved values:
+  PROJECT_NAME=xorq-dasher
+  MODEL_VERSION=<unset>
+  DANGEROUSLY_SKIP_PERMISSIONS=<unset>
+  CONTAINER_NAME=xorq-dasher-dev-xorq-dasher
+```
+
+If the overlay name doesn't match the checkout directory name (e.g. you cloned `dasher` as `xorq-dasher`), set `DEV_PROJECT_NAME` before invoking: `DEV_PROJECT_NAME=dasher devcontainer resolve`.
+
+`devcontainer list` shows all worktrees with their container status and the overlay each would resolve to now:
+
+```
+$ devcontainer list
+WORKTREE                 STATUS     OVERLAY
+main                     running    projects/dasher
+feat/auth                stopped    projects/dasher
+```
+
+When a container starts (`up`, `exec`, `claude`), the resolved overlay and `project.env` values are written to `.envrcs/.resolved-env` in the workspace as a historical record of what was actually used.
 
 The container workspace is always `/workspaces/src` — threaded through compose, the Dockerfile, and setup-claude as `DEV_CONTAINER_WORKSPACE`, but changing it is not supported.
 

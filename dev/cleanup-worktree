@@ -3,7 +3,11 @@ set -euo pipefail
 
 _base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$_base/lib/git.sh"
-here=$(git rev-parse --show-toplevel)
+if [ -n "${1:-}" ]; then
+    here="$(cd "$1" && git rev-parse --show-toplevel)"
+else
+    here=$(git rev-parse --show-toplevel)
+fi
 main=$(dev_main_tree)
 manifest="$here/.envrcs/.worktree-manifest"
 
