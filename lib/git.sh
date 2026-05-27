@@ -32,6 +32,17 @@ resolve_project_dir() {
     fi
 }
 
+# Human-readable label for the resolved overlay directory.
+project_dir_label() {
+    local dir="$1" base_dir="$2"
+    case "$dir" in
+        */projects/*)  printf '%s\n' "${dir#"$base_dir/"}" ;;
+        */.devcontainer) printf '%s\n' ".devcontainer/" ;;
+        */defaults)    printf '%s\n' "defaults/ (no project overlay matched)" ;;
+        *)             printf '%s\n' "$dir" ;;
+    esac
+}
+
 # Symlink the committable post-checkout hook into .git/hooks/ so that every
 # `git worktree add` — whether from dev/new-worktree, an agent, or a human —
 # auto-locks the new worktree.  Refuses to clobber a non-symlink hook.
