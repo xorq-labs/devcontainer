@@ -12,6 +12,40 @@ if [ "${1:-}" = "completions" ]; then
     exec "$(dirname "$(readlink -f "$0")")/devcontainer-completions" "$@"
 fi
 
+show_usage() {
+    cat <<'USAGE'
+Usage: devcontainer [-w dir] <command>
+
+Commands:
+  init [name]                         create a project overlay (default: workspace basename)
+  up                                  start the dev container (default)
+  down                                stop the dev container
+  reset                               destroy container and all volumes
+  clean                               reset + remove images and host-side artifacts
+  status                              show whether the container is running
+  list                                list all worktrees with container status and overlay
+  resolve                             show resolved overlay and configuration (dry run)
+  logs [args...]                      show container logs
+  exec [cmd...]                       run a command (default: bash)
+  claude [args...]                    run claude
+  claude-dangerously-skip-permissions run claude with --dangerously-skip-permissions
+  refresh-ssh                         re-forward SSH agent (runs automatically on up/exec/claude;
+                                        use standalone when agent changes mid-session)
+  refresh-gpg                         re-forward GPG agent (runs automatically on up/exec/claude;
+                                        use standalone when host gpg-agent restarts)
+  fix-credentials                     repair credentials symlink in a running container
+                                        (needed after upgrading from pre-shared-credentials build)
+  unlock                                remove stale lockfile (safe — refuses if lock is actively held)
+  audit [--summary|--new|--all|--clear]  show permission audit log (default: --summary)
+  completions [bash|zsh|fish]         emit shell completions
+USAGE
+}
+
+if [[ "${1:-}" =~ ^(-h|--help|help)$ ]]; then
+    show_usage
+    exit 0
+fi
+
 if [ "$(uname -s)" != "Linux" ]; then
     echo "error: devcontainer requires Linux (uses GNU coreutils)" >&2
     exit 1
@@ -626,32 +660,7 @@ case "${1:-up}" in
         dc logs "$@"
         ;;
     *)
-        cat >&2 <<'USAGE'
-Usage: devcontainer [-w dir] <command>
-
-Commands:
-  init [name]                         create a project overlay (default: workspace basename)
-  up                                  start the dev container (default)
-  down                                stop the dev container
-  reset                               destroy container and all volumes
-  clean                               reset + remove images and host-side artifacts
-  status                              show whether the container is running
-  list                                list all worktrees with container status and overlay
-  resolve                             show resolved overlay and configuration (dry run)
-  logs [args...]                      show container logs
-  exec [cmd...]                       run a command (default: bash)
-  claude [args...]                    run claude
-  claude-dangerously-skip-permissions run claude with --dangerously-skip-permissions
-  refresh-ssh                         re-forward SSH agent (runs automatically on up/exec/claude;
-                                        use standalone when agent changes mid-session)
-  refresh-gpg                         re-forward GPG agent (runs automatically on up/exec/claude;
-                                        use standalone when host gpg-agent restarts)
-  fix-credentials                     repair credentials symlink in a running container
-                                        (needed after upgrading from pre-shared-credentials build)
-  unlock                                remove stale lockfile (safe — refuses if lock is actively held)
-  audit [--summary|--new|--all|--clear]  show permission audit log (default: --summary)
-  completions [bash|zsh|fish]         emit shell completions
-USAGE
+        show_usage >&2
         exit 1
         ;;
 esac

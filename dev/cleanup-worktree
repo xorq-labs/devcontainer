@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
+    cat <<'USAGE'
+Usage: cleanup-worktree [path]
+
+Remove a git worktree and undo overlay symlinks/copies created by
+setup-worktree. Defaults to the current directory if no path is given.
+USAGE
+    exit 0
+fi
+
 _base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$_base/lib/git.sh"
 if [ -n "${1:-}" ]; then
