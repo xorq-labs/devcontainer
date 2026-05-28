@@ -18,6 +18,7 @@ jobs:
           find . -name '*.sh' -not -path './.git/*' -print0 \
             | xargs -0 shellcheck --severity=warning
       - name: Run ShellCheck on extensionless bash scripts
+        # keep in sync with .pre-commit-config.yaml shellcheck (extensionless)
         run: |
           shellcheck --severity=warning \
             dev/devcontainer \
@@ -52,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install yamllint
+      - run: pip install yamllint==1.37.1
       - run: yamllint -c .yamllint.yml .
 
   pre-commit:

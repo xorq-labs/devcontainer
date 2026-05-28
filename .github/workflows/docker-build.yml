@@ -11,6 +11,7 @@ on:
       - setup-claude.py
       - audit-hook
   pull_request:
+    branches: [main]
     paths:
       - Dockerfile
       - defaults/**
