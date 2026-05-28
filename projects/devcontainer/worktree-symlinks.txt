@@ -1,0 +1,2 @@
+# Paths under the main worktree to symlink into new worktrees.
+# .claude/ is always symlinked (hardcoded in setup-worktree).
