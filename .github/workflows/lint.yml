@@ -1,0 +1,74 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Run ShellCheck on .sh files
+        run: |
+          find . -name '*.sh' -not -path './.git/*' -print0 \
+            | xargs -0 shellcheck --severity=warning
+      - name: Run ShellCheck on extensionless bash scripts
+        run: |
+          shellcheck --severity=warning \
+            dev/devcontainer \
+            dev/devcontainer-completions \
+            dev/init \
+            dev/new-worktree \
+            dev/setup-worktree \
+            dev/cleanup-worktree \
+            dev/hooks/post-checkout
+
+  ruff:
+    name: Ruff (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: "format --check"
+
+  hadolint:
+    name: Hadolint (Dockerfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install yamllint
+      - run: yamllint -c .yamllint.yml .
+
+  pre-commit:
+    name: pre-commit (end-to-end setup)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install pre-commit via repo-local uv tool
+        run: |
+          export UV_TOOL_DIR="${PWD}/.tools/uvx"
+          export UV_TOOL_BIN_DIR="${PWD}/.tools/bin"
+          uv tool install pre-commit
+          echo "${PWD}/.tools/bin" >> "$GITHUB_PATH"
+      - name: Verify tools installed to .tools/
+        run: |
+          test -x .tools/bin/pre-commit
+      - name: Run pre-commit on all files
+        run: pre-commit run --all-files

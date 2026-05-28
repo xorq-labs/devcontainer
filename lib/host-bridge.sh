@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Host-to-container bridge functions: SSH agent forwarding, GPG agent
 # forwarding, host git config, gh credentials, and Claude config setup.
 #
@@ -76,8 +77,7 @@ setup_ssh_forward() {
     # Wait briefly for socat to fail-fast on bad args (e.g. port in use); if
     # it's still alive after the window, treat it as healthy. Bounded retry
     # instead of a fixed sleep — flaky on slow hosts.
-    local i
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         sleep 0.05
         kill -0 "$host_pid" 2>/dev/null || break
     done
@@ -96,14 +96,14 @@ setup_ssh_forward() {
 
     # Two-phase readiness check: wait for the socket to appear (socat has
     # bound), then verify the end-to-end agent path with ssh-add.
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         if dc_exec test -S /run/ssh-agent/agent.sock 2>/dev/null; then
             break
         fi
         sleep 0.05
     done
 
-    for i in $(seq 1 10); do
+    for _ in $(seq 1 10); do
         if dc_exec ssh-add -l >/dev/null 2>&1; then
             return 0
         fi
@@ -196,8 +196,7 @@ setup_gpg_forward() {
     local host_pid=$!
     echo "$host_pid" > "$DEV_GPG_FORWARD_PIDFILE"
 
-    local i
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         sleep 0.05
         kill -0 "$host_pid" 2>/dev/null || break
     done
@@ -214,7 +213,7 @@ setup_gpg_forward() {
         UNIX-LISTEN:/run/gpg-agent/S.gpg-agent,fork,unlink-early,mode=600 \
         TCP:host.docker.internal:${port}
 
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         if dc_exec test -S /run/gpg-agent/S.gpg-agent 2>/dev/null; then
             break
         fi
@@ -229,7 +228,7 @@ setup_gpg_forward() {
     # returns nothing and decryption fails with "No secret key".
     gpg --export 2>/dev/null | dc exec -T app gpg --import 2>/dev/null || true
 
-    for i in $(seq 1 10); do
+    for _ in $(seq 1 10); do
         if dc_exec gpg --list-secret-keys 2>/dev/null | grep -q '^sec'; then
             return 0
         fi

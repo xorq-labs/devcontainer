@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Reads host-mount list files and generates a docker-compose override that
 # bind-mounts host paths into the container.
 #
@@ -42,5 +43,6 @@ generate_host_mounts_override() {
         printf '      - "%s"\n' "$m" >> "$out"
     done
 
+    # shellcheck disable=SC2034  # consumed by caller after sourcing
     DEV_HOST_MOUNTS_OVERRIDE="$out"
 }

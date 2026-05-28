@@ -1,0 +1,7 @@
+ignored:
+  # FROM ${BASE_IMAGE}: the ARG default includes a tag but hadolint can't resolve it
+  - DL3006
+  # apt pin versions: overly strict for devcontainer images
+  - DL3008
+  # COPY --from=project: "project" is a docker-compose additional_contexts build context, not a FROM alias
+  - DL3022

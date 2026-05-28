@@ -9,6 +9,7 @@ main_tree="$(dev_main_tree)"
 _project_name="$(basename "$main_tree")"
 _project_dir="$(resolve_project_dir "$_base" "$main_tree" "$_project_name")"
 project_env="$_project_dir/project.env"
+# shellcheck disable=SC1090
 [ -f "$project_env" ] && . "$project_env"
 DEV_PROJECT_NAME="${PROJECT_NAME:-$_project_name}"
 unset PROJECT_NAME

@@ -4,6 +4,7 @@
 # additional_contexts; standalone builds can override via --build-context.
 ARG BASE_IMAGE=mcr.microsoft.com/devcontainers/python:3.12-bookworm
 FROM ${BASE_IMAGE}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG USER_UID=1000
 ARG USER_GID=1000

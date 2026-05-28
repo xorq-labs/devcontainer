@@ -23,7 +23,6 @@ import shutil
 import sys
 from pathlib import Path
 
-
 HOST = Path("/home/vscode/.claude-host")
 HOME = Path("/home/vscode/.claude")
 HOST_PREFS = Path("/home/vscode/.claude-host.json")

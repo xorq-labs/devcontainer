@@ -1,0 +1,31 @@
+repos:
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning]
+        types: [shell]
+      - id: shellcheck
+        name: shellcheck (extensionless)
+        args: [--severity=warning]
+        types: [file]
+        files: ^dev/(devcontainer|devcontainer-completions|init|new-worktree|setup-worktree|cleanup-worktree|hooks/post-checkout)$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.13
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+        args: [-c, .yamllint.yml]
+
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: v2.14.0
+    hooks:
+      - id: hadolint
+        args: [--config, .hadolint.yaml]

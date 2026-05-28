@@ -1,0 +1,34 @@
+name: Docker Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - defaults/**
+      - lib/**
+      - projects/**
+      - setup-claude.py
+      - audit-hook
+  pull_request:
+    paths:
+      - Dockerfile
+      - defaults/**
+      - lib/**
+      - projects/**
+      - setup-claude.py
+      - audit-hook
+
+jobs:
+  build:
+    name: Build with default overlay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Dockerfile
+        run: |
+          docker build \
+            --build-context project=./defaults \
+            --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
+            -t devcontainer-ci:test \
+            .
