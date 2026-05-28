@@ -1,3 +1,8 @@
 services:
   app:
     hostname: ${DEV_HOSTNAME:-devcontainer}
+    environment:
+      - DEV_CONTAINER_WORKSPACE
+      - DEV_WORKSPACE
+      - DEV_MAIN_GIT
+      - DEV_MAIN_TREE
