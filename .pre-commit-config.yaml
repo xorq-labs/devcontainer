@@ -5,6 +5,7 @@ repos:
       - id: shellcheck
         args: [--severity=warning]
         types: [shell]
+        exclude: ^\.envrc$
       # keep in sync with .github/workflows/lint.yml extensionless step
       - id: shellcheck
         name: shellcheck (extensionless)
