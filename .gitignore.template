@@ -3,4 +3,10 @@
 project.env
 host-mounts.local.txt
 
+# direnv user/secrets (templates are tracked)
+.envrcs/.envrc.user
+.envrcs/.envrc.secrets
+.envrcs/.resolved-env
+
 .claude
+.tools

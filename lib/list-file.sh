@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared parser for the data-driven list files under .devcontainer/project/
 # (worktree-symlinks.txt, worktree-copies.txt, external-volumes.txt,
 # audit-prefixes.txt, ...).

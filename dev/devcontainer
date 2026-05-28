@@ -86,6 +86,7 @@ fi
 
 # PROJECT_NAME and MODEL_VERSION from the project overlay's project.env.
 _project_env="$DEV_PROJECT_DIR/project.env"
+# shellcheck disable=SC1090
 [ -f "$_project_env" ] && . "$_project_env"
 DEV_PROJECT_NAME="${PROJECT_NAME:-$DEV_PROJECT_NAME}"
 unset PROJECT_NAME
@@ -125,8 +126,10 @@ fi
 DEV_CONTAINER_NAME="${DEV_PROJECT_NAME}-dev-$(basename "$DEV_WORKSPACE")"
 DEV_LOCKFILE="/tmp/devcontainer-${DEV_CONTAINER_NAME}.lock"
 
+# shellcheck disable=SC2034  # consumed by lib/host-bridge.sh
 DEV_HAS_SOCAT=false
 if command -v socat >/dev/null 2>&1; then
+    # shellcheck disable=SC2034
     DEV_HAS_SOCAT=true
 fi
 

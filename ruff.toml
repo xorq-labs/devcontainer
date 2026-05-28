@@ -1,0 +1,16 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "S",   # flake8-bandit (security)
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101"]
+"audit-report.py" = ["S603", "S607"]

@@ -1,3 +1,22 @@
+## Pre-commit hooks
+
+This repo uses [pre-commit](https://pre-commit.com/) to run linters (shellcheck, ruff, yamllint, hadolint) before each commit. All hook dependencies (including linter binaries) are managed by pre-commit — no separate installs needed.
+
+**Setup** (one-time):
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+After this, the configured checks run automatically on `git commit`. To run all hooks against every file manually:
+
+```bash
+pre-commit run --all-files
+```
+
+---
+
 # Dev container
 
 As an alternative to setting up a local environment, you can use the dev container. It works with both the main checkout and git worktrees.

@@ -1,0 +1,3 @@
+# These lib files are sourced, not executed — SC1090 (non-constant source) is expected.
+# SC2155 (declare-and-assign) is a style choice we accept for export one-liners.
+disable=SC2155
