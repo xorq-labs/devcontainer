@@ -35,8 +35,9 @@ Commands:
                                         use standalone when host gpg-agent restarts)
   fix-credentials                     repair credentials symlink in a running container
                                         (needed after upgrading from pre-shared-credentials build)
-  unlock                                remove stale lockfile (safe — refuses if lock is actively held)
-  audit [--summary|--new|--all|--clear]  show permission audit log (default: --summary)
+  unlock                              remove stale lockfile (safe — refuses if lock is actively held)
+  audit [--summary|--new|--all|--clear]
+                                      show permission audit log (default: --summary)
   completions [bash|zsh|fish]         emit shell completions
 USAGE
 }
@@ -592,7 +593,6 @@ case "${1:-up}" in
         echo "overlay: $_overlay_label"
         ;;
     resolve)
-        _lookup_name="$DEV_PROJECT_NAME"
         echo "Resolved configuration for workspace: $DEV_WORKSPACE"
         echo ""
         echo "Overlay resolution:"
@@ -603,14 +603,14 @@ case "${1:-up}" in
         else
             echo "  [skipped] .devcontainer/ — not present"
         fi
-        _tier2="$DEV_BASE_DIR/projects/$_lookup_name"
+        _tier2="$DEV_BASE_DIR/projects/$DEV_PROJECT_NAME"
         if $_matched; then
-            [ -d "$_tier2" ] && echo "  [skipped] projects/$_lookup_name/ — superseded"
+            [ -d "$_tier2" ] && echo "  [skipped] projects/$DEV_PROJECT_NAME/ — superseded"
         elif [ -d "$_tier2" ]; then
-            echo "  [matched] projects/$_lookup_name/"
+            echo "  [matched] projects/$DEV_PROJECT_NAME/"
             _matched=true
         else
-            echo "  [skipped] projects/$_lookup_name/ — not present"
+            echo "  [skipped] projects/$DEV_PROJECT_NAME/ — not present"
         fi
         if $_matched; then
             echo "  [skipped] defaults/ — superseded"
