@@ -1,0 +1,6 @@
+# Per-user direnv overrides (gitignored).
+# Copy to .envrc.user and customize.
+
+source_env .envrc.user.uv
+
+PATH_add $direnv_root/../devcontainer/dev
