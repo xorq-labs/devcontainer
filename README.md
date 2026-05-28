@@ -2,12 +2,18 @@
 
 This repo uses [pre-commit](https://pre-commit.com/) to run linters (shellcheck, ruff, yamllint, hadolint) before each commit. All hook dependencies (including linter binaries) are managed by pre-commit — no separate installs needed.
 
-**Setup** (one-time):
+**Setup** (one-time, from the repo root with direnv active):
 
 ```bash
+# copy the uv envrc if you haven't already — this sets UV_TOOL_DIR/UV_TOOL_BIN_DIR
+# so uv installs tools into .tools/bin/ (project-local, not ~/.local/bin)
+cp .envrcs/.envrc.user.uv .envrcs/.envrc.user
+direnv allow
+
 uv tool install pre-commit
-pre-commit install
 ```
+
+The git hook is installed automatically by `install_hooks` in `lib/git.sh` (called by `new-worktree` and direnv setup). It finds `pre-commit` via `.tools/bin/` on the host or PATH in the container — no `pre-commit install` needed.
 
 After this, the configured checks run automatically on `git commit`. To run all hooks against every file manually:
 

@@ -60,7 +60,12 @@ install_hooks() {
 
     local hooks_dir="$main/.git/hooks"
     mkdir -p "$hooks_dir"
-    if ! [ -e "$hooks_dir/post-checkout" ] || [ -L "$hooks_dir/post-checkout" ]; then
-        ln -sf "../../dev/hooks/post-checkout" "$hooks_dir/post-checkout"
-    fi
+    local name
+    for hook in "$main/dev/hooks/"*; do
+        [ -f "$hook" ] || continue
+        name="$(basename "$hook")"
+        if ! [ -e "$hooks_dir/$name" ] || [ -L "$hooks_dir/$name" ]; then
+            ln -sf "../../dev/hooks/$name" "$hooks_dir/$name"
+        fi
+    done
 }
