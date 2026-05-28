@@ -649,6 +649,7 @@ case "${1:-up}" in
             _resolved="$_wt/.envrcs/.resolved-env"
             _cname=""
             if [ -f "$_resolved" ]; then
+                # shellcheck disable=SC1090
                 _cname="$(. "$_resolved" && printf '%s' "$CONTAINER_NAME")" 2>/dev/null || true
             fi
             [ -z "$_cname" ] && _cname="${DEV_PROJECT_NAME}-dev-$(basename "$_wt")"

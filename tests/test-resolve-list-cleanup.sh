@@ -131,15 +131,21 @@ resolved_out="$TMPDIR_ROOT/resolved-test"
 (
     # Source just the function from the devcontainer script
     _overlay_label="projects/test (has spaces)"
+    # shellcheck disable=SC2034
     DEV_PROJECT_DIR="$TMPDIR_ROOT/project dir"
+    # shellcheck disable=SC2034
     DEV_PROJECT_NAME="test-project"
+    # shellcheck disable=SC2034
     DEV_MODEL_VERSION=""
+    # shellcheck disable=SC2034
     DEV_DANGEROUSLY_SKIP_PERMISSIONS=""
+    # shellcheck disable=SC2034
     DEV_CONTAINER_NAME="test-container"
     eval "$(sed -n '/^write_resolved_env()/,/^}/p' "$DC")"
     write_resolved_env "$resolved_out"
 )
 (
+    # shellcheck disable=SC1090
     . "$resolved_out"
     assert_eq "quoted OVERLAY round-trips" "projects/test (has spaces)" "$OVERLAY"
     assert_eq "quoted OVERLAY_DIR round-trips" "$TMPDIR_ROOT/project dir" "$OVERLAY_DIR"
