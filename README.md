@@ -231,6 +231,7 @@ The two paths diverge in what they provide:
 - **Build fails partway through `up`** — inspect with `devcontainer logs`, then `devcontainer clean && devcontainer up` to rebuild from scratch.
 - **Files in `.venv/` owned by root, or `Permission denied` writing to the workspace** — UID/GID drift between the host and the image. `devcontainer clean && devcontainer up` rebuilds with the current host UID/GID.
 - **`uv sync` runs every entry** — the lockfile is newer than `.venv/.last-sync`. Expected after `git pull`; harmless.
+- **"all predefined address pools have been fully subnetted"** — Docker ran out of subnet ranges for new networks. Orphaned networks accumulate when containers exit without going through `devcontainer down` (host reboot, Docker daemon restart, `docker stop`). Clean up with `docker network prune` and retry.
 - **Auto-rebuild prompt won't go away** — the content hash of `Dockerfile` / compose changed. Accept the rebuild, or `devcontainer clean` to reset state.
 - **GPG passphrase prompt inside the container despite the host not requiring one** — The GPG agent bridge uses the agent-extra-socket, which disables external-cache lookups in pinentry (GNOME Keyring, macOS Keychain, etc.). The setup pre-warms gpg-agent's internal cache with a no-op sign, but if the cache expires mid-session you'll be prompted again. Bump the TTL in your **host's** `~/.gnupg/gpg-agent.conf`:
 

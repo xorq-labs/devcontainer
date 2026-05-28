@@ -397,7 +397,16 @@ ensure_up() {
         fi
 
         if ! is_running; then
-            dc up --build -d
+            _up_out="$(dc up --build -d 2>&1)" && _up_rc=0 || _up_rc=$?
+            printf '%s\n' "$_up_out"
+            if [ "$_up_rc" -ne 0 ]; then
+                if printf '%s' "$_up_out" | grep -q "address pools have been fully subnetted"; then
+                    echo "" >&2
+                    echo "Docker ran out of network address space." >&2
+                    echo "Run 'docker network prune' to remove unused networks, then retry." >&2
+                fi
+                exit "$_up_rc"
+            fi
             tag_image
             setup
         elif image_stale; then
