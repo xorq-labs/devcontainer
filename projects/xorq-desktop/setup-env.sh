@@ -67,7 +67,7 @@ case "$cmd" in
         fi
 
         echo "Installing pre-commit hooks..."
-        uv run pre-commit install 2>/dev/null || true
+        uv run pre-commit install || true
 
         _bashrc_marker="# xorq-desktop-setup"
         if ! grep -qF "$_bashrc_marker" ~/.bashrc 2>/dev/null; then
