@@ -17,9 +17,9 @@ RUN if [ "$USER_GID" != "1000" ]; then groupmod -g $USER_GID vscode; fi \
     && chown -R $USER_UID:$USER_GID /home/vscode
 
 # Generic infrastructure: Node (for claude-code), gh, socat (SSH agent bridge)
-# Node 20 LTS — EOL 2026-10-30, upgrade to setup_22.x when available
-ARG NODE_MAJOR=20
-ARG NODESOURCE_SHA256=2c4c6683a17b6f4128898a7b521e3c8bb725a99ffaf1b5e32ac97c6fa7d381be
+# Node 22 LTS — EOL 2027-04-30
+ARG NODE_MAJOR=22
+ARG NODESOURCE_SHA256=575583bbac2fccc0b5edd0dbc03e222d9f9dc8d724da996d22754d6411104fd1
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x -o /tmp/nodesource.sh \
     && echo "$NODESOURCE_SHA256  /tmp/nodesource.sh" | sha256sum -c - \
     && bash /tmp/nodesource.sh \

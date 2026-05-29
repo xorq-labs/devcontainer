@@ -1,0 +1,32 @@
+{
+  "name": "xorq-desktop",
+  // Tripwire: blocks VS Code "Reopen in Container" (unsupported).
+  // Start the container via `dev/devcontainer up`, then attach VS Code.
+  "initializeCommand": "printf 'ERROR: use dev/devcontainer to start this container.\\nSee the devcontainer repo README.\\n' >&2; exit 1",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/src",
+  "remoteUser": "vscode",
+  "forwardPorts": [1420, 1421],
+  "portsAttributes": {
+    "1420": {"label": "Vite Dev Server"},
+    "1421": {"label": "Vite HMR"}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "eamodio.gitlens",
+        "tamasfe.even-better-toml",
+        "rust-lang.rust-analyzer",
+        "dbaeumer.vscode-eslint",
+        "bradlc.vscode-tailwindcss"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/workspaces/src/.venv/bin/python"
+      }
+    }
+  }
+}

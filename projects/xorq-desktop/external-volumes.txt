@@ -1,0 +1,12 @@
+# Volume names (basenames) declared `external: true` in compose.override.yml.
+# dev/devcontainer pre-creates each as `${DEV_PROJECT_NAME}-<basename>` before
+# `dc up`, so a fresh checkout doesn't error on missing external volumes.
+# Format: see lib/list-file.sh.
+#
+# Volumes mounted at a workspace path that sibling worktrees must also see
+# should additionally appear in worktree-symlinks.txt.
+uv-cache
+pnpm-store
+cargo-registry
+cargo-git
+nix
