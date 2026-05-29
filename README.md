@@ -13,7 +13,7 @@ direnv allow
 uv tool install pre-commit
 ```
 
-The git hook is installed automatically by `install_hooks` in `lib/git.sh` (called by `new-worktree` and direnv setup). It finds `pre-commit` via `.tools/bin/` on the host or PATH in the container — no `pre-commit install` needed.
+The git hook is symlinked automatically by direnv (via `symlink_hooks` in `lib/git.sh`). In devcontainer and worktree contexts, `install_hooks` also clears `core.hooksPath` before symlinking. The hook finds `pre-commit` via `.tools/bin/` on the host or PATH in the container — no `pre-commit install` needed.
 
 After this, the configured checks run automatically on `git commit`. To run all hooks against every file manually:
 
