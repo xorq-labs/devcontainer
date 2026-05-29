@@ -12,6 +12,7 @@
     "1420": {"label": "Vite Dev Server"},
     "1421": {"label": "Vite HMR"}
   },
+  "postStartCommand": "cd desktop && pnpm install --frozen-lockfile",
   "customizations": {
     "vscode": {
       "extensions": [
