@@ -44,10 +44,15 @@ project_dir_label() {
 }
 
 # Symlink hooks from dev/hooks/ into .git/hooks/ for a given repo root.
+# Works in both main worktrees and linked worktrees (where .git is a file).
 # Refuses to clobber a non-symlink hook.
 symlink_hooks() {
     local root="$1"
-    local hooks_dir="$root/.git/hooks"
+    local hooks_dir
+    hooks_dir="$(git -C "$root" rev-parse --git-common-dir)/hooks"
+    if [[ "$hooks_dir" != /* ]]; then
+        hooks_dir="$root/$hooks_dir"
+    fi
     mkdir -p "$hooks_dir"
     local name
     for hook in "$root/dev/hooks/"*; do
