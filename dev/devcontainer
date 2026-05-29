@@ -428,6 +428,7 @@ ensure_up() {
         setup_gh
         setup_ssh_forward 9>&-
         setup_gpg_forward 9>&-
+        setup_x11_forward 9>&-
         setup_claude
         sync_if_needed
     ) 9>"$DEV_LOCKFILE"
@@ -450,6 +451,7 @@ case "${1:-up}" in
         fi
         stop_ssh_forward
         stop_gpg_forward
+        stop_x11_forward
         dc down
         ;;
     reset)
@@ -459,6 +461,7 @@ case "${1:-up}" in
         fi
         stop_ssh_forward
         stop_gpg_forward
+        stop_x11_forward
         dc down --volumes
         ;;
     clean)
@@ -468,6 +471,7 @@ case "${1:-up}" in
         fi
         stop_ssh_forward
         stop_gpg_forward
+        stop_x11_forward
         dc down --volumes --rmi local
         docker images --format '{{.Repository}}:{{.Tag}}' \
             | grep "^${DEV_CONTAINER_NAME}:" \
@@ -524,6 +528,14 @@ case "${1:-up}" in
         fi
         setup_gpg_forward
         echo "GPG agent forwarded into $DEV_CONTAINER_NAME"
+        ;;
+    refresh-x11)
+        if ! is_running; then
+            echo "error: container is not running" >&2
+            exit 1
+        fi
+        setup_x11_forward
+        echo "X11 forwarded into $DEV_CONTAINER_NAME (DISPLAY=${DISPLAY:-unset})"
         ;;
     fix-credentials)
         if ! is_running; then

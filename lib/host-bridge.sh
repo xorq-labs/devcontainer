@@ -239,6 +239,99 @@ setup_gpg_forward() {
     return 0
 }
 
+## X11 forwarding ###########################################################
+
+DEV_X11_FORWARD_PIDFILE="/tmp/devcontainer-x11-forward-${DEV_CONTAINER_NAME}.pid"
+
+stop_x11_forward() {
+    if [ -f "$DEV_X11_FORWARD_PIDFILE" ]; then
+        local pid
+        pid="$(cat "$DEV_X11_FORWARD_PIDFILE")"
+        kill "$pid" 2>/dev/null || true
+        rm -f "$DEV_X11_FORWARD_PIDFILE"
+    fi
+}
+
+setup_x11_forward() {
+    if [ -z "${DISPLAY:-}" ]; then
+        return 0
+    fi
+
+    local display_num
+    display_num="$(echo "$DISPLAY" | sed 's/^.*:\([0-9]*\)\(\..*\)\?$/\1/')"
+    if ! [[ "$display_num" =~ ^[0-9]+$ ]]; then
+        echo "warning: could not parse display number from DISPLAY=$DISPLAY — X11 forwarding skipped" >&2
+        return 0
+    fi
+
+    local container_display
+    if [ -S "/tmp/.X11-unix/X${display_num}" ]; then
+        # Local display — the bind-mount of /tmp/.X11-unix handles transport.
+        container_display=":${display_num}"
+    else
+        # TCP display (SSH X11 forwarding). The SSH daemon listens on
+        # localhost:6000+N only — not reachable from the container via
+        # host.docker.internal. Relay through socat on the bridge IP,
+        # same pattern as SSH/GPG agent forwarding.
+        if [ "${DEV_HAS_SOCAT:-false}" != "true" ]; then
+            echo "warning: socat not found on host — X11 forwarding for SSH displays disabled (apt install socat)" >&2
+            return 0
+        fi
+
+        stop_x11_forward
+
+        local x11_port=$(( 6000 + display_num ))
+        local bind_addr
+        if [ "$(uname -s)" = "Linux" ] && ! grep -qiF microsoft /proc/version 2>/dev/null; then
+            bind_addr="$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null)" || true
+            if [ -z "$bind_addr" ]; then
+                echo "error: could not determine Docker bridge gateway IP — X11 forwarding disabled" >&2
+                return 0
+            fi
+        else
+            bind_addr="127.0.0.1"
+        fi
+
+        socat "TCP-LISTEN:${x11_port},bind=${bind_addr},reuseaddr,fork" \
+              "TCP:localhost:${x11_port}" &
+        local host_pid=$!
+        echo "$host_pid" > "$DEV_X11_FORWARD_PIDFILE"
+
+        for _ in $(seq 1 50); do
+            sleep 0.05
+            kill -0 "$host_pid" 2>/dev/null || break
+        done
+        if ! kill -0 "$host_pid" 2>/dev/null; then
+            echo "error: host-side X11 forwarder failed to start (port $x11_port may be in use)" >&2
+            rm -f "$DEV_X11_FORWARD_PIDFILE"
+            return 0
+        fi
+
+        container_display="host.docker.internal:${display_num}"
+    fi
+
+    # Inject xauth cookie so X clients in the container can authenticate.
+    local host_cookie
+    host_cookie="$(xauth list "${DISPLAY}" 2>/dev/null | head -1)" || true
+    if [ -z "$host_cookie" ]; then
+        echo "warning: no xauth cookie for DISPLAY=$DISPLAY — GUI apps may fail to authenticate" >&2
+    else
+        local auth_hex
+        auth_hex="$(echo "$host_cookie" | awk '{print $NF}')"
+        dc_exec bash -c "
+            touch /home/vscode/.Xauthority
+            xauth add ${container_display} MIT-MAGIC-COOKIE-1 ${auth_hex}
+        "
+    fi
+
+    # Persist DISPLAY for interactive shells. The compose environment block
+    # has the host's original DISPLAY value; override it for the container.
+    dc_exec bash -c "
+        sed -i '/^export DISPLAY=/d' /home/vscode/.bashrc
+        echo 'export DISPLAY=${container_display}' >> /home/vscode/.bashrc
+    "
+}
+
 setup_git() {
     local name email
     name="$(git config user.name 2>/dev/null || true)"
