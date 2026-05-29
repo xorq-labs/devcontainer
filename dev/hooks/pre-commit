@@ -6,15 +6,26 @@
 
 set -euo pipefail
 
-ROOT="$(git rev-parse --show-toplevel)"
+# .tools/bin/pre-commit may be a host-side uv shim whose shebang points to a
+# Python interpreter that doesn't exist inside the container.  A simple -x
+# check passes because the file is there; only running it confirms the
+# interpreter is reachable.
+is_runnable() { [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
 
-if [ -x "$ROOT/.tools/bin/pre-commit" ]; then
+ROOT="$(git rev-parse --show-toplevel)"
+MAIN="$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+
+if is_runnable "$ROOT/.tools/bin/pre-commit"; then
     exec "$ROOT/.tools/bin/pre-commit" hook-impl \
+        --config=.pre-commit-config.yaml --hook-type=pre-commit -- "$@"
+elif [ -n "$MAIN" ] && [ "$MAIN" != "$ROOT" ] && is_runnable "$MAIN/.tools/bin/pre-commit"; then
+    exec "$MAIN/.tools/bin/pre-commit" hook-impl \
         --config=.pre-commit-config.yaml --hook-type=pre-commit -- "$@"
 elif command -v pre-commit > /dev/null; then
     exec pre-commit hook-impl \
         --config=.pre-commit-config.yaml --hook-type=pre-commit -- "$@"
 else
     echo 'pre-commit not found. Install with: uv tool install pre-commit' >&2
+    echo '(if already installed in the main worktree, commit from there or add pre-commit to PATH)' >&2
     exit 1
 fi

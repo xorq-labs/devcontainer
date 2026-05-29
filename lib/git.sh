@@ -43,14 +43,12 @@ project_dir_label() {
     esac
 }
 
-# Symlink the committable post-checkout hook into .git/hooks/ so that every
-# `git worktree add` — whether from dev/new-worktree, an agent, or a human —
-# auto-locks the new worktree.  Refuses to clobber a non-symlink hook.
+# Symlink all committable hooks from dev/hooks/ into .git/hooks/ so that
+# every environment (host and container) uses the same hook scripts.
+# Refuses to clobber a non-symlink hook.
 install_hooks() {
     local main
     main="$(dev_main_tree)" || return 1
-    local hook="$main/dev/hooks/post-checkout"
-    [ -f "$hook" ] || return 0
 
     # Unset core.hooksPath so git uses the default .git/hooks/.
     # Tools like Claude Code may set this to a linked-worktree path where
