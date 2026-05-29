@@ -16,6 +16,8 @@ case "$cmd" in
         # → overlay the new seed (--skip-old-files preserves user-installed
         # paths; content-addressed store makes overlays safe). Version stamp
         # avoids re-running the overlay on every first-run.
+        # NOTE: /nix/var (db, profiles) is also overlaid. If the Nix version
+        # changes its DB schema, bump the seed version and wipe the volume.
         if [ ! -d /nix/store ]; then
             echo "Seeding Nix store into volume..."
             tar xf /nix-seed.tar -C /
@@ -62,29 +64,28 @@ case "$cmd" in
             export GIT_CONFIG_COUNT=1
             export GIT_CONFIG_KEY_0=core.hooksPath
             export GIT_CONFIG_VALUE_0="${_hooks_dir}"
-            if ! grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' ~/.bashrc 2>/dev/null; then
-                cat >> ~/.bashrc <<BASH
-export GIT_CONFIG_COUNT=1
-export GIT_CONFIG_KEY_0=core.hooksPath
-export GIT_CONFIG_VALUE_0="${_hooks_dir}"
-BASH
-            fi
         fi
 
         echo "Installing pre-commit hooks..."
         uv run pre-commit install 2>/dev/null || true
 
-        if ! grep -q "direnv hook bash" ~/.bashrc 2>/dev/null; then
-            echo 'eval "$(direnv hook bash)"' >> ~/.bashrc
-        fi
-
-        if ! grep -q '.cargo/env' ~/.bashrc 2>/dev/null; then
-            echo '. "$HOME/.cargo/env"' >> ~/.bashrc
-        fi
-
-        if [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ] \
-           && ! grep -q 'nix.sh' ~/.bashrc 2>/dev/null; then
-            echo '. "$HOME/.nix-profile/etc/profile.d/nix.sh"' >> ~/.bashrc
+        _bashrc_marker="# xorq-desktop-setup"
+        if ! grep -qF "$_bashrc_marker" ~/.bashrc 2>/dev/null; then
+            cat >> ~/.bashrc <<BASH
+$_bashrc_marker
+eval "\$(direnv hook bash)"
+. "\$HOME/.cargo/env"
+BASH
+            if [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ]; then
+                echo '. "$HOME/.nix-profile/etc/profile.d/nix.sh"' >> ~/.bashrc
+            fi
+            if [ -n "${GIT_CONFIG_COUNT:-}" ]; then
+                cat >> ~/.bashrc <<BASH
+export GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT
+export GIT_CONFIG_KEY_0=$GIT_CONFIG_KEY_0
+export GIT_CONFIG_VALUE_0=$GIT_CONFIG_VALUE_0
+BASH
+            fi
         fi
 
         mkdir -p ~/.config/direnv

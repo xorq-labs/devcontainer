@@ -28,8 +28,13 @@ rm -rf /var/lib/apt/lists/*
 # alone is enough; the volume mount provides an empty /nix at runtime).
 # A sha256 of the seed is stamped into the image so setup-env can detect
 # stale seeds in volumes that predate an image rebuild.
+NIX_VERSION=2.28.3
+NIX_INSTALLER_SHA256=46b8d7165dceb471f4346366b3a93f1009407b99729b843b8664918f4cc800a0
+curl -LsSf "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" -o /tmp/nix-install.sh
+echo "$NIX_INSTALLER_SHA256  /tmp/nix-install.sh" | sha256sum -c -
 mkdir -p /nix && chown vscode:vscode /nix
-su - vscode -c 'curl -L https://nixos.org/nix/install | sh -s -- --no-daemon'
+su - vscode -c 'sh /tmp/nix-install.sh --no-daemon'
+rm /tmp/nix-install.sh
 tar cf /nix-seed.tar -C / nix
 sha256sum /nix-seed.tar | cut -d' ' -f1 > /nix-seed.version
 rm -rf /nix
@@ -43,7 +48,22 @@ env UV_INSTALL_DIR=/usr/local/bin sh /tmp/uv-install.sh
 rm /tmp/uv-install.sh
 
 # Rust (via rustup, installed for vscode user)
-su - vscode -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable'
+RUSTUP_VERSION=1.28.1
+RUSTUP_SHA256_AMD64=a3339fb004c3d0bb9862ba0bce001861fe5cbde9c10d16591eb3f39ee6cd3e7f
+RUSTUP_SHA256_ARM64=c64b33db2c6b9385817ec0e49a84bcfe018ed6e328fe755c3c809580cc70ce7a
+arch="$(dpkg --print-architecture)"
+case "$arch" in
+    amd64) rustup_target=x86_64-unknown-linux-gnu;  rustup_sha=$RUSTUP_SHA256_AMD64 ;;
+    arm64) rustup_target=aarch64-unknown-linux-gnu;  rustup_sha=$RUSTUP_SHA256_ARM64 ;;
+    *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
+esac
+curl -sSf "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustup_target}/rustup-init" \
+    -o /tmp/rustup-init
+echo "$rustup_sha  /tmp/rustup-init" | sha256sum -c -
+chmod +x /tmp/rustup-init
+su - vscode -c '/tmp/rustup-init -y --default-toolchain stable'
+rm /tmp/rustup-init
 
 # pnpm
-npm install -g pnpm
+PNPM_VERSION=11.4.0
+npm install -g "pnpm@${PNPM_VERSION}"
