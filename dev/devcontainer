@@ -377,6 +377,24 @@ ensure_external_volumes() {
     done < <(read_list "$DEV_PROJECT_DIR/external-volumes.txt")
 }
 
+# Run `dc up --build -d`, streaming output while also capturing it to detect
+# known failure patterns (e.g. Docker network exhaustion).
+dc_up() {
+    local _up_tmp _up_rc
+    _up_tmp=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f '$_up_tmp'" RETURN
+    dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
+    if [ "$_up_rc" -ne 0 ]; then
+        if grep -q "could not find an available.*address pool" "$_up_tmp"; then
+            echo "" >&2
+            echo "Docker ran out of network address space." >&2
+            echo "Run 'docker network prune' to remove unused networks, then retry." >&2
+        fi
+        return "$_up_rc"
+    fi
+}
+
 ensure_up() {
     # Subshell scopes fd 9 so no child process can inherit the flock.
     (
@@ -397,7 +415,7 @@ ensure_up() {
         fi
 
         if ! is_running; then
-            dc up --build -d
+            dc_up
             tag_image
             setup
         elif image_stale; then
@@ -411,7 +429,7 @@ ensure_up() {
             case "$answer" in
                 [rR]*)
                     dc down
-                    dc up --build -d
+                    dc_up
                     tag_image
                     setup
                     ;;
