@@ -22,35 +22,31 @@ main=$(dev_main_tree)
 manifest="$here/.envrcs/.worktree-manifest"
 
 # Pre-flight: verify git worktree remove will succeed before we touch anything.
-# Collect untracked+modified files, subtract manifest entries (which we clean up
-# ourselves), and fail early if anything else would block removal.
-_dirty=$(git -C "$here" status --porcelain 2>/dev/null | awk '{print $NF}') || true
-if [ -n "$_dirty" ] && [ -f "$manifest" ]; then
-    _dominated=()
-    while IFS=$'\t' read -r _act _ent; do
-        [ -z "$_ent" ] && _ent="$_act"
-        _dominated+=("$_ent")
-    done < "$manifest"
-    _dominated+=(".envrcs/.worktree-manifest")
-    _remaining=""
-    for _f in $_dirty; do
-        _dominated_match=false
-        for _d in "${_dominated[@]}"; do
-            if [ "$_f" = "$_d" ]; then _dominated_match=true; break; fi
-        done
-        $_dominated_match || _remaining="$_remaining $_f"
-    done
-    if [ -n "$_remaining" ]; then
-        echo "error: worktree has untracked/modified files that would block removal:" >&2
-        for _f in $_remaining; do echo "  $_f" >&2; done
-        echo "clean these up first, or use: git worktree remove --force $here" >&2
-        exit 1
-    fi
-elif [ -n "$_dirty" ]; then
+# Fail early if untracked/modified files (beyond manifest entries) would block removal.
+_dirty_error() {
     echo "error: worktree has untracked/modified files that would block removal:" >&2
-    echo "$_dirty" | sed 's/^/  /' >&2
+    for _f in "${@}"; do echo "  $_f" >&2; done
     echo "clean these up first, or use: git worktree remove --force $here" >&2
     exit 1
+}
+
+# cut -c4- strips the XY status prefix; sed splits rename "old -> new" into two lines
+mapfile -t _dirty < <(git -C "$here" status --porcelain 2>/dev/null \
+    | cut -c4- | sed 's/ -> /\n/' | grep -v '^$')
+if [ "${#_dirty[@]}" -gt 0 ] && [ -f "$manifest" ]; then
+    declare -A _dominated_set
+    while IFS=$'\t' read -r _act _ent; do
+        [ -z "$_ent" ] && _ent="$_act"
+        _dominated_set["$_ent"]=1
+    done < "$manifest"
+    _dominated_set[".envrcs/.worktree-manifest"]=1
+    _remaining=()
+    for _f in "${_dirty[@]}"; do
+        [[ -v _dominated_set["$_f"] ]] || _remaining+=("$_f")
+    done
+    [ "${#_remaining[@]}" -gt 0 ] && _dirty_error "${_remaining[@]}"
+elif [ "${#_dirty[@]}" -gt 0 ]; then
+    _dirty_error "${_dirty[@]}"
 fi
 
 if [ -f "$manifest" ]; then
