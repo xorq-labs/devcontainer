@@ -57,6 +57,9 @@ if [ -f "$manifest" ]; then
             entry="$action"
             action=""
         }
+        # Keep .gitignore until after git worktree remove — removing it early
+        # exposes previously-ignored files as untracked, blocking removal.
+        [ "$entry" = ".gitignore" ] && continue
         case "$action" in
             symlink)
                 if [ -L "$entry" ]; then
