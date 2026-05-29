@@ -635,14 +635,22 @@ case "${1:-up}" in
     list)
         _wt_paths=()
         _wt_branches=()
+        _wt_path="" _wt_branch=""
+        _flush_wt() {
+            if [[ -n "$_wt_path" ]]; then
+                _wt_paths+=("$_wt_path")
+                _wt_branches+=("${_wt_branch:-(detached)}")
+            fi
+            _wt_path="" _wt_branch=""
+        }
         while IFS= read -r line; do
             case "$line" in
-                worktree\ *) _wt_path="${line#worktree }" ;;
-                branch\ *)   _wt_branches+=("${line#branch refs/heads/}"); _wt_paths+=("$_wt_path") ;;
-                HEAD\ *)     _wt_branches+=("(detached)"); _wt_paths+=("$_wt_path") ;;
+                worktree\ *) _flush_wt; _wt_path="${line#worktree }" ;;
+                branch\ *)   _wt_branch="${line#branch refs/heads/}" ;;
             esac
         done < <(git worktree list --porcelain)
-        printf '%-24s %-10s %s\n' "WORKTREE" "STATUS" "OVERLAY"
+        _flush_wt
+        printf '%-24s %-12s %s\n' "WORKTREE" "STATUS" "OVERLAY"
         for i in "${!_wt_paths[@]}"; do
             _wt="${_wt_paths[$i]}"
             _br="${_wt_branches[$i]}"
@@ -653,12 +661,15 @@ case "${1:-up}" in
                 _cname="$(. "$_resolved" && printf '%s' "$CONTAINER_NAME")" 2>/dev/null || true
             fi
             [ -z "$_cname" ] && _cname="${DEV_PROJECT_NAME}-dev-$(basename "$_wt")"
-            _st="stopped"
-            if docker inspect --format '{{.State.Running}}' "$_cname-app-1" 2>/dev/null | grep -q true; then
+            if ! docker inspect --format '{{.State.Running}}' "$_cname-app-1" >/dev/null 2>&1; then
+                _st="not created"
+            elif docker inspect --format '{{.State.Running}}' "$_cname-app-1" 2>/dev/null | grep -q true; then
                 _st="running"
+            else
+                _st="stopped"
             fi
             _ov="$(project_dir_label "$(resolve_project_dir "$DEV_BASE_DIR" "$_wt" "$DEV_PROJECT_NAME")" "$DEV_BASE_DIR")"
-            printf '%-24s %-10s %s\n' "$_br" "$_st" "$_ov"
+            printf '%-24s %-12s %s\n' "$_br" "$_st" "$_ov"
         done
         ;;
     logs)
