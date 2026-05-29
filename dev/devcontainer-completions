@@ -10,7 +10,7 @@ _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials unlock audit completions"
+    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials unlock ps audit completions"
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -40,6 +40,9 @@ _devcontainer() {
         exec)
             COMPREPLY=($(compgen -c -- "$cur"))
             ;;
+        ps)
+            COMPREPLY=($(compgen -W "--all" -- "$cur"))
+            ;;
         audit)
             COMPREPLY=($(compgen -W "--summary --new --all --clear" -- "$cur"))
             ;;
@@ -68,6 +71,7 @@ _devcontainer() {
         'refresh-gpg:re-forward GPG agent without container restart'
         'fix-credentials:repair credentials symlink (after upgrading from pre-shared-credentials build)'
         'unlock:remove stale lockfile'
+        'ps:show running claude sessions'
         'audit:show permission audit log'
         'status:show whether the container is running'
         'list:list all worktrees with container status and overlay'
@@ -85,6 +89,7 @@ _devcontainer() {
             case $words[1] in
                 init) _values 'flag' --local ;;
                 exec) _command_names ;;
+                ps) _values 'flag' --all ;;
                 audit) _values 'mode' --summary --new --all --clear ;;
                 completions) _values 'shell' bash zsh fish ;;
             esac
@@ -96,7 +101,7 @@ ZSH
         ;;
     fish)
         cat <<'FISH'
-set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials unlock audit completions
+set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials unlock ps audit completions
 complete -c devcontainer -f
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a init -d 'create a project overlay'
@@ -111,6 +116,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-s
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-gpg -d 're-forward GPG agent without container restart'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-credentials -d 'repair credentials symlink'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a unlock -d 'remove stale lockfile'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a ps -d 'show running claude sessions'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a audit -d 'show permission audit log'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a status -d 'show whether the container is running'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a list -d 'list all worktrees with container status and overlay'
@@ -118,6 +124,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a resolve -
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a logs -d 'show container logs'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a completions -d 'emit shell completions'
 complete -c devcontainer -n "__fish_seen_subcommand_from init" -l local -d 'create overlay in workspace .devcontainer/'
+complete -c devcontainer -n "__fish_seen_subcommand_from ps" -l all -d 'show all containers'
 complete -c devcontainer -n "__fish_seen_subcommand_from audit" -a "--summary --new --all --clear"
 complete -c devcontainer -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
 FISH
