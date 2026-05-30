@@ -250,6 +250,13 @@ stop_x11_forward() {
         kill "$pid" 2>/dev/null || true
         rm -f "$DEV_X11_FORWARD_PIDFILE"
     fi
+    # Catch orphans whose PID file was lost (tmpfiles cleanup, manual rm, etc.)
+    local display_num
+    display_num="$(echo "${DISPLAY:-}" | sed 's/^.*:\([0-9]*\)\(\..*\)\?$/\1/')"
+    if [[ "$display_num" =~ ^[0-9]+$ ]]; then
+        local x11_port=$(( 6000 + display_num ))
+        pkill -f "socat TCP-LISTEN:${x11_port},bind=.+,reuseaddr,fork TCP:localhost:${x11_port}" 2>/dev/null || true
+    fi
 }
 
 setup_x11_forward() {
@@ -310,7 +317,17 @@ setup_x11_forward() {
         container_display="host.docker.internal:${display_num}"
     fi
 
+    # Persist DISPLAY for interactive shells. The compose environment block
+    # has the host's original DISPLAY value; override it for the container.
+    dc_exec bash -c "
+        sed -i '/^export DISPLAY=/d' /home/vscode/.bashrc
+        echo 'export DISPLAY=${container_display}' >> /home/vscode/.bashrc
+    "
+
     # Inject xauth cookie so X clients in the container can authenticate.
+    if ! dc_exec command -v xauth >/dev/null 2>&1; then
+        return 0
+    fi
     local host_cookie
     host_cookie="$(xauth list "${DISPLAY}" 2>/dev/null | head -1)" || true
     if [ -z "$host_cookie" ]; then
@@ -323,13 +340,6 @@ setup_x11_forward() {
             xauth add ${container_display} MIT-MAGIC-COOKIE-1 ${auth_hex}
         "
     fi
-
-    # Persist DISPLAY for interactive shells. The compose environment block
-    # has the host's original DISPLAY value; override it for the container.
-    dc_exec bash -c "
-        sed -i '/^export DISPLAY=/d' /home/vscode/.bashrc
-        echo 'export DISPLAY=${container_display}' >> /home/vscode/.bashrc
-    "
 }
 
 setup_git() {
