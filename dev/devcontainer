@@ -36,6 +36,7 @@ Commands:
   fix-credentials                     repair credentials symlink in a running container
                                         (needed after upgrading from pre-shared-credentials build)
   unlock                              remove stale lockfile (safe — refuses if lock is actively held)
+  ps [--all]                          show running claude sessions (--all: all containers)
   audit [--summary|--new|--all|--clear]
                                       show permission audit log (default: --summary)
   completions [bash|zsh|fish]         emit shell completions
@@ -566,6 +567,23 @@ case "${1:-up}" in
             chown -h vscode:vscode /home/vscode/.claude/.credentials.json
         '
         echo "Credentials symlink repaired in $DEV_CONTAINER_NAME"
+        ;;
+    ps)
+        shift
+        if [ "${1:-}" = "--all" ]; then
+            for cid in $(docker ps -q); do
+                name="$(docker inspect --format '{{.Name}}' "$cid" | sed 's|^/||')"
+                n="$(docker exec "$cid" pgrep -c claude 2>/dev/null)" || continue
+                [ "$n" -gt 0 ] && printf "%s: %d session%s\n" "$name" "$n" "$([ "$n" -ne 1 ] && echo s)"
+            done
+        else
+            if ! is_running; then
+                echo "stopped"
+                exit 0
+            fi
+            n="$(dc_exec pgrep -c claude 2>/dev/null)" || n=0
+            printf "%s: %d session%s\n" "$DEV_CONTAINER_NAME" "$n" "$([ "$n" -ne 1 ] && echo s)"
+        fi
         ;;
     audit)
         shift
