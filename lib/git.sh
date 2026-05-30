@@ -43,9 +43,29 @@ project_dir_label() {
     esac
 }
 
-# Symlink all committable hooks from dev/hooks/ into .git/hooks/ so that
-# every environment (host and container) uses the same hook scripts.
+# Symlink hooks from dev/hooks/ into .git/hooks/ for a given repo root.
+# Works in both main worktrees and linked worktrees (where .git is a file).
 # Refuses to clobber a non-symlink hook.
+symlink_hooks() {
+    local root="$1"
+    local hooks_dir
+    hooks_dir="$(git -C "$root" rev-parse --git-common-dir)/hooks"
+    if [[ "$hooks_dir" != /* ]]; then
+        hooks_dir="$root/$hooks_dir"
+    fi
+    mkdir -p "$hooks_dir"
+    local name
+    for hook in "$root/dev/hooks/"*; do
+        [ -f "$hook" ] || continue
+        name="$(basename "$hook")"
+        if ! [ -e "$hooks_dir/$name" ] || [ -L "$hooks_dir/$name" ]; then
+            ln -sf "../../dev/hooks/$name" "$hooks_dir/$name"
+        fi
+    done
+}
+
+# Full hook setup for devcontainer/worktree contexts: clear hooksPath then
+# symlink hooks. Use symlink_hooks directly when only the symlinks are needed.
 install_hooks() {
     local main
     main="$(dev_main_tree)" || return 1
@@ -56,14 +76,5 @@ install_hooks() {
     # refuses to install when core.hooksPath is set.
     git config --unset-all core.hooksPath 2>/dev/null || true
 
-    local hooks_dir="$main/.git/hooks"
-    mkdir -p "$hooks_dir"
-    local name
-    for hook in "$main/dev/hooks/"*; do
-        [ -f "$hook" ] || continue
-        name="$(basename "$hook")"
-        if ! [ -e "$hooks_dir/$name" ] || [ -L "$hooks_dir/$name" ]; then
-            ln -sf "../../dev/hooks/$name" "$hooks_dir/$name"
-        fi
-    done
+    symlink_hooks "$main"
 }
