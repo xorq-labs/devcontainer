@@ -12,10 +12,9 @@ services:
       - cargo-registry:/home/vscode/.cargo/registry
       - cargo-git:/home/vscode/.cargo/git
       - node-modules:${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/desktop/node_modules
-      # cargo-target and node-modules are per-worktree (concurrent writes to
-      # the same target/node_modules dir from sibling containers corrupt
-      # incremental build state); nix is shared across worktrees because the
-      # store is content-addressed and cli-locked.
+      # cargo-target is per-worktree (concurrent writes to the same target dir
+      # from sibling containers corrupt incremental build state); nix is shared
+      # across worktrees because the store is content-addressed and cli-locked.
       - cargo-target:${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/desktop/src-tauri/target
       - nix:/nix
       # Nix: host config (nix.conf, registry.json) read-only
@@ -45,7 +44,9 @@ volumes:
   nix:
     name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-nix
     external: true
+  node-modules:
+    name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-node-modules
+    external: true
   # per-worktree: virtualenv paths and build targets are workspace-specific
   venv:
-  node-modules:
   cargo-target:

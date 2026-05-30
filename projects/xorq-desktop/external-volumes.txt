@@ -9,4 +9,5 @@ uv-cache
 pnpm-store
 cargo-registry
 cargo-git
+node-modules
 nix
