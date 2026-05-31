@@ -24,8 +24,20 @@ case "$cmd" in
         uv sync --no-install-project --group dev
         touch .venv/.last-sync
 
-        echo "Building the Rust extension (maturin develop)..."
-        uv run maturin develop --uv
+        # Skip the (slow) extension build if a compiled module is already present.
+        # `maturin develop` writes it into python/batchcorder/, which lives on the
+        # bind-mounted workspace and so survives container recreation — a fresh
+        # checkout has none and gets built. This is a pure file test on purpose:
+        # an `import` probe via `uv run` would auto-build the project (defeating
+        # the skip), and the abi3 wheel stays loadable across CPython minor
+        # versions, so a persisted .so is safe after an image rebuild. Editing
+        # Rust source still needs a manual `maturin develop` (or the `mdev` alias).
+        if compgen -G "python/batchcorder/*.so" >/dev/null; then
+            echo "Rust extension already built (python/batchcorder/*.so present) — skipping maturin develop."
+        else
+            echo "Building the Rust extension (maturin develop)..."
+            uv run maturin develop --uv
+        fi
 
         echo "Installing pre-commit hooks..."
         uv run pre-commit install 2>/dev/null || true
