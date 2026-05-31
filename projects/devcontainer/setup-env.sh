@@ -3,10 +3,9 @@ set -euo pipefail
 cmd="${1:-first-run}"
 case "$cmd" in
     first-run)
-        if [ -f .pre-commit-config.yaml ]; then
-            echo "Installing pre-commit hooks..."
-            pre-commit install
-        fi
+        # shellcheck source=../../lib/git.sh
+        source /usr/local/lib/devcontainer/git.sh
+        install_hooks
 
         if ! grep -q "direnv hook bash" ~/.bashrc 2>/dev/null; then
             echo 'eval "$(direnv hook bash)"' >> ~/.bashrc

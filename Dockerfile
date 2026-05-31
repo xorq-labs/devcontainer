@@ -63,6 +63,7 @@ RUN bash /tmp/install-system.sh && rm /tmp/install-system.sh
 
 COPY setup-claude.py /usr/local/bin/setup-claude
 COPY audit-hook /usr/local/bin/audit-hook
+COPY lib/git.sh /usr/local/lib/devcontainer/git.sh
 COPY --from=project setup-env.sh /usr/local/bin/setup-env
 RUN chmod +x /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
 
