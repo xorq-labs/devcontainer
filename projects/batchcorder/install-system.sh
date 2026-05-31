@@ -11,8 +11,7 @@ set -euo pipefail
 
 apt-get update
 apt-get install -y --no-install-recommends \
-    build-essential \
-    direnv
+    build-essential
 rm -rf /var/lib/apt/lists/*
 
 # uv (Python package manager)

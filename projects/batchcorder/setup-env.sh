@@ -34,17 +34,10 @@ case "$cmd" in
         if ! grep -qF "$_bashrc_marker" ~/.bashrc 2>/dev/null; then
             cat >> ~/.bashrc <<BASH
 $_bashrc_marker
-eval "\$(direnv hook bash)"
 . "\$HOME/.cargo/env"
 export UV_NO_SYNC=1
 BASH
         fi
-
-        mkdir -p ~/.config/direnv
-        cat > ~/.config/direnv/direnv.toml <<TOML
-[whitelist]
-prefix = ["${PWD}"]
-TOML
         ;;
     sync-if-needed)
         [ -f uv.lock ] || exit 0
