@@ -1,0 +1,7 @@
+# Paths under the main worktree to symlink into new worktrees.
+# Format: see lib/list-file.sh.
+#
+# Note: `.claude` is always symlinked by setup-worktree itself (audit logs and
+# session captures are devcontainer infrastructure, not project-specific) — don't
+# list it here. batchcorder has no volume-backed workspace paths to share, so
+# this list is otherwise empty.

@@ -37,16 +37,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x -o /tmp/nodesour
 
 # just (task runner)
 ARG JUST_VERSION=1.40.0
-ARG JUST_INSTALLER_SHA256=e68e568671780281964fe61bbe0396507fd690a7677fc5a42fcdc69e737dd54a
-RUN curl -sSf https://just.systems/install.sh -o /tmp/just-install.sh \
-    && echo "$JUST_INSTALLER_SHA256  /tmp/just-install.sh" | sha256sum -c - \
-    && bash /tmp/just-install.sh --to /usr/local/bin --tag $JUST_VERSION \
-    && rm /tmp/just-install.sh
+ARG JUST_SHA256=181b91d0ceebe8a57723fb648ed2ce1a44d849438ce2e658339df4f8db5f1263
+RUN curl -LsSf --retry 3 --retry-connrefused \
+        https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz \
+        -o /tmp/just.tar.gz \
+    && echo "$JUST_SHA256  /tmp/just.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/just.tar.gz -C /usr/local/bin just \
+    && rm /tmp/just.tar.gz
 
 # sops (secrets management)
 ARG SOPS_VERSION=3.9.4
 ARG SOPS_SHA256=5488e32bc471de7982ad895dd054bbab3ab91c417a118426134551e9626e4e85
-RUN curl -LsSf https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64 \
+RUN curl -LsSf --retry 3 --retry-connrefused \
+        https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64 \
         -o /usr/local/bin/sops \
     && echo "$SOPS_SHA256  /usr/local/bin/sops" | sha256sum -c - \
     && chmod +x /usr/local/bin/sops

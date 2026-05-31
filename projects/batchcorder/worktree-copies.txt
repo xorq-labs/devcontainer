@@ -1,0 +1,5 @@
+# Paths under the main worktree to copy (not symlink) into new worktrees.
+# Format: see lib/list-file.sh. Patterns are interpreted as
+# shell globs (`*`, `?`, `[...]`) by setup-worktree; shell substitutions
+# (`$(...)`, backticks, `~`, `$VAR`) are not. Entries must not contain spaces.
+project.env
