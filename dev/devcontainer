@@ -160,7 +160,8 @@ else
     export DEV_WORKTREE="$(basename "$DEV_WORKSPACE")"
 fi
 
-DEV_CONTAINER_NAME="${DEV_PROJECT_NAME}-dev-$(basename "$DEV_WORKSPACE")"
+# sanitize for docker compose: project names allow only [a-z0-9_-]
+DEV_CONTAINER_NAME="$(echo "${DEV_PROJECT_NAME}-dev-$(basename "$DEV_WORKSPACE")" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//' | tr '[:upper:]' '[:lower:]')"
 DEV_LOCKFILE="/tmp/devcontainer-${DEV_CONTAINER_NAME}.lock"
 
 write_resolved_env() {
