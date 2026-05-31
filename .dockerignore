@@ -3,3 +3,4 @@ audit-report.py
 defaults/
 dev/
 lib/
+!lib/git.sh
