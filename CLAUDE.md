@@ -41,3 +41,5 @@ bash tests/test-resolve-list-cleanup.sh
 - Python targets 3.12, formatted by ruff with 120 char line length (see `ruff.toml`).
 - Commit messages follow conventional commits: `fix:`, `feat:`, `ci:`, etc.
 - `.gitignore.template` defines patterns for per-worktree gitignored files; `setup-worktree` copies it as `.gitignore` into each worktree.
+- When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
+- When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
