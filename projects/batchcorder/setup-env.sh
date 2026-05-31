@@ -48,6 +48,9 @@ case "$cmd" in
 $_bashrc_marker
 . "\$HOME/.cargo/env"
 export UV_NO_SYNC=1
+# Rebuild the PyO3 extension after editing Rust source (sync-if-needed only
+# rebuilds on uv.lock changes, not arbitrary src/*.rs edits).
+alias mdev='uv run maturin develop --uv'
 BASH
         fi
         ;;
