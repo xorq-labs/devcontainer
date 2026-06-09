@@ -414,6 +414,7 @@ ensure_up() {
         ensure_external_volumes
         if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
             (cd "$DEV_WORKSPACE" && "$DEV_BASE_DIR/dev/setup-worktree")
+            printf 'copy\t%s\n' ".envrcs/.resolved-env" >> "$DEV_WORKSPACE/.envrcs/.worktree-manifest"
         fi
 
         if ! is_running; then
