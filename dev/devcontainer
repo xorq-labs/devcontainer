@@ -381,6 +381,26 @@ ensure_external_volumes() {
     done < <(read_list "$DEV_PROJECT_DIR/external-volumes.txt")
 }
 
+# Disconnect networks whose stored ID no longer matches the live network.
+# This happens when Docker recreates a network with the same name after an
+# ungraceful shutdown — the container still references the old (deleted) ID.
+disconnect_stale_networks() {
+    local container_id="$1"
+    local fixed=0
+    local net stored_id live_id
+    for net in $(docker inspect --format '{{range $name, $net := .NetworkSettings.Networks}}{{$name}}={{$net.NetworkID}} {{end}}' "$container_id"); do
+        local name="${net%%=*}"
+        stored_id="${net#*=}"
+        live_id="$(docker network inspect --format '{{.Id}}' "$name" 2>/dev/null)" || live_id=""
+        if [ -z "$live_id" ] || [ "$stored_id" != "$live_id" ]; then
+            echo "Disconnecting stale network: $name" >&2
+            docker network disconnect -f "$name" "$container_id"
+            ((fixed++))
+        fi
+    done
+    return "$fixed"
+}
+
 # Run `dc up --build -d`, streaming output while also capturing it to detect
 # known failure patterns (e.g. Docker network exhaustion).
 dc_up() {
@@ -397,13 +417,7 @@ dc_up() {
             local container_id
             container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true
             if [ -n "$container_id" ]; then
-                local net
-                for net in $(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container_id"); do
-                    if ! docker network inspect "$net" >/dev/null 2>&1; then
-                        docker network disconnect -f "$net" "$container_id"
-                        echo "  disconnected stale network: $net" >&2
-                    fi
-                done
+                disconnect_stale_networks "$container_id" || true
                 dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
             fi
         fi
@@ -595,14 +609,7 @@ case "${1:-up}" in
             echo "error: no container found for $DEV_CONTAINER_NAME" >&2
             exit 1
         fi
-        fixed=0
-        for net in $(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container_id"); do
-            if ! docker network inspect "$net" >/dev/null 2>&1; then
-                echo "Disconnecting stale network: $net"
-                docker network disconnect -f "$net" "$container_id"
-                ((fixed++))
-            fi
-        done
+        disconnect_stale_networks "$container_id" && fixed=0 || fixed=$?
         if [ "$fixed" -eq 0 ]; then
             echo "No stale networks found on $DEV_CONTAINER_NAME"
         else
