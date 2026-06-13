@@ -35,6 +35,8 @@ Commands:
                                         use standalone when host gpg-agent restarts)
   fix-credentials                     repair credentials symlink in a running container
                                         (needed after upgrading from pre-shared-credentials build)
+  fix-network                         disconnect stale networks from a stopped container
+                                        (needed after ungraceful host shutdown)
   unlock                              remove stale lockfile (safe — refuses if lock is actively held)
   ps [--all]                          show running claude sessions (--all: all containers)
   audit [--summary|--new|--all|--clear]
@@ -388,7 +390,24 @@ dc_up() {
     trap "rm -f '$_up_tmp'" RETURN
     dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
     if [ "$_up_rc" -ne 0 ]; then
-        if grep -q "could not find an available.*address pool" "$_up_tmp"; then
+        if grep -q "network.*not found" "$_up_tmp"; then
+            echo "" >&2
+            echo "Container references a deleted network (likely after ungraceful host shutdown)." >&2
+            echo "Attempting automatic recovery..." >&2
+            local container_id
+            container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true
+            if [ -n "$container_id" ]; then
+                local net
+                for net in $(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container_id"); do
+                    if ! docker network inspect "$net" >/dev/null 2>&1; then
+                        docker network disconnect -f "$net" "$container_id"
+                        echo "  disconnected stale network: $net" >&2
+                    fi
+                done
+                dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
+            fi
+        fi
+        if [ "$_up_rc" -ne 0 ] && grep -q "could not find an available.*address pool" "$_up_tmp"; then
             echo "" >&2
             echo "Docker ran out of network address space." >&2
             echo "Run 'docker network prune' to remove unused networks, then retry." >&2
@@ -569,6 +588,26 @@ case "${1:-up}" in
             chown -h vscode:vscode /home/vscode/.claude/.credentials.json
         '
         echo "Credentials symlink repaired in $DEV_CONTAINER_NAME"
+        ;;
+    fix-network)
+        container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true
+        if [ -z "$container_id" ]; then
+            echo "error: no container found for $DEV_CONTAINER_NAME" >&2
+            exit 1
+        fi
+        fixed=0
+        for net in $(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container_id"); do
+            if ! docker network inspect "$net" >/dev/null 2>&1; then
+                echo "Disconnecting stale network: $net"
+                docker network disconnect -f "$net" "$container_id"
+                ((fixed++))
+            fi
+        done
+        if [ "$fixed" -eq 0 ]; then
+            echo "No stale networks found on $DEV_CONTAINER_NAME"
+        else
+            echo "Removed $fixed stale network(s). Run 'devcontainer up' to restart."
+        fi
         ;;
     ps)
         shift
