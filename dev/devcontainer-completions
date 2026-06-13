@@ -10,7 +10,7 @@ _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials unlock ps audit completions"
+    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions"
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -70,6 +70,7 @@ _devcontainer() {
         'refresh-ssh:re-forward SSH agent without container restart'
         'refresh-gpg:re-forward GPG agent without container restart'
         'fix-credentials:repair credentials symlink (after upgrading from pre-shared-credentials build)'
+        'fix-network:disconnect stale networks (after ungraceful host shutdown)'
         'unlock:remove stale lockfile'
         'ps:show running claude sessions'
         'audit:show permission audit log'
@@ -101,7 +102,7 @@ ZSH
         ;;
     fish)
         cat <<'FISH'
-set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials unlock ps audit completions
+set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions
 complete -c devcontainer -f
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a init -d 'create a project overlay'
@@ -115,6 +116,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a claude-da
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-ssh -d 're-forward SSH agent without container restart'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-gpg -d 're-forward GPG agent without container restart'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-credentials -d 'repair credentials symlink'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-network -d 'disconnect stale networks'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a unlock -d 'remove stale lockfile'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a ps -d 'show running claude sessions'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a audit -d 'show permission audit log'

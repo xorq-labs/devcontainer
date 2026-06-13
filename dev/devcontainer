@@ -35,6 +35,8 @@ Commands:
                                         use standalone when host gpg-agent restarts)
   fix-credentials                     repair credentials symlink in a running container
                                         (needed after upgrading from pre-shared-credentials build)
+  fix-network                         disconnect stale networks from a stopped container
+                                        (needed after ungraceful host shutdown)
   unlock                              remove stale lockfile (safe — refuses if lock is actively held)
   ps [--all]                          show running claude sessions (--all: all containers)
   audit [--summary|--new|--all|--clear]
@@ -379,6 +381,26 @@ ensure_external_volumes() {
     done < <(read_list "$DEV_PROJECT_DIR/external-volumes.txt")
 }
 
+# Disconnect networks whose stored ID no longer matches the live network.
+# This happens when Docker recreates a network with the same name after an
+# ungraceful shutdown — the container still references the old (deleted) ID.
+disconnect_stale_networks() {
+    local container_id="$1"
+    local fixed=0
+    local net stored_id live_id
+    for net in $(docker inspect --format '{{range $name, $net := .NetworkSettings.Networks}}{{$name}}={{$net.NetworkID}} {{end}}' "$container_id"); do
+        local name="${net%%=*}"
+        stored_id="${net#*=}"
+        live_id="$(docker network inspect --format '{{.Id}}' "$name" 2>/dev/null)" || live_id=""
+        if [ -z "$live_id" ] || [ "$stored_id" != "$live_id" ]; then
+            echo "Disconnecting stale network: $name" >&2
+            docker network disconnect -f "$name" "$container_id"
+            ((fixed++))
+        fi
+    done
+    return "$fixed"
+}
+
 # Run `dc up --build -d`, streaming output while also capturing it to detect
 # known failure patterns (e.g. Docker network exhaustion).
 dc_up() {
@@ -388,7 +410,18 @@ dc_up() {
     trap "rm -f '$_up_tmp'" RETURN
     dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
     if [ "$_up_rc" -ne 0 ]; then
-        if grep -q "could not find an available.*address pool" "$_up_tmp"; then
+        if grep -q "network.*not found" "$_up_tmp"; then
+            echo "" >&2
+            echo "Container references a deleted network (likely after ungraceful host shutdown)." >&2
+            echo "Attempting automatic recovery..." >&2
+            local container_id
+            container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true
+            if [ -n "$container_id" ]; then
+                disconnect_stale_networks "$container_id" || true
+                dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
+            fi
+        fi
+        if [ "$_up_rc" -ne 0 ] && grep -q "could not find an available.*address pool" "$_up_tmp"; then
             echo "" >&2
             echo "Docker ran out of network address space." >&2
             echo "Run 'docker network prune' to remove unused networks, then retry." >&2
@@ -569,6 +602,19 @@ case "${1:-up}" in
             chown -h vscode:vscode /home/vscode/.claude/.credentials.json
         '
         echo "Credentials symlink repaired in $DEV_CONTAINER_NAME"
+        ;;
+    fix-network)
+        container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true
+        if [ -z "$container_id" ]; then
+            echo "error: no container found for $DEV_CONTAINER_NAME" >&2
+            exit 1
+        fi
+        disconnect_stale_networks "$container_id" && fixed=0 || fixed=$?
+        if [ "$fixed" -eq 0 ]; then
+            echo "No stale networks found on $DEV_CONTAINER_NAME"
+        else
+            echo "Removed $fixed stale network(s). Run 'devcontainer up' to restart."
+        fi
         ;;
     ps)
         shift
