@@ -38,7 +38,7 @@ Commands:
   fix-network                         disconnect stale networks from a stopped container
                                         (needed after ungraceful host shutdown)
   unlock                              remove stale lockfile (safe — refuses if lock is actively held)
-  ps [--all]                          show running claude sessions (--all: all containers)
+  ps                                  list running containers for this project
   audit [--summary|--new|--all|--clear]
                                       show permission audit log (default: --summary)
   completions [bash|zsh|fish]         emit shell completions
@@ -618,20 +618,13 @@ case "${1:-up}" in
         ;;
     ps)
         shift
-        if [ "${1:-}" = "--all" ]; then
-            for cid in $(docker ps -q); do
-                name="$(docker inspect --format '{{.Name}}' "$cid" | sed 's|^/||')"
-                n="$(docker exec "$cid" pgrep -c claude 2>/dev/null)" || continue
-                [ "$n" -gt 0 ] && printf "%s: %d session%s\n" "$name" "$n" "$([ "$n" -ne 1 ] && echo s)"
-            done
-        else
-            if ! is_running; then
-                echo "stopped"
-                exit 0
-            fi
-            n="$(dc_exec pgrep -c claude 2>/dev/null)" || n=0
-            printf "%s: %d session%s\n" "$DEV_CONTAINER_NAME" "$n" "$([ "$n" -ne 1 ] && echo s)"
-        fi
+        count=0
+        for cid in $(docker ps -q --filter "name=^${DEV_PROJECT_NAME}-dev-"); do
+            name="$(docker inspect --format '{{.Name}}' "$cid" | sed 's|^/||')"
+            ((count++))
+            echo "  $name"
+        done
+        printf "%d container%s running\n" "$count" "$([ "$count" -ne 1 ] && echo s)"
         ;;
     audit)
         shift
