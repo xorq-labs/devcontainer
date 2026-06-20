@@ -621,8 +621,9 @@ case "${1:-up}" in
         count=0
         for cid in $(docker ps -q --filter "name=^${DEV_PROJECT_NAME}-dev-"); do
             name="$(docker inspect --format '{{.Name}}' "$cid" | sed 's|^/||')"
+            n="$(docker exec "$cid" pgrep -cx claude 2>/dev/null)" || n=0
             ((++count))
-            echo "  $name"
+            printf "  %s: %d session%s\n" "$name" "$n" "$([ "$n" -ne 1 ] && echo s)"
         done
         printf "%d container%s running\n" "$count" "$([ "$count" -ne 1 ] && echo s)"
         ;;
