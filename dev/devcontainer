@@ -621,7 +621,7 @@ case "${1:-up}" in
         count=0
         for cid in $(docker ps -q --filter "name=^${DEV_PROJECT_NAME}-dev-"); do
             name="$(docker inspect --format '{{.Name}}' "$cid" | sed 's|^/||')"
-            ((count++))
+            ((++count))
             echo "  $name"
         done
         printf "%d container%s running\n" "$count" "$([ "$count" -ne 1 ] && echo s)"
