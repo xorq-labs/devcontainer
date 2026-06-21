@@ -19,9 +19,9 @@ Usage: devcontainer [-w dir] <command>
 Commands:
   init [name]                         create a project overlay (default: workspace basename)
   up                                  start the dev container (default)
-  down                                stop the dev container
-  reset                               destroy container and all volumes
-  clean                               reset + remove images and host-side artifacts
+  down [--yes]                        stop the dev container
+  reset [--yes]                       destroy container and all volumes
+  clean [--yes]                       reset + remove images and host-side artifacts
   status                              show whether the container is running
   list                                list all worktrees with container status and overlay
   resolve                             show resolved overlay and configuration (dry run)
@@ -497,7 +497,7 @@ case "${1:-up}" in
         ensure_up
         ;;
     down)
-        if is_running; then
+        if is_running && [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
             read -rp "Running container will be stopped. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
@@ -509,9 +509,11 @@ case "${1:-up}" in
         dc down
         ;;
     reset)
-        read -rp "This will destroy the container and all volumes (venv, uv cache). Continue? [y/N] " answer
-        if [[ "$answer" != [yY]* ]]; then
-            exit 0
+        if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
+            read -rp "This will destroy the container and all volumes (venv, uv cache). Continue? [y/N] " answer
+            if [[ "$answer" != [yY]* ]]; then
+                exit 0
+            fi
         fi
         stop_ssh_forward
         stop_gpg_forward
@@ -519,9 +521,11 @@ case "${1:-up}" in
         dc down --volumes
         ;;
     clean)
-        read -rp "This will destroy $DEV_CONTAINER_NAME (container, volumes, images, audit log, and session captures). Continue? [y/N] " answer
-        if [[ "$answer" != [yY]* ]]; then
-            exit 0
+        if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
+            read -rp "This will destroy $DEV_CONTAINER_NAME (container, volumes, images, audit log, and session captures). Continue? [y/N] " answer
+            if [[ "$answer" != [yY]* ]]; then
+                exit 0
+            fi
         fi
         stop_ssh_forward
         stop_gpg_forward
