@@ -3,7 +3,8 @@
 
 Sets up Claude Code config inside the container's isolated ~/.claude volume.
 Credentials are shared via a bind-mounted directory (not copied); permissions,
-memory, and global instructions are copied from the read-only host mount.
+global instructions, global memory, and per-project memory are copied from the
+read-only host mount.
 Installs a PreToolUse audit hook and symlinks sessions for host log capture.
 
 Note: ~/.claude/.credentials.json is a symlink to credentials/.credentials.json
@@ -39,6 +40,12 @@ def copy_global_instructions():
     src = HOST / "CLAUDE.md"
     if src.exists():
         shutil.copy2(src, HOME / "CLAUDE.md")
+
+
+def copy_global_memory():
+    src = HOST / "memory"
+    if src.is_dir():
+        shutil.copytree(src, HOME / "memory", dirs_exist_ok=True)
 
 
 def copy_user_prefs(workspace):
@@ -170,6 +177,7 @@ def main():
     HOME.mkdir(parents=True, exist_ok=True)
 
     copy_global_instructions()
+    copy_global_memory()
     copy_user_prefs(workspace)
     setup_settings(workspace, host_project_key)
     setup_project_settings(host_project_key, container_project_key)
