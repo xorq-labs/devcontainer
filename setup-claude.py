@@ -58,6 +58,7 @@ def copy_user_prefs(workspace):
     ws_key = str(workspace)
     projects.setdefault(ws_key, {})
     projects[ws_key]["hasTrustDialogAccepted"] = True
+    projects[ws_key]["hasClaudeMdExternalIncludesApproved"] = True
 
     with open(CONTAINER_PREFS, "w") as f:
         json.dump(prefs, f, indent=2)
