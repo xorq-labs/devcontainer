@@ -16,6 +16,8 @@ Expected environment variables (set by dev/devcontainer):
     DEV_CONTAINER_WORKSPACE  — container workspace path (e.g. /workspaces/src)
     DEV_HOST_PROJECT_KEY     — mangled host workspace path (e.g. -home-dan-repos-github-xorq)
     DEV_CONTAINER_PROJECT_KEY — mangled container workspace path (e.g. -workspaces-src)
+    DEV_WORKSPACE            — host workspace path; optional, used to rewrite the
+                               cwd prefix in copied session transcripts
 """
 
 import json
@@ -141,6 +143,35 @@ def setup_project_settings(host_project_key, container_project_key):
         shutil.copytree(host_memory, container_memory, dirs_exist_ok=True)
 
 
+def copy_sessions(workspace, host_project_key, container_project_key):
+    """Mirror host session transcripts into the container's project key.
+
+    Resume locates a session by the cwd-derived project key, and each record
+    carries an absolute cwd. The host workspace path differs from the container
+    one, so rewrite the prefix as we copy. Host -> container only; existing
+    container-side transcripts are left untouched so continued work is not
+    clobbered.
+    """
+    host_dir = HOST / "projects" / host_project_key
+    if not host_dir.is_dir():
+        return
+
+    container_dir = HOME / "projects" / container_project_key
+    container_dir.mkdir(parents=True, exist_ok=True)
+
+    host_ws = os.environ.get("DEV_WORKSPACE")
+    container_ws = str(workspace)
+
+    for src in host_dir.glob("*.jsonl"):
+        dst = container_dir / src.name
+        if dst.exists():
+            continue
+        text = src.read_text()
+        if host_ws:
+            text = text.replace(host_ws, container_ws)
+        dst.write_text(text)
+
+
 def setup_sessions(workspace):
     sessions_target = workspace / ".claude" / "container-sessions"
     sessions_target.mkdir(parents=True, exist_ok=True)
@@ -181,6 +212,7 @@ def main():
     copy_user_prefs(workspace)
     setup_settings(workspace, host_project_key)
     setup_project_settings(host_project_key, container_project_key)
+    copy_sessions(workspace, host_project_key, container_project_key)
     setup_sessions(workspace)
     setup_audit(workspace)
 
