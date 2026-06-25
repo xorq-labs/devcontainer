@@ -398,6 +398,7 @@ setup_claude() {
     dc exec -u root app chown vscode:vscode /home/vscode/.claude
 
     dc exec \
+        -e DEV_WORKSPACE="$DEV_WORKSPACE" \
         -e DEV_CONTAINER_WORKSPACE="$DEV_CONTAINER_WORKSPACE" \
         -e DEV_HOST_PROJECT_KEY="$host_project_key" \
         -e DEV_CONTAINER_PROJECT_KEY="$container_project_key" \
