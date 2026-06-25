@@ -1,0 +1,7 @@
+# Bind mounts from host into container (project-wide, committed).
+# Format: <host-path>:<container-path>[:<options>]
+# ~ at the start of host-path expands to $HOME.
+# Missing host paths are skipped with a warning.
+# See lib/list-file.sh for comment and blank-line handling.
+#
+# Per-developer mounts go in host-mounts.local.txt (gitignored).
