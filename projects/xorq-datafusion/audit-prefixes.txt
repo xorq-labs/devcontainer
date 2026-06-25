@@ -1,0 +1,11 @@
+# First-word triggers for two-word grouping in the audit report.
+# When a Bash command starts with one of these words, the report groups
+# by the first TWO words (e.g. `git status`, `uv run`) instead of one.
+# Format: see lib/list-file.sh.
+git
+env
+uv
+cargo
+pytest
+pre-commit
+maturin

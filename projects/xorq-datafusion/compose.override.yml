@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      args:
+        # Prepended to PATH inside the container (project venv + cargo)
+        EXTRA_PATH: "${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/.venv/bin:/home/vscode/.cargo/bin"
+    volumes:
+      # cached build/dependency volumes
+      - uv-cache:/home/vscode/.cache/uv
+      - venv:${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/.venv
+      - cargo-registry:/home/vscode/.cargo/registry
+      - cargo-git:/home/vscode/.cargo/git
+      # cargo-target is per-worktree (concurrent writes to the same target dir
+      # from sibling containers corrupt incremental build state).
+      - cargo-target:${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/target
+
+volumes:
+  # external:true (shared across worktrees, content-addressed) suppresses the
+  # cross-worktree ownership warning; dev/devcontainer pre-creates them via
+  # ensure_external_volumes() reading external-volumes.txt.
+  uv-cache:
+    name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-uv-cache
+    external: true
+  cargo-registry:
+    name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-cargo-registry
+    external: true
+  cargo-git:
+    name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-cargo-git
+    external: true
+  # per-worktree: virtualenv paths and build targets are workspace-specific
+  venv:
+  cargo-target:
