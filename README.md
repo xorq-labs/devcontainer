@@ -194,6 +194,8 @@ Two worktree paths are hardcoded in `dev/setup-worktree` rather than living in `
 
 ## Tab completion
 
+To load completions for the current session, `eval` the emitted script:
+
 ```bash
 # bash
 eval "$(devcontainer completions bash)"
@@ -204,6 +206,27 @@ eval "$(devcontainer completions zsh)"
 # fish
 devcontainer completions fish | source
 ```
+
+To install them permanently, `install-completions` writes each shell's script to the location it autoloads from (honoring `XDG_DATA_HOME`/`XDG_CONFIG_HOME`):
+
+```bash
+# install for every shell whose binary is present
+devcontainer install-completions
+
+# or a specific shell
+devcontainer install-completions bash
+
+# preview target paths without writing anything
+devcontainer install-completions --print-paths
+```
+
+| Shell | Target | Notes |
+|---|---|---|
+| bash | `${XDG_DATA_HOME:-~/.local/share}/bash-completion/completions/devcontainer` | requires the `bash-completion` package; loaded on demand |
+| zsh | `${XDG_DATA_HOME:-~/.local/share}/zsh/site-functions/_devcontainer` | the dir must be on `$fpath` before `compinit` |
+| fish | `${XDG_CONFIG_HOME:-~/.config}/fish/completions/devcontainer.fish` | loaded automatically |
+
+Start a new shell after installing.
 
 ## `dev/devcontainer` vs `devcontainer.json`
 
