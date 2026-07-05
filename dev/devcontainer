@@ -12,6 +12,13 @@ if [ "${1:-}" = "completions" ]; then
     exec "$(dirname "$(readlink -f "$0")")/devcontainer-completions" "$@"
 fi
 
+# Pure host-side helper: install completions to each shell's autoload dir.
+# Dispatch before the git/compose/project resolution below (which it doesn't need).
+if [ "${1:-}" = "install-completions" ]; then
+    shift
+    exec "$(dirname "$(readlink -f "$0")")/install-completions" "$@"
+fi
+
 show_usage() {
     cat <<'USAGE'
 Usage: devcontainer [-w dir] <command>
@@ -42,6 +49,8 @@ Commands:
   audit [--summary|--new|--all|--clear]
                                       show permission audit log (default: --summary)
   completions [bash|zsh|fish]         emit shell completions
+  install-completions [bash|zsh|fish] install completions to each shell's autoload dir
+                                        (default: every shell present; --print-paths to preview)
 USAGE
 }
 

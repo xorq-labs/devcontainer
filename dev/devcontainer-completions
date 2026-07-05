@@ -10,7 +10,7 @@ _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions"
+    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions install-completions"
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -49,6 +49,9 @@ _devcontainer() {
         completions)
             COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
             ;;
+        install-completions)
+            COMPREPLY=($(compgen -W "bash zsh fish --print-paths" -- "$cur"))
+            ;;
     esac
 }
 BASH
@@ -79,6 +82,7 @@ _devcontainer() {
         'resolve:show resolved overlay and configuration (dry run)'
         'logs:show container logs'
         'completions:emit shell completions'
+        'install-completions:install completions to each shell autoload dir'
     )
     _arguments -s \
         '(-w --workspace)'{-w,--workspace}'[workspace directory]:dir:_directories' \
@@ -93,6 +97,7 @@ _devcontainer() {
                 ps) _values 'flag' --all ;;
                 audit) _values 'mode' --summary --new --all --clear ;;
                 completions) _values 'shell' bash zsh fish ;;
+                install-completions) _values 'shell' bash zsh fish --print-paths ;;
             esac
             ;;
     esac
@@ -102,7 +107,7 @@ ZSH
         ;;
     fish)
         cat <<'FISH'
-set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions
+set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions install-completions
 complete -c devcontainer -f
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a init -d 'create a project overlay'
@@ -125,10 +130,13 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a list -d '
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a resolve -d 'show resolved overlay and configuration (dry run)'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a logs -d 'show container logs'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a completions -d 'emit shell completions'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a install-completions -d 'install completions to each shell autoload dir'
 complete -c devcontainer -n "__fish_seen_subcommand_from init" -l local -d 'create overlay in workspace .devcontainer/'
 complete -c devcontainer -n "__fish_seen_subcommand_from ps" -l all -d 'show all containers'
 complete -c devcontainer -n "__fish_seen_subcommand_from audit" -a "--summary --new --all --clear"
 complete -c devcontainer -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
+complete -c devcontainer -n "__fish_seen_subcommand_from install-completions" -a "bash zsh fish"
+complete -c devcontainer -n "__fish_seen_subcommand_from install-completions" -l print-paths -d 'show target paths without installing'
 FISH
         ;;
     *)
