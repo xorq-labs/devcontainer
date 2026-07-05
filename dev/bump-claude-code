@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bump the pinned Claude Code version in the Dockerfile.
+#
+# Usage:
+#   devcontainer bump-claude-code           # bump to the latest published on npm
+#   devcontainer bump-claude-code 2.1.201   # pin an explicit version
+#   devcontainer bump-claude-code --check    # report current vs latest, don't edit
+#
+# Claude Code is installed via npm (see Dockerfile: `npm install -g
+# @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`) and has no checksum arg,
+# so the only thing to update is the ARG default.
+
+PACKAGE="@anthropic-ai/claude-code"
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+dockerfile="$base/Dockerfile"
+
+check_only=false
+target=""
+for arg in "$@"; do
+    case "$arg" in
+        --check) check_only=true ;;
+        -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
+        *)
+            if [ -n "$target" ]; then
+                echo "error: unexpected extra argument: $arg" >&2
+                exit 1
+            fi
+            target="$arg"
+            ;;
+    esac
+done
+
+[ -f "$dockerfile" ] || { echo "error: Dockerfile not found at $dockerfile" >&2; exit 1; }
+
+current="$(grep -oP '^ARG CLAUDE_CODE_VERSION=\K.*' "$dockerfile")" || true
+if [ -z "$current" ]; then
+    echo "error: could not find 'ARG CLAUDE_CODE_VERSION=' in $dockerfile" >&2
+    exit 1
+fi
+
+# Resolve the latest published version: prefer npm if present, otherwise
+# query the npm registry directly over HTTPS (curl + python3 are always
+# available in this repo's tooling).
+latest_version() {
+    if command -v npm >/dev/null 2>&1; then
+        npm view "$PACKAGE" version 2>/dev/null
+    else
+        curl -sf "https://registry.npmjs.org/${PACKAGE}/latest" \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
+    fi
+}
+
+if [ -n "$target" ]; then
+    new="$target"
+else
+    new="$(latest_version)" || true
+    if [ -z "$new" ]; then
+        echo "error: could not determine latest $PACKAGE version from npm" >&2
+        exit 1
+    fi
+fi
+
+if [ "$current" = "$new" ]; then
+    echo "Claude Code already pinned to $current${target:+ (requested)}"
+    [ -n "$target" ] || echo "(latest published version)"
+    exit 0
+fi
+
+if $check_only; then
+    echo "current: $current"
+    echo "latest:  $new"
+    echo "run 'devcontainer bump-claude-code' to update the Dockerfile"
+    exit 0
+fi
+
+sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
+
+echo "Bumped Claude Code: $current → $new"
+echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."
