@@ -404,3 +404,21 @@ setup_claude() {
         -e DEV_CONTAINER_PROJECT_KEY="$container_project_key" \
         app python3 /usr/local/bin/setup-claude
 }
+
+# On-demand re-run of just the session-transcript mirror (setup-claude's
+# copy-sessions step). setup_claude already runs this on every entry, but a
+# host session started after the container came up isn't visible until the
+# next entry — this pulls it in without a full re-setup. Host -> container
+# only; transcripts already present container-side are left untouched.
+copy_host_transcripts() {
+    local host_project_key container_project_key
+    host_project_key="$(echo "$DEV_WORKSPACE" | sed 's|/|-|g')"
+    container_project_key="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|/|-|g')"
+
+    dc exec \
+        -e DEV_WORKSPACE="$DEV_WORKSPACE" \
+        -e DEV_CONTAINER_WORKSPACE="$DEV_CONTAINER_WORKSPACE" \
+        -e DEV_HOST_PROJECT_KEY="$host_project_key" \
+        -e DEV_CONTAINER_PROJECT_KEY="$container_project_key" \
+        app python3 /usr/local/bin/setup-claude copy-sessions
+}

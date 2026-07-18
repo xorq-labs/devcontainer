@@ -10,7 +10,7 @@ _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions install-completions"
+    local subcmds="init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials fix-network unlock ps audit completions install-completions"
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -72,6 +72,7 @@ _devcontainer() {
         'claude-dangerously-skip-permissions:run claude with --dangerously-skip-permissions'
         'refresh-ssh:re-forward SSH agent without container restart'
         'refresh-gpg:re-forward GPG agent without container restart'
+        'copy-host-transcripts:mirror host session transcripts so claude --resume finds them'
         'fix-credentials:repair credentials symlink (after upgrading from pre-shared-credentials build)'
         'fix-network:disconnect stale networks (after ungraceful host shutdown)'
         'unlock:remove stale lockfile'
@@ -107,7 +108,7 @@ ZSH
         ;;
     fish)
         cat <<'FISH'
-set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg fix-credentials fix-network unlock ps audit completions install-completions
+set -l cmds init up down reset clean status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials fix-network unlock ps audit completions install-completions
 complete -c devcontainer -f
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a init -d 'create a project overlay'
@@ -120,6 +121,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a claude -d
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a claude-dangerously-skip-permissions -d 'run claude with --dangerously-skip-permissions'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-ssh -d 're-forward SSH agent without container restart'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-gpg -d 're-forward GPG agent without container restart'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a copy-host-transcripts -d 'mirror host session transcripts so claude --resume finds them'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-credentials -d 'repair credentials symlink'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-network -d 'disconnect stale networks'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a unlock -d 'remove stale lockfile'
