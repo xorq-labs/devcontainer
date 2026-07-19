@@ -37,6 +37,8 @@ Commands:
   down [--yes]                        stop the dev container
   reset [--yes]                       destroy container and all volumes
   clean [--yes]                       reset + remove images and host-side artifacts
+  clean-caches [--yes]                remove the project's shared caches (external volumes:
+                                        nix store, package caches) — affects ALL worktrees
   status                              show whether the container is running
   list                                list all worktrees with container status and overlay
   resolve                             show resolved overlay and configuration (dry run)
@@ -116,7 +118,7 @@ DEV_CONTAINER_WORKSPACE="/workspaces/src"
 
 DEV_WORKSPACE="${DEV_WORKSPACE:-.}"
 
-if [[ "${1:-up}" =~ ^(down|reset|clean|status|logs|list|resolve)$ ]]; then
+if [[ "${1:-up}" =~ ^(down|reset|clean|clean-caches|status|logs|list|resolve)$ ]]; then
     if [ -d "$DEV_WORKSPACE" ]; then
         export DEV_WORKSPACE="$(cd "$DEV_WORKSPACE" && pwd)"
     else
@@ -533,7 +535,7 @@ case "${1:-up}" in
         ;;
     reset)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy the container and all volumes (venv, uv cache). Continue? [y/N] " answer
+            read -rp "This will destroy the container and its per-worktree volumes (venv, build target). Shared project caches (external volumes) are kept — use 'devcontainer clean-caches' to remove those. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
@@ -545,7 +547,7 @@ case "${1:-up}" in
         ;;
     clean)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy $DEV_CONTAINER_NAME (container, volumes, images, audit log, and session captures). Continue? [y/N] " answer
+            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, images, audit log, and session captures). Shared project caches (external volumes) are kept — use 'devcontainer clean-caches' to remove those. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
@@ -560,6 +562,54 @@ case "${1:-up}" in
         rm -rf "$DEV_WORKSPACE/.claude/container-audit"
         rm -rf "$DEV_WORKSPACE/.claude/container-sessions"
         echo "Cleaned: $DEV_CONTAINER_NAME"
+        ;;
+    clean-caches)
+        # Remove the project's shared external volumes (nix store, package
+        # caches). These are scoped to DEV_PROJECT_NAME and shared by every
+        # worktree, so `down --volumes`/reset/clean never touch them. This is a
+        # project-wide operation, not per-worktree.
+        _caches=()
+        while IFS= read -r _name; do
+            _caches+=("${DEV_PROJECT_NAME}-${_name}")
+        done < <(read_list "$DEV_PROJECT_DIR/external-volumes.txt")
+
+        if [ "${#_caches[@]}" -eq 0 ]; then
+            echo "No shared caches declared for project '$DEV_PROJECT_NAME' (empty external-volumes.txt)."
+            exit 0
+        fi
+
+        if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
+            echo "This removes shared caches for project '$DEV_PROJECT_NAME', used by ALL its worktrees:"
+            printf '  %s\n' "${_caches[@]}"
+            read -rp "Continue? [y/N] " answer
+            if [[ "$answer" != [yY]* ]]; then
+                exit 0
+            fi
+        fi
+
+        _rc=0
+        for _v in "${_caches[@]}"; do
+            if ! docker volume inspect "$_v" >/dev/null 2>&1; then
+                echo "absent, skipped: $_v"
+                continue
+            fi
+            _users="$(docker ps -a --filter volume="$_v" --format '{{.Names}}' | paste -sd, -)"
+            if [ -n "$_users" ]; then
+                echo "in use, not removed: $_v (containers: $_users)" >&2
+                _rc=1
+                continue
+            fi
+            if docker volume rm "$_v" >/dev/null 2>&1; then
+                echo "removed: $_v"
+            else
+                echo "failed: $_v" >&2
+                _rc=1
+            fi
+        done
+        if [ "$_rc" -ne 0 ]; then
+            echo "Some caches were not removed. Stop the containers listed above first ('devcontainer down' in each worktree), then retry." >&2
+        fi
+        exit "$_rc"
         ;;
     exec)
         shift
