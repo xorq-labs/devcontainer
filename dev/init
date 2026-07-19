@@ -91,13 +91,9 @@ if $nix_mode; then
     # target is overwritten rather than skipped like the base loop — say so
     # honestly instead of reporting every file as freshly written.
     for f in install-system.sh setup-env.sh compose.override.yml external-volumes.txt; do
-        if [ -f "$target/$f" ]; then
-            cp "$nix_frag/$f" "$target/$f"
-            echo "  nix     $f (overwrote)"
-        else
-            cp "$nix_frag/$f" "$target/$f"
-            echo "  nix     $f"
-        fi
+        [ -f "$target/$f" ] && suffix=" (overwrote)" || suffix=""
+        cp "$nix_frag/$f" "$target/$f"
+        echo "  nix     $f$suffix"
     done
     echo ""
     echo "Nix is a project-scoped shared volume (\${DEV_PROJECT_NAME}-nix), reused by"
