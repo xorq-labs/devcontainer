@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  bash-tests:
+    name: Bash tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Two suites create disposable git repos; git needs an identity to commit.
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+      - name: Run tests/*.sh
+        run: |
+          rc=0
+          for t in tests/*.sh; do
+            echo "== $t =="
+            bash "$t" || rc=1
+          done
+          exit "$rc"

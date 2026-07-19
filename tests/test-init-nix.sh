@@ -144,12 +144,15 @@ assert_contains "filter-syscalls off" "filter-syscalls = false" "$confA"
 echo "--- nix_write_conf (host config merge) ---"
 H="$TMPDIR_ROOT/confB"
 mkdir -p "$H/.config/nix-host"
-printf 'max-jobs = 4\nsandbox = true\nsandbox-paths = /opt/foo\n' > "$H/.config/nix-host/nix.conf"
+# Include an indented sandbox line (nix.conf allows leading whitespace) to prove
+# the strip anchors past the indent.
+printf 'max-jobs = 4\nsandbox = true\n  sandbox = relaxed\nsandbox-paths = /opt/foo\n' > "$H/.config/nix-host/nix.conf"
 printf '{}\n' > "$H/.config/nix-host/registry.json"
 ( export HOME="$H"; nix_write_conf )
 confB="$(cat "$H/.config/nix/nix.conf")"
 assert_contains "unrelated host key preserved" "max-jobs = 4" "$confB"
 assert_not_contains "host 'sandbox = true' stripped" "sandbox = true" "$confB"
+assert_not_contains "indented host 'sandbox' stripped" "sandbox = relaxed" "$confB"
 assert_contains "sandbox forced off" "sandbox = false" "$confB"
 # The stripping targets the exact `sandbox` key, not sibling keys.
 assert_contains "sandbox-paths NOT stripped" "sandbox-paths = /opt/foo" "$confB"

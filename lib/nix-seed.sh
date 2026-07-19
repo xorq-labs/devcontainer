@@ -47,10 +47,11 @@ nix_write_conf() {
     [ -f "$conf/nix.conf" ] && return 0
     mkdir -p "$conf"
     if [ -f "$host/nix.conf" ]; then
-        # Match only the `sandbox` key (word boundary =), not sibling keys like
-        # `sandbox-paths`. `|| true`: grep exits 1 when every line is filtered
-        # out, which would trip `set -e` — we append the sandbox lines anyway.
-        grep -vE '^sandbox[[:space:]]*=' "$host/nix.conf" > "$conf/nix.conf" || true
+        # Match only the `sandbox` key (allowing nix.conf's leading indent),
+        # not sibling keys like `sandbox-paths`. `|| true`: grep exits 1 when
+        # every line is filtered out, which would trip `set -e` — we append the
+        # sandbox lines anyway.
+        grep -vE '^[[:space:]]*sandbox[[:space:]]*=' "$host/nix.conf" > "$conf/nix.conf" || true
     fi
     printf 'sandbox = false\nfilter-syscalls = false\n' >> "$conf/nix.conf"
     [ -d "$host" ] || return 0
