@@ -13,8 +13,16 @@ apt-get install -y --no-install-recommends \
     shellcheck \
     direnv \
     docker-ce-cli \
-    docker-compose-plugin
+    docker-compose-plugin \
+    xz-utils
 rm -rf /var/lib/apt/lists/*
+
+# Nix (single-user, seeded into the project-scoped `nix` volume on first run):
+# needed to work on spike/nix-default — building the flake, filling its
+# fixed-output hashes, and measuring the layer delta. xz-utils above is the
+# installer's tarball dependency.
+. /usr/local/lib/devcontainer/nix-seed.sh
+nix_build_install
 
 # hadolint, ruff, and yamllint versions below must be kept in sync with the
 # matching hook pins in .pre-commit-config.yaml at the repo root. pre-commit
