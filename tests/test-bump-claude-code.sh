@@ -65,6 +65,20 @@ fi
 EOF
 chmod +x "$SANDBOX/bin/npm"
 
+# Second stub set for the HTTPS-fallback path: npm is present but its lookup
+# fails, so the script must fall through to querying the registry over curl.
+# The curl stub returns the shape of registry.npmjs.org/<pkg>/latest.
+mkdir -p "$SANDBOX/bin-fallback"
+cat > "$SANDBOX/bin-fallback/npm" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+cat > "$SANDBOX/bin-fallback/curl" <<'EOF'
+#!/usr/bin/env bash
+echo '{"version":"7.7.7"}'
+EOF
+chmod +x "$SANDBOX/bin-fallback/npm" "$SANDBOX/bin-fallback/curl"
+
 write_dockerfile() {
     printf 'FROM scratch\nARG CLAUDE_CODE_VERSION=%s\nRUN true\n' "$1" > "$DOCKERFILE"
 }
@@ -75,6 +89,14 @@ pin() { grep -oP '^ARG CLAUDE_CODE_VERSION=\K.*' "$DOCKERFILE"; }
 run_bump() {
     set +e
     out="$(PATH="$SANDBOX/bin:$PATH" "$BUMP" "$@" 2>&1)"
+    rc=$?
+    set -e
+}
+
+# Same, but with the failing-npm + curl stub set, to exercise the fallback.
+run_bump_fallback() {
+    set +e
+    out="$(PATH="$SANDBOX/bin-fallback:$PATH" "$BUMP" "$@" 2>&1)"
     rc=$?
     set -e
 }
@@ -101,6 +123,21 @@ run_bump "2.1.0-beta.1"
 assert_eq "exit 0" "0" "$rc"
 assert_eq "Dockerfile pin set to prerelease" "2.1.0-beta.1" "$(pin)"
 
+# ---------- test: leading 'v' on explicit version is stripped ----------
+echo "--- bump-claude-code (leading v stripped) ---"
+write_dockerfile "1.0.0"
+run_bump "v2.1.201"
+assert_eq "exit 0" "0" "$rc"
+assert_eq "leading v stripped from pin" "2.1.201" "$(pin)"
+
+# ---------- test: HTTPS fallback when npm lookup fails ----------
+echo "--- bump-claude-code (npm fails, HTTPS fallback) ---"
+write_dockerfile "1.0.0"
+run_bump_fallback
+assert_eq "exit 0" "0" "$rc"
+assert_contains "falls through to registry" "1.0.0 → 7.7.7" "$out"
+assert_eq "Dockerfile pin from fallback" "7.7.7" "$(pin)"
+
 # ---------- test: idempotent (explicit, already current) ----------
 echo "--- bump-claude-code (idempotent explicit) ---"
 write_dockerfile "2.5.0"
@@ -122,17 +159,30 @@ echo "--- bump-claude-code (--check default) ---"
 write_dockerfile "1.0.0"
 run_bump --check
 assert_eq "exit 0" "0" "$rc"
-assert_contains "shows current" "current: 1.0.0" "$out"
-assert_contains "shows latest" "latest:  9.9.9" "$out"
+assert_contains "shows current" "$(printf '%-11s%s' 'current:' '1.0.0')" "$out"
+assert_contains "shows latest" "$(printf '%-11s%s' 'latest:' '9.9.9')" "$out"
 assert_eq "Dockerfile not edited" "1.0.0" "$(pin)"
+
+# ---------- test: --check on an already-current pin still reports ----------
+echo "--- bump-claude-code (--check already current) ---"
+write_dockerfile "9.9.9"
+run_bump --check
+assert_eq "exit 0" "0" "$rc"
+assert_contains "still prints the report" "$(printf '%-11s%s' 'current:' '9.9.9')" "$out"
+assert_contains "notes up to date" "already up to date" "$out"
+assert_eq "Dockerfile not edited" "9.9.9" "$(pin)"
 
 # ---------- test: --check with explicit target labels it 'requested' ----------
 echo "--- bump-claude-code (--check explicit) ---"
 write_dockerfile "1.0.0"
 run_bump "3.0.0" --check
 assert_eq "exit 0" "0" "$rc"
-assert_contains "labels the target as requested" "requested: 3.0.0" "$out"
+assert_contains "labels the target as requested" "$(printf '%-11s%s' 'requested:' '3.0.0')" "$out"
 assert_eq "Dockerfile not edited" "1.0.0" "$(pin)"
+# Value columns of current:/requested: must line up (regression on alignment).
+cur_col="$(awk '/^current:/{print index($0, "1.0.0")}' <<<"$out")"
+req_col="$(awk '/^requested:/{print index($0, "3.0.0")}' <<<"$out")"
+assert_eq "report columns aligned" "$cur_col" "$req_col"
 
 # ---------- test: invalid explicit version rejected ----------
 echo "--- bump-claude-code (invalid version) ---"
