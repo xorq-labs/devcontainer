@@ -118,6 +118,11 @@ done
 assert_eq "external-volumes has a bare 'nix' line" "true" \
     "$(grep -Eq '^nix$' "$overlay/external-volumes.txt" && echo true || echo false)"
 
+# The compose EXTRA_PATH points at NIX_USER's profile, but compose can't read the
+# bash var — they're hand-synced. Fail loudly here if they drift.
+extra_path_line="$(grep -E 'EXTRA_PATH:' "$NIX_FRAG/compose.override.yml")"
+assert_contains "EXTRA_PATH matches NIX_USER's home" "/home/$NIX_USER/.nix-profile" "$extra_path_line"
+
 # ---------- test: init --local (no --nix) leaves defaults in place ----------
 echo "--- init --local (no --nix) ---"
 REPO2="$(new_repo plainrepo)"

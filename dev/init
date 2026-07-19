@@ -87,9 +87,17 @@ if $nix_mode; then
     nix_frag="$base/templates/nix"
     echo ""
     echo "Applying --nix fragment:"
+    # These four are always applied (that's the point of --nix), so an existing
+    # target is overwritten rather than skipped like the base loop — say so
+    # honestly instead of reporting every file as freshly written.
     for f in install-system.sh setup-env.sh compose.override.yml external-volumes.txt; do
-        cp "$nix_frag/$f" "$target/$f"
-        echo "  nix     $f"
+        if [ -f "$target/$f" ]; then
+            cp "$nix_frag/$f" "$target/$f"
+            echo "  nix     $f (overwrote)"
+        else
+            cp "$nix_frag/$f" "$target/$f"
+            echo "  nix     $f"
+        fi
     done
     echo ""
     echo "Nix is a project-scoped shared volume (\${DEV_PROJECT_NAME}-nix), reused by"

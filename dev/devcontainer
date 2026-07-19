@@ -253,6 +253,9 @@ config_files() {
         "$DEV_PROJECT_DIR/install-system.sh" \
         "$DEV_PROJECT_DIR/setup-env.sh"
     [ -f "$COMPOSE_OVERRIDE" ] && printf '%s\n' "$COMPOSE_OVERRIDE"
+    # Baked into the image and holds the pinned Nix version/sha; hash it so a pin
+    # bump actually invalidates the image (the Dockerfile text alone doesn't change).
+    [ -f "$DEV_BASE_DIR/lib/nix-seed.sh" ] && printf '%s\n' "$DEV_BASE_DIR/lib/nix-seed.sh"
     local hm
     for hm in \
         "$DEV_PROJECT_DIR/host-mounts.txt" \
@@ -289,6 +292,7 @@ config_file_desc() {
         setup-env.sh)          echo "environment setup" ;;
         host-mounts.txt)       echo "host directory mounts" ;;
         host-mounts.local.txt) echo "local host mount overrides" ;;
+        nix-seed.sh)           echo "pinned Nix version and seed logic" ;;
         *)                     echo "" ;;
     esac
 }
