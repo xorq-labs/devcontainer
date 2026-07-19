@@ -533,7 +533,7 @@ case "${1:-up}" in
         ;;
     reset)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy the container and all volumes (venv, uv cache). Continue? [y/N] " answer
+            read -rp "This will destroy the container and its per-worktree volumes (venv, build target). Shared project caches (external volumes) are kept. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
@@ -545,7 +545,7 @@ case "${1:-up}" in
         ;;
     clean)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy $DEV_CONTAINER_NAME (container, volumes, images, audit log, and session captures). Continue? [y/N] " answer
+            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, images, audit log, and session captures). Shared project caches (external volumes) are kept. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
