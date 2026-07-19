@@ -25,12 +25,12 @@ stdenvNoCC.mkDerivation rec {
   pname = "claude-code";
   # Keep in sync with CLAUDE_CODE_VERSION in ../../../Dockerfile.
   # `dev/bump-claude-code` updates both pins together (and resets src.hash).
-  version = "2.1.201";
+  version = "2.1.215";
 
   # The linux-x64 platform package: a single prebuilt `claude` binary (~78 MB).
   src = fetchurl {
     url = "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${version}.tgz";
-    hash = "sha256-iZmAjpJ5wAtNtN28uBuU9/FzS9fg2UmxMIHeimOnp9w=";
+    hash = "sha256-0WDTriyQy1Sn68mh1cKA5to37mzSYk5XAdxeTav70ok=";
   };
 
   # The prebuilt binary keeps its Debian-base glibc interpreter; leave it alone.
