@@ -57,6 +57,11 @@ RUN curl -LsSf --retry 3 --retry-connrefused \
 ARG CLAUDE_CODE_VERSION=2.1.201
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
+# Shared helpers an overlay can source. Copied before install-system runs so a
+# build-time install-system.sh can source it too (e.g. nix-seed.sh). Inert for
+# overlays that don't use it.
+COPY lib/nix-seed.sh /usr/local/lib/devcontainer/nix-seed.sh
+
 # Project-specific system packages and language toolchain.
 COPY --from=project install-system.sh /tmp/install-system.sh
 RUN bash /tmp/install-system.sh && rm /tmp/install-system.sh

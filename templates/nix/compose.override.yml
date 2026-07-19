@@ -1,0 +1,23 @@
+services:
+  app:
+    build:
+      args:
+        # Prepend the Nix profile to PATH inside the container.
+        EXTRA_PATH: "/home/vscode/.nix-profile/bin"
+    volumes:
+      # Durable, project-scoped Nix store, shared across worktrees (the store is
+      # content-addressed and cli-locked). Seeded on first run from the tarball
+      # baked by install-system.sh.
+      - nix:/nix
+      # Host nix config (nix.conf, registry.json) read-only.
+      - ${HOME}/.config/nix:/home/vscode/.config/nix-host:ro
+    environment:
+      - NIX_CONFIG=sandbox = false
+
+volumes:
+  # external:true (shared across worktrees) — dev/devcontainer pre-creates it as
+  # ${DEV_PROJECT_NAME}-nix via ensure_external_volumes() reading
+  # external-volumes.txt. Remove it with `devcontainer clean-caches`.
+  nix:
+    name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-nix
+    external: true
