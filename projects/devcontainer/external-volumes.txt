@@ -1,0 +1,5 @@
+# Volume names (basenames) declared `external: true` in compose.override.yml.
+# dev/devcontainer pre-creates each as `${DEV_PROJECT_NAME}-<basename>` before
+# `dc up`, so a fresh checkout doesn't error on missing external volumes.
+# Format: see lib/list-file.sh.
+nix
