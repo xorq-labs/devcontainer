@@ -92,7 +92,7 @@ if $nix_mode; then
         echo "  nix     $f"
     done
     echo ""
-    echo "Nix is a project-scoped shared volume (\${PROJECT_NAME}-nix), reused by"
+    echo "Nix is a project-scoped shared volume (\${DEV_PROJECT_NAME}-nix), reused by"
     echo "every worktree; remove it later with 'devcontainer clean-caches'."
 fi
 
