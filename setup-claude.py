@@ -219,13 +219,8 @@ def main():
     # every entry; the standalone form is for picking up a host session that
     # started after the container came up, without a full re-setup.
     if sys.argv[1:] == ["copy-sessions"]:
-        copied, skipped = copy_sessions(
-            workspace, host_project_key, container_project_key
-        )
-        print(
-            f"copied {copied} host transcript(s) "
-            f"({skipped} already present, left untouched)"
-        )
+        copied, skipped = copy_sessions(workspace, host_project_key, container_project_key)
+        print(f"copied {copied} host transcript(s) ({skipped} already present, left untouched)")
         return
 
     copy_global_instructions()
