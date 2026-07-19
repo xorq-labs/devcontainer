@@ -2,10 +2,12 @@
 #
 # Everything expensive (node, gh, sops, socat, just, claude-code) lives in the
 # Nix base's content-addressed layers. This Dockerfile holds only the bits that
-# must stay imperative:
+# must stay imperative and match the root Dockerfile's tail:
 #   - per-user UID/GID remap (can't be baked into a shared derivation without
 #     defeating layer sharing)
+#   - the project system layer (install-system.sh, per-project injected context)
 #   - the setup-* / audit-hook / git.sh copies (per-project, injected contexts)
+#   - the HOST_USER home symlink (per-host)
 #
 # When claude-code is bumped, only claude-code's layer blob in the Nix base
 # changes; these RUN/COPY steps re-execute but are near-instant, and the
@@ -23,13 +25,23 @@ FROM ${BASE_IMAGE}
 
 ARG USER_UID=1000
 ARG USER_GID=1000
+ARG HOST_USER=
 
 RUN if [ "$USER_GID" != "1000" ]; then groupmod -g "$USER_GID" vscode; fi \
     && if [ "$USER_UID" != "1000" ]; then usermod -u "$USER_UID" vscode; fi \
     && chown -R "$USER_UID:$USER_GID" /home/vscode
+
+# Project-specific system packages and language toolchain.
+COPY --from=project install-system.sh /tmp/install-system.sh
+RUN bash /tmp/install-system.sh && rm /tmp/install-system.sh
 
 COPY setup-claude.py /usr/local/bin/setup-claude
 COPY audit-hook /usr/local/bin/audit-hook
 COPY lib/git.sh /usr/local/lib/devcontainer/git.sh
 COPY --from=project setup-env.sh /usr/local/bin/setup-env
 RUN chmod +x /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
+
+RUN HOST_USER="$(basename "$HOST_USER")" && \
+    if [ -n "$HOST_USER" ] && [ "$HOST_USER" != "vscode" ]; then \
+        ln -s /home/vscode "/home/$HOST_USER"; \
+    fi

@@ -2,39 +2,58 @@
 
 Goal: prove that bumping `claude-code` reships **only** claude-code's image
 layer, while node/gh/just/sops/socat stay byte-identical — the layer reuse a
-linear Dockerfile can't give (today, bumping `CLAUDE_CODE_VERSION` on line 57
-of the root `Dockerfile` invalidates every layer after it, including the
-project system layer).
+linear Dockerfile can't give (today, bumping `CLAUDE_CODE_VERSION` in the root
+`Dockerfile` invalidates every layer after it, including the project system
+layer).
 
-This spike touches nothing in the real build path — the root `Dockerfile`,
-`docker-compose.yml`, and all project overlays are untouched. It only adds
-files under `spike/nix-default/`.
+This spike adds files under `spike/nix-default/` and leaves the real *image
+build* untouched — the root `Dockerfile`, `docker-compose.yml`, and all project
+overlays are unchanged. The one real-tool change is that `dev/bump-claude-code`
+now also syncs the spike's version pin (see "Open decisions"), so the two pins
+can't silently drift; it no-ops when the spike dir is absent.
 
 ## Layout
 
 - `flake.nix` — `streamLayeredImage` on top of the MS devcontainer base
   (`fromImage`), layering the infra binaries. Output: `devcontainer-nix-base`.
-- `pkgs/claude-code.nix` — claude-code repackaged from its npm tarball.
-- `Dockerfile.nix-default` — thin invariant layer (UID remap + script copies)
-  over the Nix base.
+- `pkgs/claude-code.nix` — claude-code fetched from npm. Note: 2.x is a native
+  binary shipped in a per-platform package (`@anthropic-ai/claude-code-linux-x64`);
+  this fetches that binary directly rather than wrapping node on a `cli.js`.
+- `Dockerfile.nix-default` — the invariant tail of the root Dockerfile (UID
+  remap, project `install-system.sh`, setup-* copies, `HOST_USER` symlink) over
+  the Nix base.
 
-## Fill in the three TODO hashes
+## Fill in the remaining hash
 
-Requires Nix on the builder (`nix --version`; enable `nix-command flakes`).
+Two of the three hashes are already filled from the current pins:
 
-1. **claude-code tarball hash** — in `pkgs/claude-code.nix`:
-   ```bash
-   nix store prefetch-file \
-     https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.201.tgz
-   ```
-   Paste the printed `sha256-...` into `src.hash`.
+- `pkgs/claude-code.nix` `src.hash` — the linux-x64 tarball for `2.1.201`.
+- `flake.nix` `imageDigest` — the `3.12-bookworm` manifest-list digest.
 
-2. **MS base digest + hash** — in `flake.nix`:
-   ```bash
-   nix run nixpkgs#nix-prefetch-docker -- \
-     --image-name mcr.microsoft.com/devcontainers/python --image-tag 3.12-bookworm
-   ```
-   Paste `imageDigest` (`sha256:...`) and `sha256`/`hash` into `pullImage`.
+The last one, `flake.nix` `hash` (the sha256 of Nix's flattened copy of the MS
+base), can only be produced by Nix — leave it as the fakeHash sentinel and let
+the first build print the real value:
+
+```bash
+nix build .#defaultBase
+# fails with:  error: hash mismatch ... got: sha256-...
+# paste that `got:` value into `hash` in flake.nix, then rebuild.
+```
+
+Or precompute it (requires Nix on the builder; enable `nix-command flakes`):
+
+```bash
+nix run nixpkgs#nix-prefetch-docker -- \
+  --image-name mcr.microsoft.com/devcontainers/python --image-tag 3.12-bookworm
+```
+
+Refreshing the pins after a version bump:
+
+- **claude-code** — `dev/bump-claude-code` updates both the Dockerfile `ARG` and
+  the spike's `version`, and resets the spike's `src.hash` to the fakeHash
+  sentinel. Then run the `nix build` above to fill in the printed hash.
+- **MS base digest** — changes whenever MS repushes `3.12-bookworm`; re-derive
+  with the `nix-prefetch-docker` / `imagetools inspect` commands above.
 
 ## Build & load
 
@@ -70,6 +89,9 @@ the infra + project layers).
 
 ## Optional: exercise the full default image
 
+Runs the project `install-system.sh` and the setup-* / `HOST_USER` steps on top
+of the Nix base — the equivalent of the root Dockerfile's tail:
+
 ```bash
 docker build -f Dockerfile.nix-default \
   --build-context project=../../defaults \
@@ -79,12 +101,22 @@ docker build -f Dockerfile.nix-default \
 
 ## Open decisions this spike surfaces
 
+- **`config` replaces the base config** — `streamLayeredImage`'s `config` does
+  not merge the `fromImage` config, so the MS base's `Env` (notably the
+  pyenv/py-utils/nvm `PATH`) is reproduced by hand in `flake.nix`. Re-derive it
+  with `docker inspect` if MS changes the base.
 - **UID remap** stays in `Dockerfile.nix-default` — don't bake it into the
   shared derivation (it would defeat layer sharing).
 - **MS digest pin** must be refreshed when MS repushes `3.12-bookworm`.
 - **Host Nix requirement** — building this needs Nix on the builder; for the
   lowest-barrier *default* path that's an accessibility regression to weigh
   before shipping (fine for a spike).
-- **arch** — x86_64 only here; wrap outputs in a systems list for arm64 parity.
-- **claude-code packaging** — fetch-and-wrap assumes a self-bundled CLI; if a
-  release adds unbundled deps / native postinstall, switch to `buildNpmPackage`.
+- **arch** — x86_64 only here (the claude-code binary is fetched per-platform);
+  wrap outputs in a systems list and select the matching platform package for
+  arm64 parity.
+- **node may be redundant** — claude-code 2.x is a native binary and no longer
+  needs node. The spike keeps `nodejs_22` for parity with the current
+  Dockerfile, but both could likely drop it if nothing else needs npm.
+- **version-pin coupling** — `pkgs/claude-code.nix` duplicates the Dockerfile's
+  `CLAUDE_CODE_VERSION`; `dev/bump-claude-code` keeps them in sync. If the spike
+  graduates, fold the pin into a single shared source instead.

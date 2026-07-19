@@ -111,4 +111,21 @@ fi
 sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
 
 echo "Bumped Claude Code: $current → $new"
+
+# Keep the Nix spike's second version pin in sync so the two can't silently
+# drift (spike/nix-default/pkgs/claude-code.nix). That file also carries a
+# tarball hash the Dockerfile's npm install doesn't have and that we can't
+# recompute here, so we reset it to the Nix fakeHash sentinel — the next
+# `nix build` fails and prints the correct sha256- to paste back. No-ops
+# cleanly when the spike isn't present. `$new` is validated above, so it's
+# safe as a sed replacement.
+nix_pin="$base/spike/nix-default/pkgs/claude-code.nix"
+if [ -f "$nix_pin" ]; then
+    sed -i \
+        -e "s|^  version = \".*\";|  version = \"${new}\";|" \
+        -e 's|^    hash = "sha256-.*";|    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";|' \
+        "$nix_pin"
+    echo "Also bumped Nix spike pin: ${nix_pin#"$base/"} (refresh its src.hash: 'nix build .#defaultBase' prints the correct sha256-)"
+fi
+
 echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."

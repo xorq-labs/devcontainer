@@ -130,6 +130,36 @@ run_bump "v2.1.201"
 assert_eq "exit 0" "0" "$rc"
 assert_eq "leading v stripped from pin" "2.1.201" "$(pin)"
 
+# ---------- test: bumps the Nix spike pin alongside the Dockerfile ----------
+echo "--- bump-claude-code (syncs Nix spike pin) ---"
+write_dockerfile "1.0.0"
+NIX_PIN_DIR="$SANDBOX/spike/nix-default/pkgs"
+NIX_PIN="$NIX_PIN_DIR/claude-code.nix"
+mkdir -p "$NIX_PIN_DIR"
+cat > "$NIX_PIN" <<'EOF'
+{ lib, stdenvNoCC, fetchurl }:
+stdenvNoCC.mkDerivation rec {
+  version = "1.0.0";
+  src = fetchurl {
+    url = "https://example/${version}.tgz";
+    hash = "sha256-iZmAjpJ5wAtNtN28uBuU9/FzS9fg2UmxMIHeimOnp9w=";
+  };
+}
+EOF
+run_bump "2.5.0"
+assert_eq "exit 0" "0" "$rc"
+assert_eq "spike version bumped" "2.5.0" "$(grep -oP '^  version = "\K[^"]*' "$NIX_PIN")"
+assert_contains "spike hash reset to fakeHash" 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' "$(cat "$NIX_PIN")"
+assert_contains "reports the spike bump" "Also bumped Nix spike pin" "$out"
+rm -rf "$SANDBOX/spike"
+
+# ---------- test: no-op (and no error) when the Nix spike pin is absent ----------
+echo "--- bump-claude-code (no spike pin present) ---"
+write_dockerfile "1.0.0"
+run_bump "2.5.0"
+assert_eq "exit 0" "0" "$rc"
+assert_eq "Dockerfile still bumped" "2.5.0" "$(pin)"
+
 # ---------- test: HTTPS fallback when npm lookup fails ----------
 echo "--- bump-claude-code (npm fails, HTTPS fallback) ---"
 write_dockerfile "1.0.0"

@@ -1,45 +1,52 @@
-# Package the claude-code CLI from its published npm tarball.
+# Package the claude-code CLI from its published npm platform tarball.
 #
-# This mirrors the repo's existing "pin a version + pin a hash" model
-# (see CLAUDE_CODE_VERSION in the root Dockerfile) rather than pulling in
-# lockfile machinery. If a release ever ships unbundled runtime deps or a
-# platform-specific postinstall (native ripgrep, etc.), switch to
-# buildNpmPackage / importNpmLock and drop this fetch-and-wrap approach.
+# As of the 2.x line, `@anthropic-ai/claude-code` is a thin installer, not the
+# CLI itself: the top-level package ships `install.cjs` (a postinstall) plus a
+# set of per-platform `optionalDependencies`
+# (`@anthropic-ai/claude-code-linux-x64`, `-darwin-arm64`, ...). The real CLI is
+# a single prebuilt native binary inside the platform package, materialized by
+# the postinstall at `npm install` time.
+#
+# So the old "grab the main tarball and wrap node against cli.js" approach is
+# dead — the main tarball has no cli.js. We fetch the linux-x64 platform package
+# directly, which matches this spike's x86_64 glibc target (the MS devcontainer
+# base is Debian).
+#
+# The binary is dynamically linked against the standard glibc loader
+# (/lib64/ld-linux-x86-64.so.2 + libc/libm/librt/libpthread/libdl). We do NOT
+# autoPatchelf it: it runs on top of the Debian `fromImage` base, which provides
+# those libraries at their conventional paths. That is a deliberate coupling to
+# the base image — this derivation is not meant to run on a bare Nix host.
 #
 # Verify after building with:  claude --version
-{ lib, stdenvNoCC, fetchurl, nodejs_22, makeWrapper }:
+{ lib, stdenvNoCC, fetchurl }:
 
 stdenvNoCC.mkDerivation rec {
   pname = "claude-code";
-  version = "2.1.201"; # keep in sync with CLAUDE_CODE_VERSION in ../../../Dockerfile
+  # Keep in sync with CLAUDE_CODE_VERSION in ../../../Dockerfile.
+  # `dev/bump-claude-code` updates both pins together (and resets src.hash).
+  version = "2.1.201";
 
+  # The linux-x64 platform package: a single prebuilt `claude` binary (~78 MB).
   src = fetchurl {
-    url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    # TODO: nix store prefetch-file <url>   (prints the sha256-... hash)
-    hash = "sha256-TODO=";
+    url = "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${version}.tgz";
+    hash = "sha256-iZmAjpJ5wAtNtN28uBuU9/FzS9fg2UmxMIHeimOnp9w=";
   };
 
-  nativeBuildInputs = [ makeWrapper ];
+  # The prebuilt binary keeps its Debian-base glibc interpreter; leave it alone.
+  dontPatchELF = true;
+  dontStrip = true;
 
   # The npm tarball unpacks to ./package/ (sourceRoot handled by stdenv).
   installPhase = ''
     runHook preInstall
-
-    dest="$out/lib/node_modules/@anthropic-ai/claude-code"
-    mkdir -p "$dest"
-    cp -r ./* "$dest/"
-
-    # Confirm the "bin" entry in the package's package.json before trusting
-    # this — recent releases map `claude` -> cli.js.
-    makeWrapper ${nodejs_22}/bin/node "$out/bin/claude" \
-      --add-flags "$dest/cli.js"
-
+    install -Dm755 claude "$out/bin/claude"
     runHook postInstall
   '';
 
   meta = {
-    description = "Anthropic Claude Code CLI (repackaged from npm)";
+    description = "Anthropic Claude Code CLI (prebuilt linux-x64 binary from npm)";
     mainProgram = "claude";
-    platforms = lib.platforms.linux;
+    platforms = [ "x86_64-linux" ];
   };
 }
