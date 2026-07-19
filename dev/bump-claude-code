@@ -48,8 +48,15 @@ latest_version() {
     if command -v npm >/dev/null 2>&1; then
         npm view "$PACKAGE" version 2>/dev/null
     else
-        curl -sf "https://registry.npmjs.org/${PACKAGE}/latest" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
+        # On any failure (network, missing key, empty body) print nothing and
+        # let the empty-result check below produce a clean error, rather than
+        # leaking a curl error or a python traceback to the user.
+        curl -sf "https://registry.npmjs.org/${PACKAGE}/latest" 2>/dev/null \
+            | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin)["version"])
+except Exception:
+    pass' 2>/dev/null
     fi
 }
 
@@ -63,6 +70,15 @@ else
     fi
 fi
 
+# Validate the resolved version before it can reach the Dockerfile. This guards
+# against typos on the explicit-version path (which would otherwise be written
+# verbatim) and against a malformed registry response, and — since the regex
+# forbids the sed delimiter — keeps the substitution below injection-safe.
+if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
+    echo "error: invalid version: $new" >&2
+    exit 1
+fi
+
 if [ "$current" = "$new" ]; then
     echo "Claude Code already pinned to $current${target:+ (requested)}"
     [ -n "$target" ] || echo "(latest published version)"
@@ -71,7 +87,11 @@ fi
 
 if $check_only; then
     echo "current: $current"
-    echo "latest:  $new"
+    if [ -n "$target" ]; then
+        echo "requested: $new"
+    else
+        echo "latest:  $new"
+    fi
     echo "run 'devcontainer bump-claude-code' to update the Dockerfile"
     exit 0
 fi
