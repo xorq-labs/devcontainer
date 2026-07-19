@@ -54,7 +54,7 @@ RUN curl -LsSf --retry 3 --retry-connrefused \
     && echo "$SOPS_SHA256  /usr/local/bin/sops" | sha256sum -c - \
     && chmod +x /usr/local/bin/sops
 
-ARG CLAUDE_CODE_VERSION=2.1.119
+ARG CLAUDE_CODE_VERSION=2.1.201
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # Project-specific system packages and language toolchain.

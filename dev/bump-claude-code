@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bump the pinned Claude Code version in the Dockerfile.
+#
+# Usage:
+#   devcontainer bump-claude-code           # bump to the latest published on npm
+#   devcontainer bump-claude-code 2.1.201   # pin an explicit version
+#   devcontainer bump-claude-code --check    # report current vs latest, don't edit
+#
+# Claude Code is installed via npm (see Dockerfile: `npm install -g
+# @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`) and has no checksum arg,
+# so the only thing to update is the ARG default.
+
+PACKAGE="@anthropic-ai/claude-code"
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+dockerfile="$base/Dockerfile"
+
+check_only=false
+target=""
+for arg in "$@"; do
+    case "$arg" in
+        --check) check_only=true ;;
+        -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
+        *)
+            if [ -n "$target" ]; then
+                echo "error: unexpected extra argument: $arg" >&2
+                exit 1
+            fi
+            target="$arg"
+            ;;
+    esac
+done
+
+[ -f "$dockerfile" ] || { echo "error: Dockerfile not found at $dockerfile" >&2; exit 1; }
+
+current="$(grep -oP '^ARG CLAUDE_CODE_VERSION=\K.*' "$dockerfile")" || true
+if [ -z "$current" ]; then
+    echo "error: could not find 'ARG CLAUDE_CODE_VERSION=' in $dockerfile" >&2
+    exit 1
+fi
+
+# Resolve the latest published version. Prefer `npm view`; if npm is absent OR
+# its lookup fails (offline, proxy, registry hiccup), fall back to querying the
+# npm registry directly over HTTPS. On failure at both stages we print nothing
+# and let the empty-result check below produce a clean error, rather than
+# leaking a curl error or a python traceback to the user.
+latest_version() {
+    local v=""
+    if command -v npm >/dev/null 2>&1; then
+        v="$(npm view "$PACKAGE" version 2>/dev/null)" || true
+    fi
+    if [ -z "$v" ]; then
+        v="$(curl -sf "https://registry.npmjs.org/${PACKAGE}/latest" 2>/dev/null \
+            | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin)["version"])
+except Exception:
+    pass' 2>/dev/null)" || true
+    fi
+    printf '%s\n' "$v"
+}
+
+if [ -n "$target" ]; then
+    new="$target"
+else
+    new="$(latest_version)" || true
+    if [ -z "$new" ]; then
+        echo "error: could not determine the latest $PACKAGE version" >&2
+        exit 1
+    fi
+fi
+
+# Accept a leading "v" on an explicitly-passed version (e.g. a git tag like
+# v2.1.201); npm reports versions without it.
+new="${new#v}"
+
+# Validate the resolved version before it can reach the Dockerfile. This guards
+# against typos on the explicit-version path (which would otherwise be written
+# verbatim) and against a malformed registry response, and — since the regex
+# forbids the sed delimiter — keeps the substitution below injection-safe.
+if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
+    echo "error: invalid version: $new" >&2
+    exit 1
+fi
+
+# --check reports the current/target versions and never edits, whether or not
+# they already match.
+if $check_only; then
+    printf '%-11s%s\n' "current:" "$current"
+    if [ -n "$target" ]; then
+        printf '%-11s%s\n' "requested:" "$new"
+    else
+        printf '%-11s%s\n' "latest:" "$new"
+    fi
+    if [ "$current" = "$new" ]; then
+        echo "already up to date"
+    else
+        echo "run 'devcontainer bump-claude-code' to update the Dockerfile"
+    fi
+    exit 0
+fi
+
+if [ "$current" = "$new" ]; then
+    echo "Claude Code already pinned to $current${target:+ (requested)}"
+    [ -n "$target" ] || echo "(latest published version)"
+    exit 0
+fi
+
+sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
+
+echo "Bumped Claude Code: $current → $new"
+echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."

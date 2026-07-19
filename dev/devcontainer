@@ -19,6 +19,14 @@ if [ "${1:-}" = "install-completions" ]; then
     exec "$(dirname "$(readlink -f "$0")")/install-completions" "$@"
 fi
 
+# Pure host-side maintenance: bumping the pinned Claude Code version only
+# touches the Dockerfile, so dispatch before the git/compose/project
+# resolution below (which would need a running repo/overlay context).
+if [ "${1:-}" = "bump-claude-code" ]; then
+    shift
+    exec "$(dirname "$(readlink -f "$0")")/bump-claude-code" "$@"
+fi
+
 show_usage() {
     cat <<'USAGE'
 Usage: devcontainer [-w dir] <command>
@@ -52,6 +60,8 @@ Commands:
   ps [--all]                          list running containers for this project (--all: all containers with claude sessions)
   audit [--summary|--new|--all|--clear]
                                       show permission audit log (default: --summary)
+  bump-claude-code [version|--check]  update pinned Claude Code version in the Dockerfile
+                                        (default: latest from npm; --check reports without editing)
   completions [bash|zsh|fish]         emit shell completions
   install-completions [bash|zsh|fish] install completions to each shell's autoload dir
                                         (default: every shell present; --print-paths to preview)
