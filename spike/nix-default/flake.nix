@@ -54,10 +54,11 @@
         imageDigest = "sha256:6ef67a2f0d2f054ad60990679e15208367ff10110a0c0be7f18dbaa7b7319d1d";
         # This is the hash of Nix's flattened copy of the pulled image, so only
         # `nix build`/`nix-prefetch-docker` can produce it — can't be computed
-        # with docker alone. Left as the fakeHash sentinel; the first build fails
-        # and prints the real `got: sha256-...` to paste here. (pullImage takes
-        # `sha256`, not `hash` — its argument set has no catch-all.)
-        sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        # with docker alone. Filled from the first build's `got: sha256-...`; if
+        # the MS base is repushed (new imageDigest), reset this to the fakeHash
+        # sentinel and rebuild to reprint it. (pullImage takes `sha256`, not
+        # `hash` — its argument set has no catch-all.)
+        sha256 = "sha256-0RSFzHuUFkt/89yxgyNivrOlrToXjLvYqkFIpAWukks=";
         os = "linux";
         arch = "amd64";
       };
