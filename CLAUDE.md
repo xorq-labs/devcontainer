@@ -43,3 +43,4 @@ bash tests/test-resolve-list-cleanup.sh
 - `.gitignore.template` defines patterns for per-worktree gitignored files; `setup-worktree` copies it as `.gitignore` into each worktree.
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
+- Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks) and `projects/devcontainer/install-system.sh` (in-container linters). Bump ruff, yamllint, and hadolint in both together so host and container agree.

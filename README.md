@@ -32,7 +32,7 @@ As an alternative to setting up a local environment, you can use the dev contain
 > [!IMPORTANT]
 > **Linux x86_64 only.** Installs amd64 binaries and uses GNU coreutils. macOS and Windows are not supported.
 
-**Toolchain (container):** Python 3.12 with uv 0.7.8, just 1.40.0, sops 3.9.4, gh, direnv, Node 20, and Claude Code 2.1.119. Generic tool versions are pinned in `Dockerfile`; project-specific versions (uv, direnv) are in the project overlay's `install-system.sh`.
+**Toolchain (container):** Python 3.12, just 1.40.0, sops 3.9.4, gh, Node 22, and Claude Code 2.1.119 — these generic versions are pinned in `Dockerfile`. Project-specific tools (e.g. uv, direnv) are installed by the project overlay's `install-system.sh`; for example, the Python overlays pin uv 0.7.8.
 
 **Setup:** The `devcontainer` script lives in `dev/`. Run `direnv allow` in the repo root to add it to your PATH, or invoke it directly as `./dev/devcontainer`.
 

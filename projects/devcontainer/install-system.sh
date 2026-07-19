@@ -16,10 +16,13 @@ apt-get install -y --no-install-recommends \
     docker-compose-plugin
 rm -rf /var/lib/apt/lists/*
 
+# hadolint, ruff, and yamllint versions below must be kept in sync with the
+# matching hook pins in .pre-commit-config.yaml at the repo root. pre-commit
+# itself is the runner (not a pinned hook there), so it has no counterpart.
 # hadolint (Dockerfile linter)
-HADOLINT_VERSION=2.12.0
-HADOLINT_SHA256_AMD64=56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010
-HADOLINT_SHA256_ARM64=5798551bf19f33951881f15eb238f90aef023f11e7ec7e9f4c37961cb87c5df6
+HADOLINT_VERSION=2.14.0
+HADOLINT_SHA256_AMD64=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
+HADOLINT_SHA256_ARM64=331f1d3511b84a4f1e3d18d52fec284723e4019552f4f47b19322a53ce9a40ed
 arch="$(dpkg --print-architecture)"
 case "$arch" in
     amd64) hadolint_arch=x86_64; hadolint_sha=$HADOLINT_SHA256_AMD64 ;;
