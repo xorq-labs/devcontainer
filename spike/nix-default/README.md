@@ -30,14 +30,14 @@ Two of the three hashes are already filled from the current pins:
 - `pkgs/claude-code.nix` `src.hash` — the linux-x64 tarball for `2.1.201`.
 - `flake.nix` `imageDigest` — the `3.12-bookworm` manifest-list digest.
 
-The last one, `flake.nix` `hash` (the sha256 of Nix's flattened copy of the MS
+The last one, `flake.nix` `sha256` (the hash of Nix's flattened copy of the MS
 base), can only be produced by Nix — leave it as the fakeHash sentinel and let
 the first build print the real value:
 
 ```bash
 nix build .#defaultBase
 # fails with:  error: hash mismatch ... got: sha256-...
-# paste that `got:` value into `hash` in flake.nix, then rebuild.
+# paste that `got:` value into `sha256` in flake.nix, then rebuild.
 ```
 
 Or precompute it (requires Nix on the builder; enable `nix-command flakes`):
@@ -63,8 +63,9 @@ nix build .#defaultBase        # ./result is the streamer script
 ./result | docker load         # -> devcontainer-nix-base:latest
 # or: nix run .#loadDefaultBase
 
-# smoke test the packaged CLI
-docker run --rm devcontainer-nix-base:latest /bin/claude --version
+# smoke test the packaged CLI (resolved via the image's PATH — the infra
+# profile lives under /nix/store, not /bin, so the base's /bin stays intact)
+docker run --rm devcontainer-nix-base:latest claude --version
 ```
 
 ## Measure the rebuild delta (the point of the spike)

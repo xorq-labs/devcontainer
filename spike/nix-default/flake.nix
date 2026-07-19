@@ -28,6 +28,18 @@
         pkgs.cacert # TLS roots so gh / claude can reach the network
       ];
 
+      # One profile dir over the infra packages, referenced from config.Env's
+      # PATH below — that reference pulls the whole runtime closure into the
+      # image (the same mechanism the cacert SSL_CERT_FILE reference uses)
+      # WITHOUT writing anything at the image root. Passing these as `contents`
+      # instead would tar a real bin/ directory that replaces the merged-usr
+      # Debian base's /bin -> usr/bin symlink on apply, orphaning /bin/sh and
+      # breaking every RUN and shebang in the image.
+      infraEnv = pkgs.buildEnv {
+        name = "devcontainer-infra";
+        paths = infra;
+      };
+
       # The Microsoft devcontainer base stays underneath: vscode user, apt,
       # python toolchain. Pull it as the fromImage base.
       base = pkgs.dockerTools.pullImage {
@@ -43,8 +55,9 @@
         # This is the hash of Nix's flattened copy of the pulled image, so only
         # `nix build`/`nix-prefetch-docker` can produce it — can't be computed
         # with docker alone. Left as the fakeHash sentinel; the first build fails
-        # and prints the real `got: sha256-...` to paste here.
-        hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        # and prints the real `got: sha256-...` to paste here. (pullImage takes
+        # `sha256`, not `hash` — its argument set has no catch-all.)
+        sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         os = "linux";
         arch = "amd64";
       };
@@ -60,10 +73,12 @@
           fromImage = base;
           # streamLayeredImage splits the runtime closure into up to maxLayers-1
           # layers (one store path each, most-shared first) plus a final
-          # catch-all; 64 leaves ample room for the infra closure to stay
-          # one-path-per-layer so blobs dedupe cleanly across bumps.
+          # catch-all. The fromImage's ~20 layers and the customisation layer
+          # count against the cap, so 64 leaves ~42 slots — ample for the infra
+          # closure (~25-30 paths) to stay one-path-per-layer so blobs dedupe
+          # cleanly across bumps. No `contents`: the closure enters via the
+          # infraEnv/cacert references in `config` (see infraEnv above).
           maxLayers = 64;
-          contents = infra; # merged into the image root (/bin, /lib, ...)
 
           # The one invariant imperative bit from the Dockerfile: the
           # credentials symlink into the credentials/ bind-mount. UID remap
@@ -75,23 +90,35 @@
             mkdir -p home/vscode/.claude home/vscode/.cache home/vscode/.ssh
             ln -sf credentials/.credentials.json home/vscode/.claude/.credentials.json
             chmod 700 home/vscode/.ssh
+            # Match the root Dockerfile's chown: fakeroot records these paths
+            # as uid 0 otherwise, and the layer's home/vscode dir entry would
+            # reset the base's vscode-owned home to root:root on apply. Numeric
+            # ids — vscode is 1000:1000 in the MS base and there's no passwd
+            # in this build environment. -R skips the dangling credentials
+            # symlink; the -h line fixes the link itself (as in the Dockerfile).
+            chown -R 1000:1000 home/vscode
+            chown -h 1000:1000 home/vscode/.claude/.credentials.json
           '';
 
           config = {
-            User = "vscode";
+            # No User: the MS base's Config.User is root and the root Dockerfile
+            # never sets USER either — Dockerfile.nix-default's RUN steps
+            # (groupmod/apt/chown) must execute as root, and the runtime user is
+            # applied by compose / devcontainer metadata, not baked in. HOME
+            # matches the root Dockerfile's `ENV HOME=/home/vscode`.
             WorkingDir = "/workspaces/src";
             # streamLayeredImage's `config` REPLACES the fromImage config rather
             # than merging it, so anything the MS base set in Env must be
             # reproduced here or it's lost. Most load-bearing is PATH: the base
             # puts its pyenv/py-utils/nvm dirs on PATH, and dropping them breaks
-            # `python`/`pip`. We prepend /bin (where the Nix contents land, so
-            # node/gh/claude win) and keep the rest of the base's PATH verbatim.
+            # `python`/`pip`. We prepend the infra profile (so node/gh/claude
+            # win) and keep the rest of the base's PATH verbatim.
             # Re-derive the base env if MS changes it:
             #   docker inspect --format '{{json .Config.Env}}' \
             #     mcr.microsoft.com/devcontainers/python:3.12-bookworm
             Env = [
               "HOME=/home/vscode"
-              "PATH=/bin:/usr/local/python/current/bin:/usr/local/py-utils/bin:/usr/local/jupyter:/usr/local/share/nvm/current/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin"
+              "PATH=${infraEnv}/bin:/usr/local/python/current/bin:/usr/local/py-utils/bin:/usr/local/jupyter:/usr/local/share/nvm/current/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin"
               "LANG=C.UTF-8"
               "PYTHON_PATH=/usr/local/python/current"
               "PIPX_HOME=/usr/local/py-utils"

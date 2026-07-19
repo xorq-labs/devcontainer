@@ -27,9 +27,20 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 ARG HOST_USER=
 
+# The chown is guarded, unlike the root Dockerfile's: the Nix base already
+# ships /home/vscode owned 1000:1000, and an unconditional chown -R updates
+# ctime on every file, copying the whole home dir into a fat per-build layer —
+# diluting exactly the layer reuse this spike measures.
 RUN if [ "$USER_GID" != "1000" ]; then groupmod -g "$USER_GID" vscode; fi \
     && if [ "$USER_UID" != "1000" ]; then usermod -u "$USER_UID" vscode; fi \
-    && chown -R "$USER_UID:$USER_GID" /home/vscode
+    && if [ "$USER_UID:$USER_GID" != "1000:1000" ]; then \
+        chown -R "$USER_UID:$USER_GID" /home/vscode; \
+    fi
+
+# Shared helpers an overlay can source. Copied before install-system runs so a
+# build-time install-system.sh can source it too (e.g. nix-seed.sh). Inert for
+# overlays that don't use it.
+COPY lib/nix-seed.sh /usr/local/lib/devcontainer/nix-seed.sh
 
 # Project-specific system packages and language toolchain.
 COPY --from=project install-system.sh /tmp/install-system.sh
