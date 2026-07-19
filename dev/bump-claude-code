@@ -85,6 +85,19 @@ if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
     exit 1
 fi
 
+# The Nix spike (spike/nix-default/pkgs/claude-code.nix) carries a second copy
+# of the pin; treat it as part of the current state so pre-existing drift is
+# reported by --check and repaired by a normal run. No-ops cleanly when the
+# spike isn't present.
+nix_pin="$base/spike/nix-default/pkgs/claude-code.nix"
+fake_hash="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+nix_current=""
+nix_needs_sync=false
+if [ -f "$nix_pin" ]; then
+    nix_current="$(grep -m1 -oP '^\s*version = "\K[^"]*' "$nix_pin")" || true
+    [ "$nix_current" = "$new" ] || nix_needs_sync=true
+fi
+
 # --check reports the current/target versions and never edits, whether or not
 # they already match.
 if $check_only; then
@@ -94,38 +107,55 @@ if $check_only; then
     else
         printf '%-11s%s\n' "latest:" "$new"
     fi
-    if [ "$current" = "$new" ]; then
+    if $nix_needs_sync; then
+        printf '%-11s%s\n' "nix pin:" "${nix_current:-not found}"
+    fi
+    if [ "$current" = "$new" ] && ! $nix_needs_sync; then
         echo "already up to date"
+    elif [ "$current" = "$new" ]; then
+        echo "run 'devcontainer bump-claude-code' to repair the Nix spike pin"
     else
         echo "run 'devcontainer bump-claude-code' to update the Dockerfile"
     fi
     exit 0
 fi
 
-if [ "$current" = "$new" ]; then
+# "Already pinned" means both pins agree; a Dockerfile that is already at the
+# target must not short-circuit past a drifted Nix spike pin.
+if [ "$current" = "$new" ] && ! $nix_needs_sync; then
     echo "Claude Code already pinned to $current${target:+ (requested)}"
     [ -n "$target" ] || echo "(latest published version)"
     exit 0
 fi
 
-sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
-
-echo "Bumped Claude Code: $current → $new"
+if [ "$current" = "$new" ]; then
+    echo "Dockerfile already pinned to $current; repairing the drifted Nix spike pin"
+else
+    sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
+    echo "Bumped Claude Code: $current → $new"
+fi
 
 # Keep the Nix spike's second version pin in sync so the two can't silently
-# drift (spike/nix-default/pkgs/claude-code.nix). That file also carries a
-# tarball hash the Dockerfile's npm install doesn't have and that we can't
-# recompute here, so we reset it to the Nix fakeHash sentinel — the next
-# `nix build` fails and prints the correct sha256- to paste back. No-ops
-# cleanly when the spike isn't present. `$new` is validated above, so it's
-# safe as a sed replacement.
-nix_pin="$base/spike/nix-default/pkgs/claude-code.nix"
-if [ -f "$nix_pin" ]; then
+# drift. That file also carries a tarball hash the Dockerfile's npm install
+# doesn't have and that we can't recompute here, so we reset it to the Nix
+# fakeHash sentinel — the next `nix build` fails and prints the correct
+# sha256- to paste back. Skipped when the spike's version already matches, so
+# a valid src.hash is never clobbered. `$new` is validated above, so it's safe
+# as a sed replacement.
+if $nix_needs_sync; then
     sed -i \
         -e "s|^  version = \".*\";|  version = \"${new}\";|" \
-        -e 's|^    hash = "sha256-.*";|    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";|' \
+        -e "s|^    hash = \"sha256-.*\";|    hash = \"${fake_hash}\";|" \
         "$nix_pin"
+    # sed exits 0 whether or not the patterns matched, so prove the edit took.
+    if ! grep -qF "version = \"${new}\";" "$nix_pin" \
+        || ! grep -qF "hash = \"${fake_hash}\";" "$nix_pin"; then
+        echo "error: could not update the Nix spike pin in ${nix_pin#"$base/"} — its layout no longer matches; set version = \"${new}\" and reset src.hash there manually" >&2
+        exit 1
+    fi
     echo "Also bumped Nix spike pin: ${nix_pin#"$base/"} (refresh its src.hash: 'nix build .#defaultBase' prints the correct sha256-)"
 fi
 
-echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."
+if [ "$current" != "$new" ]; then
+    echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."
+fi
