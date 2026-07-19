@@ -30,7 +30,7 @@ done
 if [ -z "$project_name" ]; then
     main_tree="$(dev_main_tree)" || {
         echo "error: not in a git repo and no project name given" >&2
-        echo "usage: devcontainer init [--local] [project-name]" >&2
+        echo "usage: devcontainer init [--local] [--nix] [project-name]" >&2
         exit 1
     }
     project_name="$(basename "$main_tree")"
