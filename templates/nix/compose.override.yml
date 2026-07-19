@@ -9,8 +9,10 @@ services:
       # content-addressed and cli-locked). Seeded on first run from the tarball
       # baked by install-system.sh.
       - nix:/nix
-      # Host nix config (nix.conf, registry.json) read-only.
-      - ${HOME}/.config/nix:/home/vscode/.config/nix-host:ro
+      # Host nix config (nix.conf, registry.json) read-only. dev/devcontainer
+      # points DEV_NIX_HOST_CONF at ~/.config/nix, or an empty dir when it's
+      # absent, so a missing host config never creates a root-owned dir on the host.
+      - ${DEV_NIX_HOST_CONF:-/dev/null}:/home/vscode/.config/nix-host:ro
 
 volumes:
   # external:true (shared across worktrees) — dev/devcontainer pre-creates it as
