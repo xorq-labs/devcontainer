@@ -11,8 +11,6 @@ services:
       - nix:/nix
       # Host nix config (nix.conf, registry.json) read-only.
       - ${HOME}/.config/nix:/home/vscode/.config/nix-host:ro
-    environment:
-      - NIX_CONFIG=sandbox = false
 
 volumes:
   # external:true (shared across worktrees) — dev/devcontainer pre-creates it as
