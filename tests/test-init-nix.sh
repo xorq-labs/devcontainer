@@ -214,6 +214,7 @@ run_seed() {
         export NIX_SEED_ROOT="$ROOT"
         export NIX_SEED_TAR="$SEED_TAR"
         export NIX_SEED_SHA_FILE="$SEED_SHA"
+        export NIX_USER="$USER_NAME"
         export NIX_TEST_SOURCED="$MARKER"
         nix_seed_volume
     )
@@ -226,6 +227,7 @@ assert_contains "announces seeding" "Seeding Nix store into volume" "$out_seed1"
 assert_eq "store extracted under NIX_SEED_ROOT" "true" "$([ -d "$ROOT/nix/store" ] && echo true || echo false)"
 assert_files_eq "stamp copied from seed sha" "$ROOT/nix/.seed-sha256" "$SEED_SHA"
 assert_eq "profile symlink created" "true" "$([ -L "$HOMES/.nix-profile" ] && echo true || echo false)"
+assert_contains "symlink targets NIX_USER's per-user profile" "per-user/$USER_NAME/profile" "$(readlink "$HOMES/.nix-profile")"
 assert_eq "profile nix.sh was sourced" "true" "$([ -f "$MARKER" ] && echo true || echo false)"
 assert_contains "nix.conf written" "sandbox = false" "$(cat "$HOMES/.config/nix/nix.conf")"
 
@@ -259,6 +261,7 @@ if (
     export NIX_SEED_ROOT="$ROOT2"
     export NIX_SEED_TAR="$SEED_TAR2"
     export NIX_SEED_SHA_FILE="$SEED_SHA"
+    export NIX_USER="$USER_NAME"
     export NIX_TEST_SOURCED="$MARKER2"
     nix_seed_volume
 ) >/dev/null; then okG=true; else okG=false; fi

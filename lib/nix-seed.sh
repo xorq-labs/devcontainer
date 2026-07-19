@@ -24,15 +24,21 @@ NIX_SEED_SHA_FILE="${NIX_SEED_SHA_FILE:-/nix-seed.sha256}"
 # Root the seed unpacks into; empty means "/" (the container root). Overridable
 # so the seed logic can be exercised against a scratch dir in tests.
 NIX_SEED_ROOT="${NIX_SEED_ROOT:-}"
+# The user Nix is installed under at build time; the runtime profile symlink must
+# target the same per-user path. Single source of truth for both phases — keep it
+# in sync with the container user if you change USER_UID/username.
+NIX_USER="${NIX_USER:-vscode}"
 
 # build time (root, during docker build): single-user install, tar a seed,
 # stamp its sha, and drop the live /nix tree.
 nix_build_install() {
-    curl -LsSf "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" -o /tmp/nix-install.sh
-    echo "${NIX_INSTALLER_SHA256}  /tmp/nix-install.sh" | sha256sum -c -
-    mkdir -p /nix && chown vscode:vscode /nix
-    su - vscode -c 'sh /tmp/nix-install.sh --no-daemon'
-    rm /tmp/nix-install.sh
+    local installer=/tmp/nix-install.sh
+    # Clean up the installer on any exit path (e.g. a failed install mid-way).
+    trap 'rm -f "$installer"' RETURN
+    curl -LsSf "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" -o "$installer"
+    echo "${NIX_INSTALLER_SHA256}  $installer" | sha256sum -c -
+    mkdir -p /nix && chown "$NIX_USER:$NIX_USER" /nix
+    su - "$NIX_USER" -c "sh $installer --no-daemon"
     tar cf "$NIX_SEED_TAR" -C / nix
     sha256sum "$NIX_SEED_TAR" | cut -d' ' -f1 > "$NIX_SEED_SHA_FILE"
     rm -rf /nix
@@ -79,7 +85,7 @@ nix_seed_volume() {
         cp "$NIX_SEED_SHA_FILE" "$nix/.seed-sha256"
     fi
     if [ ! -e "$HOME/.nix-profile" ]; then
-        ln -sf "$nix/var/nix/profiles/per-user/$(id -un)/profile" "$HOME/.nix-profile"
+        ln -sf "$nix/var/nix/profiles/per-user/$NIX_USER/profile" "$HOME/.nix-profile"
     fi
     nix_write_conf
     # Guard: the profile may be absent if seeding failed; sourcing a missing
