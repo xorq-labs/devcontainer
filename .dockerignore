@@ -4,3 +4,4 @@ defaults/
 dev/
 lib/
 !lib/git.sh
+!lib/nix-seed.sh

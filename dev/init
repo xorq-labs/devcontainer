@@ -8,15 +8,20 @@ set -euo pipefail
 #
 # Usage (local overlay in workspace, gitignored):
 #   devcontainer init --local [project-name]
+#
+# Add --nix to any of the above to layer a Nix store (build-time install,
+# runtime-volume-backed) onto the overlay.
 
 base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$base/lib/git.sh"
 
 local_mode=false
+nix_mode=false
 project_name=""
 for arg in "$@"; do
     case "$arg" in
         --local) local_mode=true ;;
+        --nix) nix_mode=true ;;
         -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
         *) project_name="$arg" ;;
     esac
@@ -25,7 +30,7 @@ done
 if [ -z "$project_name" ]; then
     main_tree="$(dev_main_tree)" || {
         echo "error: not in a git repo and no project name given" >&2
-        echo "usage: devcontainer init [--local] [project-name]" >&2
+        echo "usage: devcontainer init [--local] [--nix] [project-name]" >&2
         exit 1
     }
     project_name="$(basename "$main_tree")"
@@ -71,6 +76,29 @@ done
 
 echo ""
 echo "Created $copied file(s) in $target/"
+
+# --nix layers the nix fragment (install-system.sh, setup-env.sh,
+# compose.override.yml, external-volumes.txt) over the defaults copy above,
+# overwriting only the files nix touches. The invariant tail (host-mounts,
+# worktree provisioning, audit, devcontainer.json, project.env) stays from
+# defaults. The seed logic itself lives in lib/nix-seed.sh, which the
+# generated scripts source — no per-overlay copy of it.
+if $nix_mode; then
+    nix_frag="$base/templates/nix"
+    echo ""
+    echo "Applying --nix fragment:"
+    # These four are always applied (that's the point of --nix), so an existing
+    # target is overwritten rather than skipped like the base loop — say so
+    # honestly instead of reporting every file as freshly written.
+    for f in install-system.sh setup-env.sh compose.override.yml external-volumes.txt; do
+        [ -f "$target/$f" ] && suffix=" (overwrote)" || suffix=""
+        cp "$nix_frag/$f" "$target/$f"
+        echo "  nix     $f$suffix"
+    done
+    echo ""
+    echo "Nix is a project-scoped shared volume (\${DEV_PROJECT_NAME}-nix), reused by"
+    echo "every worktree; remove it later with 'devcontainer clean-caches'."
+fi
 
 if $local_mode; then
     echo ""

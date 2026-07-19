@@ -35,7 +35,7 @@ _devcontainer() {
 
     case "$subcmd" in
         init)
-            COMPREPLY=($(compgen -W "--local" -- "$cur"))
+            COMPREPLY=($(compgen -W "--local --nix" -- "$cur"))
             ;;
         exec)
             COMPREPLY=($(compgen -c -- "$cur"))
@@ -98,7 +98,7 @@ _devcontainer() {
         subcmd) _describe 'subcommand' subcmds ;;
         args)
             case $words[1] in
-                init) _values 'flag' --local ;;
+                init) _values 'flag' --local --nix ;;
                 exec) _command_names ;;
                 ps) _values 'flag' --all ;;
                 audit) _values 'mode' --summary --new --all --clear ;;
@@ -142,6 +142,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a logs -d '
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a completions -d 'emit shell completions'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a install-completions -d 'install completions to each shell autoload dir'
 complete -c devcontainer -n "__fish_seen_subcommand_from init" -l local -d 'create overlay in workspace .devcontainer/'
+complete -c devcontainer -n "__fish_seen_subcommand_from init" -l nix -d 'layer a Nix store onto the overlay'
 complete -c devcontainer -n "__fish_seen_subcommand_from ps" -l all -d 'show all containers'
 complete -c devcontainer -n "__fish_seen_subcommand_from audit" -a "--summary --new --all --clear"
 complete -c devcontainer -n "__fish_seen_subcommand_from bump-claude-code" -l check -d 'report current vs latest without editing'

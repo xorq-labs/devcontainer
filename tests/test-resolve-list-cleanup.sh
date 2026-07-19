@@ -102,7 +102,7 @@ out="$(run_dc list)"
 assert_contains "list has header" "WORKTREE" "$out"
 assert_contains "list has STATUS header" "STATUS" "$out"
 assert_contains "list shows main branch" "main" "$out"
-assert_contains "list shows stopped" "stopped" "$out"
+assert_contains "list shows not-created status" "not created" "$out"
 assert_contains "list shows overlay" "defaults/" "$out"
 
 # ---------- test: devcontainer list with worktree ----------

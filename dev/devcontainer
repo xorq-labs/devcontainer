@@ -181,6 +181,18 @@ else
     echo "warning: no sops age key found — sops-encrypted envrc secrets won't decrypt inside the container" >&2
 fi
 
+# Nix overlays mount the host's nix config read-only; fall back to an empty dir
+# so a missing ~/.config/nix doesn't make Docker auto-create a root-owned dir on
+# the host. A missing host config is normal — nix_write_conf writes safe
+# defaults — so no warning here.
+if [ -d "${HOME}/.config/nix" ]; then
+    export DEV_NIX_HOST_CONF="${HOME}/.config/nix"
+else
+    DEV_NIX_HOST_CONF="/tmp/devcontainer-empty-nix-conf"
+    mkdir -p "$DEV_NIX_HOST_CONF"
+    export DEV_NIX_HOST_CONF
+fi
+
 if [ "$DEV_WORKSPACE" = "$DEV_MAIN_TREE" ]; then
     export DEV_WORKTREE="main"
 else
@@ -241,6 +253,9 @@ config_files() {
         "$DEV_PROJECT_DIR/install-system.sh" \
         "$DEV_PROJECT_DIR/setup-env.sh"
     [ -f "$COMPOSE_OVERRIDE" ] && printf '%s\n' "$COMPOSE_OVERRIDE"
+    # Baked into the image and holds the pinned Nix version/sha; hash it so a pin
+    # bump actually invalidates the image (the Dockerfile text alone doesn't change).
+    [ -f "$DEV_BASE_DIR/lib/nix-seed.sh" ] && printf '%s\n' "$DEV_BASE_DIR/lib/nix-seed.sh"
     local hm
     for hm in \
         "$DEV_PROJECT_DIR/host-mounts.txt" \
@@ -277,6 +292,7 @@ config_file_desc() {
         setup-env.sh)          echo "environment setup" ;;
         host-mounts.txt)       echo "host directory mounts" ;;
         host-mounts.local.txt) echo "local host mount overrides" ;;
+        nix-seed.sh)           echo "pinned Nix version and seed logic" ;;
         *)                     echo "" ;;
     esac
 }
