@@ -112,6 +112,11 @@ def setup_settings(workspace, host_project_key):
         },
     }
 
+    # Carry over the remote-control startup toggle from the host so container
+    # sessions default to the same remote-control behavior as host sessions.
+    if "remoteControlAtStartup" in host_settings:
+        container_settings["remoteControlAtStartup"] = host_settings["remoteControlAtStartup"]
+
     with open(HOME / "settings.json", "w") as f:
         json.dump(container_settings, f, indent=2)
 
