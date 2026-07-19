@@ -3,6 +3,10 @@
 project.env
 host-mounts.local.txt
 
+# python bytecode
+__pycache__/
+*.pyc
+
 # direnv user/secrets (templates are tracked)
 .envrcs/.envrc.user
 .envrcs/.envrc.secrets
