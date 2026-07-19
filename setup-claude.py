@@ -157,10 +157,12 @@ def copy_sessions(workspace, host_project_key, container_project_key):
     one, so rewrite the prefix as we copy. Host -> container only; existing
     container-side transcripts are left untouched so continued work is not
     clobbered.
+
+    Returns (copied, skipped) counts for callers that want to report progress.
     """
     host_dir = HOST / "projects" / host_project_key
     if not host_dir.is_dir():
-        return
+        return 0, 0
 
     container_dir = HOME / "projects" / container_project_key
     container_dir.mkdir(parents=True, exist_ok=True)
@@ -168,14 +170,18 @@ def copy_sessions(workspace, host_project_key, container_project_key):
     host_ws = os.environ.get("DEV_WORKSPACE")
     container_ws = str(workspace)
 
+    copied = skipped = 0
     for src in host_dir.glob("*.jsonl"):
         dst = container_dir / src.name
         if dst.exists():
+            skipped += 1
             continue
         text = src.read_text()
         if host_ws:
             text = text.replace(host_ws, container_ws)
         dst.write_text(text)
+        copied += 1
+    return copied, skipped
 
 
 def setup_sessions(workspace):
@@ -212,6 +218,15 @@ def main():
     container_project_key = os.environ["DEV_CONTAINER_PROJECT_KEY"]
 
     HOME.mkdir(parents=True, exist_ok=True)
+
+    # Standalone step: re-run just the transcript mirror on demand (invoked by
+    # `devcontainer copy-host-transcripts`). Full setup already runs this on
+    # every entry; the standalone form is for picking up a host session that
+    # started after the container came up, without a full re-setup.
+    if sys.argv[1:] == ["copy-sessions"]:
+        copied, skipped = copy_sessions(workspace, host_project_key, container_project_key)
+        print(f"copied {copied} host transcript(s) ({skipped} already present, left untouched)")
+        return
 
     copy_global_instructions()
     copy_global_memory()

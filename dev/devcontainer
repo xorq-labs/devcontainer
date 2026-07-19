@@ -40,6 +40,10 @@ Commands:
                                         use standalone when agent changes mid-session)
   refresh-gpg                         re-forward GPG agent (runs automatically on up/exec/claude;
                                         use standalone when host gpg-agent restarts)
+  copy-host-transcripts               mirror host Claude session transcripts into the
+                                        container so `claude --resume` finds them (runs
+                                        automatically on up/exec/claude; use standalone to
+                                        pull a host session started after the container was up)
   fix-credentials                     repair credentials symlink in a running container
                                         (needed after upgrading from pre-shared-credentials build)
   fix-network                         disconnect stale networks from a stopped container
@@ -603,6 +607,13 @@ case "${1:-up}" in
         fi
         setup_x11_forward
         echo "X11 forwarded into $DEV_CONTAINER_NAME (DISPLAY=${DISPLAY:-unset})"
+        ;;
+    copy-host-transcripts)
+        if ! is_running; then
+            echo "error: container is not running (start with 'devcontainer up' first)" >&2
+            exit 1
+        fi
+        copy_host_transcripts
         ;;
     fix-credentials)
         if ! is_running; then

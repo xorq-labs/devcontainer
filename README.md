@@ -287,6 +287,13 @@ The container's `~/.claude` is a per-worktree Docker volume, isolated from the h
 - **Credentials** — `~/.claude/credentials/` is bind-mounted read-write from the host. All containers and the host share a single `.credentials.json` via this mount, so OAuth token refreshes in any container are immediately visible everywhere. On first run, `setup_claude_credentials` migrates the host's `~/.claude/.credentials.json` into `~/.claude/credentials/` and leaves a symlink.
 - **Global permissions and `CLAUDE.md`** — the `permissions` block from `~/.claude/settings.json`, plus `~/.claude/CLAUDE.md` (copied from the read-only host mount)
 - **Project permissions and memory** — the `permissions` block from `~/.claude/projects/<host-project-key>/settings.json` and `settings.local.json`, plus the project's `memory/` directory (copied)
+- **Session transcripts** — every `*.jsonl` under the host project key is mirrored into the container project key so `claude --resume` can continue a session started on the host. Resume locates a session by a cwd-derived project key (which differs between host and container) and each record carries an absolute cwd, so the host workspace prefix is rewritten to the container path as transcripts are copied. Host → container only; transcripts already present container-side are left untouched so continued work isn't clobbered.
+
+Because the mirror runs on entry, a host session started *after* the container came up isn't visible until the next `up`/`exec`/`claude`. To pull it in immediately without a full re-setup:
+
+```bash
+devcontainer copy-host-transcripts
+```
 
 Container-side Claude settings changes (e.g. permissions granted mid-session) are overwritten on the next entry. Host hooks are intentionally **not** copied — they reference host paths and binaries that don't exist inside the container.
 
