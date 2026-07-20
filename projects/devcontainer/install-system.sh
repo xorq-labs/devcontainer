@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Docker apt repo (linting only — no daemon, no socket)
+# Docker CLI + compose plugin, and the apt repo they come from. The CLI drives
+# the host daemon through the socket bridged in compose.override.yml
+# (docker-outside-of-docker) — e.g. building/loading the nix-default spike;
+# before that bridge existed it was lint-only.
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc
@@ -13,7 +16,8 @@ apt-get install -y --no-install-recommends \
     shellcheck \
     direnv \
     docker-ce-cli \
-    docker-compose-plugin
+    docker-compose-plugin \
+    xz-utils
 rm -rf /var/lib/apt/lists/*
 
 # hadolint, ruff, and yamllint versions below must be kept in sync with the
@@ -42,3 +46,11 @@ pip install --no-cache-dir --break-system-packages \
     "ruff==${RUFF_VERSION}" \
     "yamllint==${YAMLLINT_VERSION}" \
     "pre-commit==${PRE_COMMIT_VERSION}"
+
+# Nix: single-user install baked into a seed tarball at build time, unpacked
+# into a durable, project-scoped `nix` volume by setup-env first-run. This is
+# the spike branch dogfooding its own nix-default design — it lets us build
+# spike/nix-default from inside the container. Override NIX_VERSION /
+# NIX_INSTALLER_SHA256 (see lib/nix-seed.sh) before the call to pin a release.
+. /usr/local/lib/devcontainer/nix-seed.sh
+nix_build_install

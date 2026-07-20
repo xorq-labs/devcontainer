@@ -1,16 +1,31 @@
 services:
   app:
     hostname: ${DEV_HOSTNAME:-devcontainer}
+    build:
+      args:
+        # Prepend the Nix profile to PATH inside the container. The user here must
+        # match NIX_USER in lib/nix-seed.sh (the profile it symlinks); compose
+        # can't read that bash var, so keep the two in sync by hand.
+        EXTRA_PATH: "/home/vscode/.nix-profile/bin"
     # Docker-outside-of-docker: bind the host daemon's socket so this repo's own
     # container can build/load the images it develops (e.g. the nix-default
     # spike). DEV_DOCKER_SOCK/DEV_DOCKER_GID are resolved by dev/devcontainer and
     # fall back to /dev/null + the container GID when the host has no docker
-    # socket, so this stays a no-op there. group_add puts the non-root vscode
-    # user in a group matching the socket's GID so it can reach the socket.
+    # socket, so this stays a no-op there. group_add (below) puts the non-root
+    # vscode user in a group matching the socket's GID so it can reach the socket.
     # SECURITY: the docker socket is host-root-equivalent; kept in this overlay
     # on purpose — do not lift it into the shared docker-compose.yml.
     volumes:
       - ${DEV_DOCKER_SOCK:-/dev/null}:/var/run/docker.sock
+      # Durable, project-scoped Nix store, shared across worktrees (the store is
+      # content-addressed and cli-locked). Seeded on first run from the tarball
+      # baked by install-system.sh — lets this spike branch dogfood its own
+      # nix-default design (e.g. build spike/nix-default from inside the container).
+      - nix:/nix
+      # Host nix config (nix.conf, registry.json) read-only. dev/devcontainer
+      # points DEV_NIX_HOST_CONF at ~/.config/nix, or an empty dir when it's
+      # absent, so a missing host config never creates a root-owned dir on the host.
+      - ${DEV_NIX_HOST_CONF:-/dev/null}:/home/vscode/.config/nix-host:ro
     group_add:
       - "${DEV_DOCKER_GID:-1000}"
     environment:
@@ -18,3 +33,11 @@ services:
       - DEV_WORKSPACE
       - DEV_MAIN_GIT
       - DEV_MAIN_TREE
+
+volumes:
+  # external:true (shared across worktrees) — dev/devcontainer pre-creates it as
+  # ${DEV_PROJECT_NAME}-nix via ensure_external_volumes() reading
+  # external-volumes.txt. Remove it with `devcontainer clean-caches`.
+  nix:
+    name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-nix
+    external: true

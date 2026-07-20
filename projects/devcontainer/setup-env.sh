@@ -20,6 +20,12 @@ TOML
         if [ -f .envrcs/.envrc.user.template ] && [ ! -e .envrcs/.envrc.user ] && [ ! -L .envrcs/.envrc.user ]; then
             cp .envrcs/.envrc.user.template .envrcs/.envrc.user
         fi
+
+        # Seed the durable, project-scoped Nix store from the image-baked tarball
+        # (built by install-system.sh); idempotent once the volume stamp matches.
+        # This is what makes the container Nix-capable — dogfooding the spike.
+        . /usr/local/lib/devcontainer/nix-seed.sh
+        nix_seed_volume
         ;;
     sync-if-needed)
         ;;
