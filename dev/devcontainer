@@ -262,13 +262,18 @@ dc_exec() {
 
 # Opt-in (DEV_NIX_BASE): build the container on the Nix hybrid base
 # (nix/base) instead of the root Dockerfile. Refuses to combine with a
-# nix *seed-volume* overlay — that mount shadows the base's baked /nix/store and
-# orphans the infra PATH — and ensures devcontainer-nix-base:latest is loaded
-# (building it with nix if absent) so compose can FROM it.
+# nix *seed-volume* overlay — that mount shadows the base's baked /nix/store
+# and orphans the infra PATH — and makes the base image compose FROMs present:
+# already local -> done; else `docker pull` of the digest ref pinned in
+# compose.nix-base.yml. DEV_NIX_BASE_IMAGE overrides the ref (the documented
+# path for a locally nix-built base); building is never attempted implicitly —
+# a failed pull prints the fallback recipe instead of silently rebuilding a
+# possibly-different image.
 ensure_nix_base() {
     local nixdir="$DEV_BASE_DIR/nix/base"
-    [ -f "$nixdir/compose.nix-base.yml" ] || {
-        echo "error: DEV_NIX_BASE set but $nixdir/compose.nix-base.yml is missing" >&2
+    local nixcompose="$nixdir/compose.nix-base.yml"
+    [ -f "$nixcompose" ] || {
+        echo "error: DEV_NIX_BASE set but $nixcompose is missing" >&2
         return 1
     }
     if [ -f "$COMPOSE_OVERRIDE" ] && grep -q ':/nix' "$COMPOSE_OVERRIDE"; then
@@ -278,16 +283,41 @@ ensure_nix_base() {
         echo "         DEV_PROJECT_DIR=$DEV_BASE_DIR/defaults DEV_NIX_BASE=1 dev/devcontainer up" >&2
         return 1
     fi
-    if ! docker image inspect devcontainer-nix-base:latest >/dev/null 2>&1; then
-        command -v nix >/dev/null 2>&1 || {
-            echo "error: devcontainer-nix-base:latest is not loaded, and nix is not on PATH to build it." >&2
-            echo "       Build it on a Nix host, then re-run:" >&2
-            echo "         (cd $nixdir && nix build .#defaultBase && ./result | docker load)" >&2
+
+    # Resolve the ref compose will FROM: the env override, or the pinned
+    # default greped out of compose.nix-base.yml (single source of truth —
+    # the same line compose interpolates).
+    local ref
+    if [ -n "${DEV_NIX_BASE_IMAGE:-}" ]; then
+        ref="$DEV_NIX_BASE_IMAGE"
+    else
+        # The value sits on its own folded-scalar line under the BASE_IMAGE
+        # key (yamllint line-length), so anchor on the interpolation itself.
+        ref="$(grep -oP '\$\{DEV_NIX_BASE_IMAGE:-\K[^}]+' "$nixcompose")" || true
+        [ -n "$ref" ] || {
+            echo "error: could not read the pinned BASE_IMAGE default from $nixcompose" >&2
             return 1
         }
-        echo "Building the Nix base image (devcontainer-nix-base:latest)..."
-        ( cd "$nixdir" && nix build .#defaultBase && ./result | docker load ) || return 1
     fi
+
+    docker image inspect "$ref" >/dev/null 2>&1 && return 0
+
+    if [ -n "${DEV_NIX_BASE_IMAGE:-}" ]; then
+        echo "error: DEV_NIX_BASE_IMAGE=$ref is not a local image." >&2
+        echo "       Build and load it first:" >&2
+        echo "         (cd $nixdir && nix build .#defaultBase && ./result | docker load)" >&2
+        return 1
+    fi
+
+    echo "Pulling the Nix base image ($ref)..."
+    docker pull "$ref" && return 0
+
+    echo "error: could not pull $ref." >&2
+    echo "       Registry unreachable (or the package is private and docker isn't logged in" >&2
+    echo "       to ghcr.io). Either fix registry access, or build the base locally:" >&2
+    echo "         (cd $nixdir && nix build .#defaultBase && ./result | docker load)" >&2
+    echo "         DEV_NIX_BASE_IMAGE=devcontainer-nix-base:latest DEV_NIX_BASE=1 dev/devcontainer up" >&2
+    return 1
 }
 
 is_running() {
@@ -344,6 +374,14 @@ config_hash() {
         # interpolation must be added here.
         printf 'DEV_CONTAINER_WORKSPACE=%s\n' "$DEV_CONTAINER_WORKSPACE"
         printf 'DEV_PROJECT_DIR=%s\n' "$DEV_PROJECT_DIR"
+        # The pinned default lives in compose.nix-base.yml (hashed above under
+        # the flag); the env override swaps the FROM image without touching a
+        # file, so it must be hashed explicitly too. (if, not `[ ] &&`: a
+        # false condition as the group's last command would fail the hash
+        # pipeline under pipefail.)
+        if [ -n "${DEV_NIX_BASE:-}" ]; then
+            printf 'DEV_NIX_BASE_IMAGE=%s\n' "${DEV_NIX_BASE_IMAGE:-}"
+        fi
     } | sha256sum | cut -d' ' -f1
 }
 

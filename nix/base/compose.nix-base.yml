@@ -4,8 +4,13 @@
 #
 #   DEV_NIX_BASE=1 dev/devcontainer up
 #
-# which appends this file to the compose stack (see dev/devcontainer `dc()`), and
-# builds+loads devcontainer-nix-base:latest first when it's absent.
+# which appends this file to the compose stack (see dev/devcontainer `dc()`).
+# ensure_nix_base() makes the base image present first: already local -> done,
+# else `docker pull` of the pinned ref below. Building locally stays the
+# documented fallback for hosts that can't reach the registry:
+#
+#   (cd nix/base && nix build .#defaultBase && ./result | docker load)
+#   DEV_NIX_BASE_IMAGE=devcontainer-nix-base:latest DEV_NIX_BASE=1 dev/devcontainer up
 #
 # The build context (repo root) and the `project` additional context are
 # inherited from docker-compose.yml — Dockerfile.nix-default consumes both
@@ -22,5 +27,12 @@ services:
       # relative to the build context (repo root, ${DEV_BASE_DIR})
       dockerfile: nix/base/Dockerfile.nix-default
       args:
-        # the Nix base image loaded by `nix build .#defaultBase | docker load`
-        BASE_IMAGE: devcontainer-nix-base:latest
+        # The CI-published multi-arch Nix base (.github/workflows/nix-base.yml),
+        # pinned by MANIFEST-LIST digest so an upstream retag never changes
+        # what anyone builds on. Bump deliberately after a publish — the digest
+        # is printed in the workflow's job summary (or:
+        #   docker buildx imagetools inspect ghcr.io/xorq-labs/devcontainer-nix-base:<tag>).
+        # DEV_NIX_BASE_IMAGE overrides for a locally-built base (see header);
+        # ensure_nix_base() greps the pinned default out of this line.
+        BASE_IMAGE: >-
+          ${DEV_NIX_BASE_IMAGE:-ghcr.io/xorq-labs/devcontainer-nix-base@sha256:287003b1fe70641b8426e66912633d1310c1cb389583f109a876a07875e35f2c}
