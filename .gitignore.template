@@ -15,3 +15,7 @@ __pycache__/
 
 .claude
 .tools
+
+# nix build output symlink (nix/base: `nix build .#defaultBase`)
+nix/base/result
+nix/base/result-*

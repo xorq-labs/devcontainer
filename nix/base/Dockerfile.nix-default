@@ -1,0 +1,71 @@
+# Thin invariant layer over the Nix-built base (devcontainer-nix-base:latest).
+#
+# Everything expensive (gh, sops, socat, just, claude-code) lives in the
+# Nix base's content-addressed layers. This Dockerfile holds only the bits that
+# must stay imperative and match the root Dockerfile's tail:
+#   - per-user UID/GID remap (can't be baked into a shared derivation without
+#     defeating layer sharing)
+#   - the project system layer (install-system.sh, per-project injected context)
+#   - the setup-* / audit-hook / git.sh copies (per-project, injected contexts)
+#   - the HOST_USER home symlink (per-host)
+#
+# When claude-code is bumped, only claude-code's layer blob in the Nix base
+# changes; these RUN/COPY steps re-execute but are near-instant, and the
+# node/gh/sops/... layer blobs are byte-identical and deduped on push/pull.
+#
+# Build the base first:  (from nix/base/)
+#   nix build .#defaultBase && ./result | docker load
+# Then build this on top with the project context injected via compose, or:
+#   docker build -f Dockerfile.nix-default \
+#     --build-context project=../../defaults \
+#     --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) \
+#     ../../
+ARG BASE_IMAGE=devcontainer-nix-base:latest
+FROM ${BASE_IMAGE}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG HOST_USER=
+# Declared for parity with the root Dockerfile: docker-compose.yml passes it
+# as a required build arg, and an undeclared arg draws a warning on every
+# build. The runtime working dir comes from compose's working_dir (and the
+# base's baked WorkingDir), not from this arg.
+ARG DEV_CONTAINER_WORKSPACE
+ARG EXTRA_PATH=
+
+# The chown is guarded, unlike the root Dockerfile's: the Nix base already
+# ships /home/vscode owned 1000:1000, and an unconditional chown -R updates
+# ctime on every file, copying the whole home dir into a fat per-build layer —
+# diluting exactly the layer reuse this base exists to preserve.
+RUN if [ "$USER_GID" != "1000" ]; then groupmod -g "$USER_GID" vscode; fi \
+    && if [ "$USER_UID" != "1000" ]; then usermod -u "$USER_UID" vscode; fi \
+    && if [ "$USER_UID:$USER_GID" != "1000:1000" ]; then \
+        chown -R "$USER_UID:$USER_GID" /home/vscode; \
+    fi
+
+# Shared helpers an overlay can source. Copied before install-system runs so a
+# build-time install-system.sh can source it too (e.g. nix-seed.sh). Inert for
+# overlays that don't use it.
+COPY lib/nix-seed.sh /usr/local/lib/devcontainer/nix-seed.sh
+
+# Project-specific system packages and language toolchain.
+COPY --from=project install-system.sh /tmp/install-system.sh
+RUN bash /tmp/install-system.sh && rm /tmp/install-system.sh
+
+COPY setup-claude.py /usr/local/bin/setup-claude
+COPY audit-hook /usr/local/bin/audit-hook
+COPY lib/git.sh /usr/local/lib/devcontainer/git.sh
+COPY --from=project setup-env.sh /usr/local/bin/setup-env
+RUN chmod +x /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
+
+RUN HOST_USER="$(basename "$HOST_USER")" && \
+    if [ -n "$HOST_USER" ] && [ "$HOST_USER" != "vscode" ]; then \
+        ln -s /home/vscode "/home/$HOST_USER"; \
+    fi
+
+# Same EXTRA_PATH contract as the root Dockerfile (overlays prepend e.g. a
+# per-user profile dir). ${PATH} here is the Nix base's config Env PATH — the
+# /nix/store infra profile plus the MS base's dirs — so the prepend composes
+# with it rather than replacing it.
+ENV PATH="${EXTRA_PATH}${EXTRA_PATH:+:}${PATH}"

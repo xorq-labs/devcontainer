@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Docker apt repo (linting only — no daemon, no socket)
+# Docker CLI + compose plugin, and the apt repo they come from. The CLI drives
+# the host daemon through the socket bridged in compose.override.yml
+# (docker-outside-of-docker) — e.g. building/loading the Nix base image;
+# before that bridge existed it was lint-only.
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc
@@ -18,7 +21,7 @@ apt-get install -y --no-install-recommends \
 rm -rf /var/lib/apt/lists/*
 
 # Nix (single-user, seeded into the project-scoped `nix` volume on first run):
-# needed to work on spike/nix-default — building the flake, filling its
+# needed to work on nix/base — building the flake, filling its
 # fixed-output hashes, and measuring the layer delta. xz-utils above is the
 # installer's tarball dependency.
 . /usr/local/lib/devcontainer/nix-seed.sh

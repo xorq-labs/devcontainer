@@ -130,6 +130,92 @@ run_bump "v2.1.201"
 assert_eq "exit 0" "0" "$rc"
 assert_eq "leading v stripped from pin" "2.1.201" "$(pin)"
 
+# ---------- test: bumps the Nix base pin alongside the Dockerfile ----------
+# These tests copy the repo's real claude-code.nix into the sandbox (with only
+# its version value rewritten to stage drift) so a reformat of the real file
+# breaks these tests instead of silently breaking the sync.
+echo "--- bump-claude-code (syncs Nix base pin) ---"
+NIX_SRC="$DEV_BASE/nix/base/pkgs/claude-code.nix"
+NIX_PIN_DIR="$SANDBOX/nix/base/pkgs"
+NIX_PIN="$NIX_PIN_DIR/claude-code.nix"
+mkdir -p "$NIX_PIN_DIR"
+nix_version() { grep -oP '^  version = "\K[^"]*' "$NIX_PIN"; }
+# Seed the sandbox base pin from the real file, pinned to a known version.
+seed_nix_pin() {
+    cp "$NIX_SRC" "$NIX_PIN"
+    sed -i "s|^  version = \".*\";|  version = \"$1\";|" "$NIX_PIN"
+}
+write_dockerfile "1.0.0"
+seed_nix_pin "1.0.0"
+run_bump "2.5.0"
+assert_eq "exit 0" "0" "$rc"
+assert_eq "base pin version bumped" "2.5.0" "$(nix_version)"
+assert_contains "base pin hash reset to fakeHash" 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' "$(cat "$NIX_PIN")"
+assert_contains "reports the base pin bump" "Also bumped Nix base pin" "$out"
+
+# ---------- test: Dockerfile already pinned but Nix pin drifted → repaired ----------
+echo "--- bump-claude-code (repairs drifted Nix pin) ---"
+write_dockerfile "2.5.0"
+seed_nix_pin "1.0.0"
+run_bump "2.5.0"
+assert_eq "exit 0" "0" "$rc"
+assert_contains "reports the repair" "repairing the drifted Nix base pin" "$out"
+assert_eq "base pin version repaired" "2.5.0" "$(nix_version)"
+assert_contains "base pin hash reset to fakeHash" 'sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' "$(cat "$NIX_PIN")"
+assert_eq "Dockerfile unchanged" "2.5.0" "$(pin)"
+
+# ---------- test: both pins in sync → already pinned, hash untouched ----------
+echo "--- bump-claude-code (Dockerfile and Nix pin both current) ---"
+write_dockerfile "2.5.0"
+seed_nix_pin "2.5.0"
+hash_before="$(grep -oP '^\s*hash = "\K[^"]*' "$NIX_PIN")"
+run_bump "2.5.0"
+assert_eq "exit 0" "0" "$rc"
+assert_contains "reports already pinned" "already pinned to 2.5.0" "$out"
+# hash_before holds one hash per arch; a sanity check that the grep anchor
+# still matches the real file, then byte-equality across the run.
+assert_contains "hash anchor still matches" "sha256-" "$hash_before"
+assert_eq "valid per-arch hashes not clobbered" "$hash_before" "$(grep -oP '^\s*hash = "\K[^"]*' "$NIX_PIN")"
+
+# ---------- test: --check reports Nix pin drift ----------
+echo "--- bump-claude-code (--check reports Nix pin drift) ---"
+write_dockerfile "9.9.9"
+seed_nix_pin "1.0.0"
+run_bump --check
+assert_eq "exit 0" "0" "$rc"
+assert_contains "shows the drifted nix pin" "$(printf '%-11s%s' 'nix pin:' '1.0.0')" "$out"
+assert_contains "suggests a repair run" "repair the Nix base pin" "$out"
+assert_eq "nix pin not edited" "1.0.0" "$(nix_version)"
+assert_eq "Dockerfile not edited" "9.9.9" "$(pin)"
+
+# ---------- test: --check with both pins in sync stays quiet about nix ----------
+echo "--- bump-claude-code (--check with Nix pin in sync) ---"
+write_dockerfile "9.9.9"
+seed_nix_pin "9.9.9"
+run_bump --check
+assert_eq "exit 0" "0" "$rc"
+assert_contains "notes up to date" "already up to date" "$out"
+assert_eq "no nix drift line" "" "$(grep 'nix pin:' <<<"$out" || true)"
+
+# ---------- test: reformatted Nix pin makes the sync fail loudly ----------
+echo "--- bump-claude-code (reformatted Nix pin fails loudly) ---"
+write_dockerfile "1.0.0"
+seed_nix_pin "1.0.0"
+# Simulate a reformat: re-indent the version line so the sed anchor misses.
+sed -i 's|^  version = |    version = |' "$NIX_PIN"
+run_bump "2.5.0"
+assert_eq "exit nonzero" "1" "$rc"
+assert_contains "reports the failed sync" "could not update the Nix base pin" "$out"
+assert_contains "points at a manual fix" "manually" "$out"
+rm -rf "$SANDBOX/nix"
+
+# ---------- test: no-op (and no error) when the Nix base pin is absent ----------
+echo "--- bump-claude-code (no base pin present) ---"
+write_dockerfile "1.0.0"
+run_bump "2.5.0"
+assert_eq "exit 0" "0" "$rc"
+assert_eq "Dockerfile still bumped" "2.5.0" "$(pin)"
+
 # ---------- test: HTTPS fallback when npm lookup fails ----------
 echo "--- bump-claude-code (npm fails, HTTPS fallback) ---"
 write_dockerfile "1.0.0"

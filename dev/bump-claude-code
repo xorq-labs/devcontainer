@@ -85,6 +85,20 @@ if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
     exit 1
 fi
 
+# The Nix base (nix/base/pkgs/claude-code.nix) carries a second copy
+# of the pin; treat it as part of the current state so pre-existing drift is
+# reported by --check and repaired by a normal run. A missing pin file is
+# tolerated here (the test sandbox runs pin-less), but on the committed tree
+# tests/test-claude-code-pin-sync.sh fails loudly if it disappears or drifts.
+nix_pin="$base/nix/base/pkgs/claude-code.nix"
+fake_hash="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+nix_current=""
+nix_needs_sync=false
+if [ -f "$nix_pin" ]; then
+    nix_current="$(grep -m1 -oP '^\s*version = "\K[^"]*' "$nix_pin")" || true
+    [ "$nix_current" = "$new" ] || nix_needs_sync=true
+fi
+
 # --check reports the current/target versions and never edits, whether or not
 # they already match.
 if $check_only; then
@@ -94,21 +108,60 @@ if $check_only; then
     else
         printf '%-11s%s\n' "latest:" "$new"
     fi
-    if [ "$current" = "$new" ]; then
+    if $nix_needs_sync; then
+        printf '%-11s%s\n' "nix pin:" "${nix_current:-not found}"
+    fi
+    if [ "$current" = "$new" ] && ! $nix_needs_sync; then
         echo "already up to date"
+    elif [ "$current" = "$new" ]; then
+        echo "run 'devcontainer bump-claude-code' to repair the Nix base pin"
     else
         echo "run 'devcontainer bump-claude-code' to update the Dockerfile"
     fi
     exit 0
 fi
 
-if [ "$current" = "$new" ]; then
+# "Already pinned" means both pins agree; a Dockerfile that is already at the
+# target must not short-circuit past a drifted Nix base pin.
+if [ "$current" = "$new" ] && ! $nix_needs_sync; then
     echo "Claude Code already pinned to $current${target:+ (requested)}"
     [ -n "$target" ] || echo "(latest published version)"
     exit 0
 fi
 
-sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
+if [ "$current" = "$new" ]; then
+    echo "Dockerfile already pinned to $current; repairing the drifted Nix base pin"
+else
+    sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
+    echo "Bumped Claude Code: $current → $new"
+fi
 
-echo "Bumped Claude Code: $current → $new"
-echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."
+# Keep the Nix base's second version pin in sync so the two can't silently
+# drift. That file also carries per-arch tarball hashes the Dockerfile's npm
+# install doesn't have and that we can't recompute here, so we reset them to
+# the Nix fakeHash sentinel — the next `nix build` on each arch fails and
+# prints the correct sha256- to paste back. Skipped when the base pin's
+# version already matches, so valid hashes are never clobbered. `$new` is
+# validated above, so it's safe as a sed replacement.
+if $nix_needs_sync; then
+    sed -i \
+        -e "s|^  version = \".*\";|  version = \"${new}\";|" \
+        -e "s|^\([[:space:]]*\)hash = \"sha256-.*\";|\1hash = \"${fake_hash}\";|" \
+        "$nix_pin"
+    # sed exits 0 whether or not the patterns matched, so prove the edit took:
+    # the version line carries the new version and EVERY quoted hash line is
+    # now the sentinel (no hash lines at all means the layout changed under us;
+    # `hash = platform.hash;` in the fetchurl body is unquoted and exempt).
+    hash_lines="$(grep -E '^[[:space:]]*hash = "' "$nix_pin" || true)"
+    if ! grep -qF "version = \"${new}\";" "$nix_pin" \
+        || [ -z "$hash_lines" ] \
+        || grep -vqF "$fake_hash" <<<"$hash_lines"; then
+        echo "error: could not update the Nix base pin in ${nix_pin#"$base/"} — its layout no longer matches; set version = \"${new}\" and reset the per-arch hashes there manually" >&2
+        exit 1
+    fi
+    echo "Also bumped Nix base pin: ${nix_pin#"$base/"} (refresh the per-arch hashes: 'nix build .#defaultBase' on each arch prints the correct sha256-)"
+fi
+
+if [ "$current" != "$new" ]; then
+    echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."
+fi

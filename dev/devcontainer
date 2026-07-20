@@ -116,6 +116,65 @@ export DEV_PROJECT_DIR
 COMPOSE_FILE="$DEV_BASE_DIR/docker-compose.yml"
 COMPOSE_OVERRIDE="$DEV_PROJECT_DIR/compose.override.yml"
 
+# /nix delivery routing. An overlay that mounts a nix seed volume (`:/nix`)
+# drives its own writable, vscode-owned store and builds on the classic root
+# Dockerfile; so does an overlay that overrides classic-only Dockerfile build
+# args (BASE_IMAGE, tool pins) — the nix-base compose is appended last and
+# would silently clobber them. Every other overlay defaults to the
+# CI-published Nix base (pulled by pinned digest, per-layer deduped — see
+# nix/base/). The base and the seed volume are alternative /nix delivery
+# strategies, not layers: the seed mount would shadow the baked /nix/store
+# and orphan its infra PATH.
+#   DEV_NIX_BASE=0|false|no|off   force the classic Dockerfile for any overlay
+#   DEV_NIX_BASE=1|true|yes|on    force the Nix base (still refuses seed overlays at up)
+#   unset or empty                route by the overlay's compose.override.yml
+
+# Detection helpers, shared with ensure_nix_base(). Comment lines are
+# stripped first so prose mentioning the patterns can't trigger them. The
+# seed pattern anchors the mount target: short syntax `…:/nix` (optionally
+# followed by options/quotes, but not `:/nixcache`) or long syntax
+# `target: /nix`.
+overlay_has_seed_volume() {
+    [ -f "$COMPOSE_OVERRIDE" ] || return 1
+    grep -vE '^[[:space:]]*#' "$COMPOSE_OVERRIDE" \
+        | grep -qE ':/nix(:|"|[[:space:]]|$)|target:[[:space:]]*"?/nix"?[[:space:]]*$'
+}
+# Build args only the classic root Dockerfile declares and honors. Keep in
+# sync with the ARG list there (minus the args Dockerfile.nix-default also
+# honors: USER_UID/USER_GID/HOST_USER/DEV_CONTAINER_WORKSPACE/EXTRA_PATH).
+overlay_sets_classic_args() {
+    [ -f "$COMPOSE_OVERRIDE" ] || return 1
+    grep -vE '^[[:space:]]*#' "$COMPOSE_OVERRIDE" \
+        | grep -qE '^[[:space:]]*(BASE_IMAGE|NODE_MAJOR|NODESOURCE_SHA256|JUST_VERSION|JUST_SHA256|SOPS_VERSION|SOPS_SHA256|CLAUDE_CODE_VERSION)[[:space:]]*:'
+}
+
+case "${DEV_NIX_BASE:-}" in
+    '')
+        if overlay_has_seed_volume; then
+            DEV_USE_NIX_BASE=false
+            DEV_BASE_REASON="overlay mounts a nix seed volume"
+        elif overlay_sets_classic_args; then
+            DEV_USE_NIX_BASE=false
+            DEV_BASE_REASON="overlay overrides classic Dockerfile build args"
+        else
+            DEV_USE_NIX_BASE=true
+            DEV_BASE_REASON="default; DEV_NIX_BASE=0 for the classic Dockerfile"
+        fi
+        ;;
+    0|false|no|off)
+        DEV_USE_NIX_BASE=false
+        DEV_BASE_REASON="forced by DEV_NIX_BASE=$DEV_NIX_BASE"
+        ;;
+    1|true|yes|on)
+        DEV_USE_NIX_BASE=true
+        DEV_BASE_REASON="forced by DEV_NIX_BASE=$DEV_NIX_BASE"
+        ;;
+    *)
+        echo "error: unrecognized DEV_NIX_BASE='$DEV_NIX_BASE' (use 0/false/no/off, 1/true/yes/on, or unset to route automatically)" >&2
+        exit 1
+        ;;
+esac
+
 # not configurable — compose, Dockerfile, and setup-claude all assume this path
 DEV_CONTAINER_WORKSPACE="/workspaces/src"
 
@@ -196,6 +255,25 @@ else
     export DEV_NIX_HOST_CONF
 fi
 
+# Docker-outside-of-docker is opt-in per overlay: an overlay that bind-mounts
+# /var/run/docker.sock (see projects/devcontainer/compose.override.yml) also
+# needs the container user in a group matching the socket's GID, or the mount
+# is unusable by the non-root vscode user. Detect the host socket and its group
+# here. When the host has no docker socket, fall back to /dev/null (a harmless
+# non-socket mount, mirroring the sops/nix empty-dir fallbacks) and the
+# container's own GID (a no-op group_add) so the override stays valid.
+# SECURITY: the docker socket is host-root-equivalent — this stays scoped to
+# overlays that opt in and is never lifted into the shared docker-compose.yml.
+if [ -S /var/run/docker.sock ]; then
+    export DEV_DOCKER_SOCK=/var/run/docker.sock
+    # GNU stat first, BSD stat (macOS) second; empty result falls back below.
+    export DEV_DOCKER_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || stat -f %g /var/run/docker.sock 2>/dev/null)"
+    [ -n "$DEV_DOCKER_GID" ] || export DEV_DOCKER_GID="$DEV_GID"
+else
+    export DEV_DOCKER_SOCK=/dev/null
+    export DEV_DOCKER_GID="$DEV_GID"
+fi
+
 if [ "$DEV_WORKSPACE" = "$DEV_MAIN_TREE" ]; then
     export DEV_WORKTREE="main"
 else
@@ -231,6 +309,10 @@ fi
 dc() {
     local files=(-f "$COMPOSE_FILE")
     [ -f "$COMPOSE_OVERRIDE" ] && files+=(-f "$COMPOSE_OVERRIDE")
+    # Nix-base routing (see DEV_USE_NIX_BASE above): appended AFTER the project
+    # override so its `build.dockerfile` wins. The image itself is made present
+    # by ensure_nix_base() at up time.
+    $DEV_USE_NIX_BASE && files+=(-f "$DEV_BASE_DIR/nix/base/compose.nix-base.yml")
     [ -n "${DEV_HOST_MOUNTS_OVERRIDE:-}" ] && files+=(-f "$DEV_HOST_MOUNTS_OVERRIDE")
     docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
 }
@@ -239,6 +321,66 @@ dc_exec() {
     dc exec \
         -e DEV_WORKTREE="$DEV_WORKTREE" \
         app "$@"
+}
+
+# Runs whenever routing selects the Nix base (the default for non-seed
+# overlays, or forced by DEV_NIX_BASE=1). Refuses to combine with a
+# nix *seed-volume* overlay — that mount shadows the base's baked /nix/store
+# and orphans the infra PATH — and makes the base image compose FROMs present:
+# already local -> done; else `docker pull` of the digest ref pinned in
+# compose.nix-base.yml. DEV_NIX_BASE_IMAGE overrides the ref (the documented
+# path for a locally nix-built base); building is never attempted implicitly —
+# a failed pull prints the fallback recipe instead of silently rebuilding a
+# possibly-different image.
+ensure_nix_base() {
+    local nixdir="$DEV_BASE_DIR/nix/base"
+    local nixcompose="$nixdir/compose.nix-base.yml"
+    [ -f "$nixcompose" ] || {
+        echo "error: DEV_NIX_BASE set but $nixcompose is missing" >&2
+        return 1
+    }
+    if overlay_has_seed_volume; then
+        echo "error: DEV_NIX_BASE=${DEV_NIX_BASE:-1} forces the Nix base, but this overlay mounts a nix seed volume." >&2
+        echo "       $COMPOSE_OVERRIDE mounts :/nix, which would shadow the Nix base's baked" >&2
+        echo "       /nix/store and orphan the infra PATH. Unset DEV_NIX_BASE — routing picks" >&2
+        echo "       the classic Dockerfile for seed overlays automatically." >&2
+        return 1
+    fi
+
+    # Resolve the ref compose will FROM: the env override, or the pinned
+    # default greped out of compose.nix-base.yml (single source of truth —
+    # the same line compose interpolates).
+    local ref
+    if [ -n "${DEV_NIX_BASE_IMAGE:-}" ]; then
+        ref="$DEV_NIX_BASE_IMAGE"
+    else
+        # The value sits on its own folded-scalar line under the BASE_IMAGE
+        # key (yamllint line-length), so anchor on the interpolation itself.
+        ref="$(grep -oP '\$\{DEV_NIX_BASE_IMAGE:-\K[^}]+' "$nixcompose")" || true
+        [ -n "$ref" ] || {
+            echo "error: could not read the pinned BASE_IMAGE default from $nixcompose" >&2
+            return 1
+        }
+    fi
+
+    docker image inspect "$ref" >/dev/null 2>&1 && return 0
+
+    if [ -n "${DEV_NIX_BASE_IMAGE:-}" ]; then
+        echo "error: DEV_NIX_BASE_IMAGE=$ref is not a local image." >&2
+        echo "       Build and load it first:" >&2
+        echo "         (cd $nixdir && nix build .#defaultBase && ./result | docker load)" >&2
+        return 1
+    fi
+
+    echo "Pulling the Nix base image ($ref)..."
+    docker pull "$ref" && return 0
+
+    echo "error: could not pull $ref." >&2
+    echo "       Registry unreachable (or the package is private and docker isn't logged in" >&2
+    echo "       to ghcr.io). Either fix registry access, or build the base locally:" >&2
+    echo "         (cd $nixdir && nix build .#defaultBase && ./result | docker load)" >&2
+    echo "         DEV_NIX_BASE_IMAGE=devcontainer-nix-base:latest DEV_NIX_BASE=1 dev/devcontainer up" >&2
+    return 1
 }
 
 is_running() {
@@ -259,6 +401,21 @@ config_files() {
     # Baked into the image and holds the pinned Nix version/sha; hash it so a pin
     # bump actually invalidates the image (the Dockerfile text alone doesn't change).
     [ -f "$DEV_BASE_DIR/lib/nix-seed.sh" ] && printf '%s\n' "$DEV_BASE_DIR/lib/nix-seed.sh"
+    # Nix-base build: the root Dockerfile isn't the build input, so hash the
+    # files that actually determine this image (the override, the tail
+    # Dockerfile, and the flake/pin that produce the base) — otherwise switching
+    # bases or bumping the pin wouldn't invalidate the stamp.
+    if $DEV_USE_NIX_BASE; then
+        local nf
+        for nf in \
+            "$DEV_BASE_DIR/nix/base/compose.nix-base.yml" \
+            "$DEV_BASE_DIR/nix/base/Dockerfile.nix-default" \
+            "$DEV_BASE_DIR/nix/base/flake.nix" \
+            "$DEV_BASE_DIR/nix/base/flake.lock" \
+            "$DEV_BASE_DIR/nix/base/pkgs/claude-code.nix"; do
+            [ -f "$nf" ] && printf '%s\n' "$nf"
+        done
+    fi
     local hm
     for hm in \
         "$DEV_PROJECT_DIR/host-mounts.txt" \
@@ -281,6 +438,14 @@ config_hash() {
         # interpolation must be added here.
         printf 'DEV_CONTAINER_WORKSPACE=%s\n' "$DEV_CONTAINER_WORKSPACE"
         printf 'DEV_PROJECT_DIR=%s\n' "$DEV_PROJECT_DIR"
+        # The pinned default lives in compose.nix-base.yml (hashed above when
+        # routed); the env override swaps the FROM image without touching a
+        # file, so it must be hashed explicitly too. (if, not `[ ] &&`: a
+        # false condition as the group's last command would fail the hash
+        # pipeline under pipefail.)
+        if $DEV_USE_NIX_BASE; then
+            printf 'DEV_NIX_BASE_IMAGE=%s\n' "${DEV_NIX_BASE_IMAGE:-}"
+        fi
     } | sha256sum | cut -d' ' -f1
 }
 
@@ -296,6 +461,10 @@ config_file_desc() {
         host-mounts.txt)       echo "host directory mounts" ;;
         host-mounts.local.txt) echo "local host mount overrides" ;;
         nix-seed.sh)           echo "pinned Nix version and seed logic" ;;
+        compose.nix-base.yml)  echo "Nix base compose override, pinned base digest" ;;
+        Dockerfile.nix-default) echo "system layer over the Nix base" ;;
+        flake.nix)             echo "Nix base image definition" ;;
+        claude-code.nix)       echo "pinned claude-code package" ;;
         *)                     echo "" ;;
     esac
 }
@@ -448,6 +617,11 @@ disconnect_stale_networks() {
 # Run `dc up --build -d`, streaming output while also capturing it to detect
 # known failure patterns (e.g. Docker network exhaustion).
 dc_up() {
+    # The base image is only needed when we actually build. Pulling here —
+    # not up in ensure_up — keeps `up`/`exec`/`claude` against an
+    # already-running container from downloading ~0.76 GB it won't use (or
+    # hard-failing on an unreachable registry it doesn't need).
+    $DEV_USE_NIX_BASE && { ensure_nix_base || return 1; }
     local _up_tmp _up_rc
     _up_tmp=$(mktemp)
     # shellcheck disable=SC2064
@@ -865,6 +1039,11 @@ case "${1:-up}" in
         echo "  MODEL_VERSION=${DEV_MODEL_VERSION:-<unset>}"
         echo "  DANGEROUSLY_SKIP_PERMISSIONS=${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-<unset>}"
         echo "  CONTAINER_NAME=$DEV_CONTAINER_NAME"
+        if $DEV_USE_NIX_BASE; then
+            echo "  BASE=nix-base ($DEV_BASE_REASON)"
+        else
+            echo "  BASE=classic ($DEV_BASE_REASON)"
+        fi
         if [ -f "$_project_env" ]; then
             echo ""
             echo "Sources:"
