@@ -133,6 +133,32 @@ docker build -f Dockerfile.nix-default \
   ../../
 ```
 
+## Optional: run the full devcontainer on the Nix base
+
+`dev/devcontainer` has an opt-in that swaps the root Dockerfile for this base
+via `compose.nix-base.yml` (appended after the project override so its
+`build.dockerfile` wins). It builds+loads `devcontainer-nix-base:latest` first
+(with `nix build .#defaultBase | docker load`) when the image is absent:
+
+```bash
+DEV_NIX_BASE=1 dev/devcontainer up
+```
+
+**Must run against a non-seed overlay.** An overlay that mounts a nix *seed
+volume* (`:/nix`, e.g. the shipped `devcontainer` overlay) is incompatible: the
+volume shadows the base's baked `/nix/store` and orphans the infra `PATH`
+(`config.Env` points at `${infraEnv}/bin` under `/nix/store`). `dev/devcontainer`
+refuses the combination — use e.g. the defaults overlay:
+
+```bash
+DEV_PROJECT_DIR="$PWD/defaults" DEV_NIX_BASE=1 dev/devcontainer up
+```
+
+This is the same two-strategies-are-exclusive tension as `init --nix` on the Nix
+base: the seed volume and the baked base are alternative ways to deliver `/nix`,
+not layers. Everything above `DEV_NIX_BASE` (build args, contexts, the
+`Dockerfile.nix-default` tail) is unchanged; the flag only reroutes the base.
+
 ## Open decisions this spike surfaces
 
 - **`config` replaces the base config** — `streamLayeredImage`'s `config` does
