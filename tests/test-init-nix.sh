@@ -273,6 +273,43 @@ if (
 assert_eq "first-run survives a missing profile" "true" "$okG"
 assert_eq "profile source skipped (no marker)" "false" "$([ -f "$MARKER2" ] && echo true || echo false)"
 
+# ============================================================
+# lib/nix-seed.sh :: Nix-base coexistence (base already ships /nix)
+# ============================================================
+
+# ---------- test: nix_build_install skips when the base provides /nix ----------
+# Building the spike's Dockerfile.nix-default on the streamLayeredImage Nix base
+# means /nix/store is already baked in (root-owned). The build-time installer,
+# run as $NIX_USER, would hit "Permission denied" — so it must skip instead.
+echo "--- nix_build_install (base already provides /nix -> skip) ---"
+PREPOP="$TMPDIR_ROOT/prepop"
+mkdir -p "$PREPOP/nix/store"
+: > "$PREPOP/nix/store/.keep"
+if out_bi="$( export NIX_SEED_ROOT="$PREPOP"; nix_build_install 2>&1 )"; then okBI=true; else okBI=false; fi
+assert_eq "returns success (no install attempted)" "true" "$okBI"
+assert_contains "announces skip" "already populated by the base image" "$out_bi"
+
+# ---------- test: nix_seed_volume no-ops at runtime with no seed tar ----------
+# The build-time skip produces no seed tarball; first-run must not abort trying to
+# unpack a missing tar — it falls through to profile/conf setup off the baked store.
+echo "--- nix_seed_volume (no seed tar -> base provides /nix) ---"
+ROOT3="$TMPDIR_ROOT/seedroot3"
+HOMES3="$TMPDIR_ROOT/seedhome3"
+mkdir -p "$ROOT3/nix/store" "$HOMES3"
+: > "$ROOT3/nix/store/.keep"
+if out_ns="$(
+    export HOME="$HOMES3"
+    export NIX_SEED_ROOT="$ROOT3"
+    export NIX_SEED_TAR="$TMPDIR_ROOT/does-not-exist.tar"
+    export NIX_SEED_SHA_FILE="$SEED_SHA"
+    export NIX_USER="$USER_NAME"
+    nix_seed_volume 2>&1
+)"; then okNS=true; else okNS=false; fi
+assert_eq "survives with no seed tar" "true" "$okNS"
+assert_contains "announces base-provided nix" "assuming the base image provides /nix" "$out_ns"
+assert_not_contains "does not seed the volume" "Seeding Nix store" "$out_ns"
+assert_contains "still writes nix.conf" "sandbox = false" "$(cat "$HOMES3/.config/nix/nix.conf")"
+
 # ---------- summary ----------
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
