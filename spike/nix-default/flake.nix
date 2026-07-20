@@ -17,9 +17,10 @@
       # maxLayers — so claude-code sits in its own layer and a bump only changes
       # that blob while node/gh/... stay byte-identical.
       infra = [
-        # node no longer backs claude-code (2.x ships a native binary), but the
-        # real Dockerfile still installs it, so keep it here for parity.
-        pkgs.nodejs_22
+        # No node: claude-code 2.x is a native ELF binary (glibc-only, verified
+        # via ldd + running it with node off PATH), so nothing in this base needs
+        # a node runtime. The linear root Dockerfile still ships node because it
+        # installs claude via `npm`; this base fetches the binary directly.
         pkgs.gh
         pkgs.socat
         pkgs.just

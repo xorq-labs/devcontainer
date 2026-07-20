@@ -264,9 +264,14 @@ convenience and the only sane arm/Mac path, not a gate on anyone's work.
   wrap outputs in a systems list and select the matching platform package for
   arm64 parity. See "Building on macOS / arm" below for why this is really a
   *distribution* decision (publish a multi-arch base), not just a flake tweak.
-- **node may be redundant** — claude-code 2.x is a native binary and no longer
-  needs node. The spike keeps `nodejs_22` for parity with the current
-  Dockerfile, but both could likely drop it if nothing else needs npm.
+- **node — resolved: dropped from this base.** claude-code 2.x is a native ELF
+  binary (glibc-only, verified via `ldd` + running it with node off `PATH`), so
+  nothing in the base needs a node runtime. Removing `nodejs_22` cut the base
+  34 -> 21 store paths / 55 -> 42 layers (node drags in icu4c, libuv, openssl
+  variants, `-dev` outputs). Caveat: this removes node/npm/**npx** for everyone
+  on the baked base — `npx`-based MCP servers or project tooling that expect node
+  must re-add it via a project overlay. The linear root Dockerfile still ships
+  node because it installs claude via `npm` (this base fetches the binary).
 - **version-pin coupling** — `pkgs/claude-code.nix` duplicates the Dockerfile's
   `CLAUDE_CODE_VERSION`; `dev/bump-claude-code` keeps them in sync, and
   `tests/test-claude-code-pin-sync.sh` guards that the two committed files agree
