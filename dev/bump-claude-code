@@ -137,24 +137,29 @@ else
 fi
 
 # Keep the Nix base's second version pin in sync so the two can't silently
-# drift. That file also carries a tarball hash the Dockerfile's npm install
-# doesn't have and that we can't recompute here, so we reset it to the Nix
-# fakeHash sentinel — the next `nix build` fails and prints the correct
-# sha256- to paste back. Skipped when the base pin's version already matches, so
-# a valid src.hash is never clobbered. `$new` is validated above, so it's safe
-# as a sed replacement.
+# drift. That file also carries per-arch tarball hashes the Dockerfile's npm
+# install doesn't have and that we can't recompute here, so we reset them to
+# the Nix fakeHash sentinel — the next `nix build` on each arch fails and
+# prints the correct sha256- to paste back. Skipped when the base pin's
+# version already matches, so valid hashes are never clobbered. `$new` is
+# validated above, so it's safe as a sed replacement.
 if $nix_needs_sync; then
     sed -i \
         -e "s|^  version = \".*\";|  version = \"${new}\";|" \
-        -e "s|^    hash = \"sha256-.*\";|    hash = \"${fake_hash}\";|" \
+        -e "s|^\([[:space:]]*\)hash = \"sha256-.*\";|\1hash = \"${fake_hash}\";|" \
         "$nix_pin"
-    # sed exits 0 whether or not the patterns matched, so prove the edit took.
+    # sed exits 0 whether or not the patterns matched, so prove the edit took:
+    # the version line carries the new version and EVERY quoted hash line is
+    # now the sentinel (no hash lines at all means the layout changed under us;
+    # `hash = platform.hash;` in the fetchurl body is unquoted and exempt).
+    hash_lines="$(grep -E '^[[:space:]]*hash = "' "$nix_pin" || true)"
     if ! grep -qF "version = \"${new}\";" "$nix_pin" \
-        || ! grep -qF "hash = \"${fake_hash}\";" "$nix_pin"; then
-        echo "error: could not update the Nix base pin in ${nix_pin#"$base/"} — its layout no longer matches; set version = \"${new}\" and reset src.hash there manually" >&2
+        || [ -z "$hash_lines" ] \
+        || grep -vqF "$fake_hash" <<<"$hash_lines"; then
+        echo "error: could not update the Nix base pin in ${nix_pin#"$base/"} — its layout no longer matches; set version = \"${new}\" and reset the per-arch hashes there manually" >&2
         exit 1
     fi
-    echo "Also bumped Nix base pin: ${nix_pin#"$base/"} (refresh its src.hash: 'nix build .#defaultBase' prints the correct sha256-)"
+    echo "Also bumped Nix base pin: ${nix_pin#"$base/"} (refresh the per-arch hashes: 'nix build .#defaultBase' on each arch prints the correct sha256-)"
 fi
 
 if [ "$current" != "$new" ]; then

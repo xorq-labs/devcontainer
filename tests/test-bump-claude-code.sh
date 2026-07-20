@@ -168,11 +168,14 @@ assert_eq "Dockerfile unchanged" "2.5.0" "$(pin)"
 echo "--- bump-claude-code (Dockerfile and Nix pin both current) ---"
 write_dockerfile "2.5.0"
 seed_nix_pin "2.5.0"
-hash_before="$(grep -oP '^    hash = "\K[^"]*' "$NIX_PIN")"
+hash_before="$(grep -oP '^\s*hash = "\K[^"]*' "$NIX_PIN")"
 run_bump "2.5.0"
 assert_eq "exit 0" "0" "$rc"
 assert_contains "reports already pinned" "already pinned to 2.5.0" "$out"
-assert_eq "valid src.hash not clobbered" "$hash_before" "$(grep -oP '^    hash = "\K[^"]*' "$NIX_PIN")"
+# hash_before holds one hash per arch; a sanity check that the grep anchor
+# still matches the real file, then byte-equality across the run.
+assert_contains "hash anchor still matches" "sha256-" "$hash_before"
+assert_eq "valid per-arch hashes not clobbered" "$hash_before" "$(grep -oP '^\s*hash = "\K[^"]*' "$NIX_PIN")"
 
 # ---------- test: --check reports Nix pin drift ----------
 echo "--- bump-claude-code (--check reports Nix pin drift) ---"
