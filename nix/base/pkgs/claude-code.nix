@@ -9,7 +9,7 @@
 #
 # So the old "grab the main tarball and wrap node against cli.js" approach is
 # dead — the main tarball has no cli.js. We fetch the linux-x64 platform package
-# directly, which matches this spike's x86_64 glibc target (the MS devcontainer
+# directly, which matches the x86_64 glibc target (the MS devcontainer
 # base is Debian).
 #
 # The binary is dynamically linked against the standard glibc loader

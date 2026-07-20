@@ -6,7 +6,7 @@ linear Dockerfile can't give (today, bumping `CLAUDE_CODE_VERSION` in the root
 `Dockerfile` invalidates every layer after it, including the project system
 layer).
 
-This spike adds files under `spike/nix-default/` and leaves the real *image
+This spike adds files under `nix/base/` and leaves the real *image
 build* untouched — the root `Dockerfile`, `docker-compose.yml`, and all project
 overlays are unchanged. The one real-tool change is that `dev/bump-claude-code`
 now also syncs the spike's version pin (see "Open decisions"), so the two pins
@@ -60,7 +60,7 @@ Refreshing the pins after a version bump:
 ## Build & load
 
 ```bash
-cd spike/nix-default
+cd nix/base
 nix build .#defaultBase        # ./result is the streamer script
 ./result | docker load         # -> devcontainer-nix-base:latest
 # or: nix run .#loadDefaultBase

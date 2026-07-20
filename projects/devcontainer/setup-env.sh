@@ -22,7 +22,7 @@ TOML
         fi
 
         # Seed the durable Nix volume from the image-baked tarball, then make
-        # sure flakes work out of the box (spike/nix-default is a flake).
+        # sure flakes work out of the box (nix/base is a flake).
         # nix_write_conf (called by nix_seed_volume) merges the host nix.conf
         # first, so only add flakes when the merged config doesn't already
         # enable them. Match a flakes-bearing (extra-)experimental-features line

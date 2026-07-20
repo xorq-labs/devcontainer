@@ -85,11 +85,12 @@ if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
     exit 1
 fi
 
-# The Nix spike (spike/nix-default/pkgs/claude-code.nix) carries a second copy
+# The Nix base (nix/base/pkgs/claude-code.nix) carries a second copy
 # of the pin; treat it as part of the current state so pre-existing drift is
-# reported by --check and repaired by a normal run. No-ops cleanly when the
-# spike isn't present.
-nix_pin="$base/spike/nix-default/pkgs/claude-code.nix"
+# reported by --check and repaired by a normal run. A missing pin file is
+# tolerated here (the test sandbox runs pin-less), but on the committed tree
+# tests/test-claude-code-pin-sync.sh fails loudly if it disappears or drifts.
+nix_pin="$base/nix/base/pkgs/claude-code.nix"
 fake_hash="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 nix_current=""
 nix_needs_sync=false
@@ -113,7 +114,7 @@ if $check_only; then
     if [ "$current" = "$new" ] && ! $nix_needs_sync; then
         echo "already up to date"
     elif [ "$current" = "$new" ]; then
-        echo "run 'devcontainer bump-claude-code' to repair the Nix spike pin"
+        echo "run 'devcontainer bump-claude-code' to repair the Nix base pin"
     else
         echo "run 'devcontainer bump-claude-code' to update the Dockerfile"
     fi
@@ -121,7 +122,7 @@ if $check_only; then
 fi
 
 # "Already pinned" means both pins agree; a Dockerfile that is already at the
-# target must not short-circuit past a drifted Nix spike pin.
+# target must not short-circuit past a drifted Nix base pin.
 if [ "$current" = "$new" ] && ! $nix_needs_sync; then
     echo "Claude Code already pinned to $current${target:+ (requested)}"
     [ -n "$target" ] || echo "(latest published version)"
@@ -129,17 +130,17 @@ if [ "$current" = "$new" ] && ! $nix_needs_sync; then
 fi
 
 if [ "$current" = "$new" ]; then
-    echo "Dockerfile already pinned to $current; repairing the drifted Nix spike pin"
+    echo "Dockerfile already pinned to $current; repairing the drifted Nix base pin"
 else
     sed -i "s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${new}|" "$dockerfile"
     echo "Bumped Claude Code: $current → $new"
 fi
 
-# Keep the Nix spike's second version pin in sync so the two can't silently
+# Keep the Nix base's second version pin in sync so the two can't silently
 # drift. That file also carries a tarball hash the Dockerfile's npm install
 # doesn't have and that we can't recompute here, so we reset it to the Nix
 # fakeHash sentinel — the next `nix build` fails and prints the correct
-# sha256- to paste back. Skipped when the spike's version already matches, so
+# sha256- to paste back. Skipped when the base pin's version already matches, so
 # a valid src.hash is never clobbered. `$new` is validated above, so it's safe
 # as a sed replacement.
 if $nix_needs_sync; then
@@ -150,10 +151,10 @@ if $nix_needs_sync; then
     # sed exits 0 whether or not the patterns matched, so prove the edit took.
     if ! grep -qF "version = \"${new}\";" "$nix_pin" \
         || ! grep -qF "hash = \"${fake_hash}\";" "$nix_pin"; then
-        echo "error: could not update the Nix spike pin in ${nix_pin#"$base/"} — its layout no longer matches; set version = \"${new}\" and reset src.hash there manually" >&2
+        echo "error: could not update the Nix base pin in ${nix_pin#"$base/"} — its layout no longer matches; set version = \"${new}\" and reset src.hash there manually" >&2
         exit 1
     fi
-    echo "Also bumped Nix spike pin: ${nix_pin#"$base/"} (refresh its src.hash: 'nix build .#defaultBase' prints the correct sha256-)"
+    echo "Also bumped Nix base pin: ${nix_pin#"$base/"} (refresh its src.hash: 'nix build .#defaultBase' prints the correct sha256-)"
 fi
 
 if [ "$current" != "$new" ]; then

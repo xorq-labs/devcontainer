@@ -278,7 +278,7 @@ assert_eq "profile source skipped (no marker)" "false" "$([ -f "$MARKER2" ] && e
 # ============================================================
 
 # ---------- test: nix_build_install skips when the base provides /nix ----------
-# Building the spike's Dockerfile.nix-default on the streamLayeredImage Nix base
+# Building Dockerfile.nix-default on the streamLayeredImage Nix base
 # means /nix/store is already baked in (root-owned). The build-time installer,
 # run as $NIX_USER, would hit "Permission denied" — so it must skip instead.
 echo "--- nix_build_install (base already provides /nix -> skip) ---"

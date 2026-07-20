@@ -20,7 +20,7 @@ services:
   app:
     build:
       # relative to the build context (repo root, ${DEV_BASE_DIR})
-      dockerfile: spike/nix-default/Dockerfile.nix-default
+      dockerfile: nix/base/Dockerfile.nix-default
       args:
         # the Nix base image loaded by `nix build .#defaultBase | docker load`
         BASE_IMAGE: devcontainer-nix-base:latest

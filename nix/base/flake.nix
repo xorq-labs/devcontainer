@@ -1,11 +1,11 @@
 {
-  description = "Nix-layered default devcontainer base (fromImage hybrid spike)";
+  description = "Nix-layered default devcontainer base (fromImage hybrid)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
 
   outputs = { self, nixpkgs }:
     let
-      # x86_64 only for the spike; wrap in a systems list for arm64 parity later.
+      # x86_64 only for now; wrap in a systems list for arm64 parity later.
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
 
@@ -86,7 +86,7 @@
           # customisation, well under Docker's ~127-layer ceiling) and a
           # claude-code bump still reships only its blob. If the budget ever
           # overflows, the tail gets lumped into one fat catch-all with
-          # claude-code, defeating the per-layer dedup this spike measures. No
+          # claude-code, defeating the per-layer dedup this base exists for. No
           # `contents`: the closure enters via the infraEnv/cacert references in
           # `config`.
           maxLayers = 64;

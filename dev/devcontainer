@@ -249,7 +249,7 @@ dc() {
     [ -f "$COMPOSE_OVERRIDE" ] && files+=(-f "$COMPOSE_OVERRIDE")
     # Opt-in: build on the Nix hybrid base. Appended AFTER the project override so
     # its `build.dockerfile` wins. Guarded/loaded by ensure_nix_base() at up time.
-    [ -n "${DEV_NIX_BASE:-}" ] && files+=(-f "$DEV_BASE_DIR/spike/nix-default/compose.nix-base.yml")
+    [ -n "${DEV_NIX_BASE:-}" ] && files+=(-f "$DEV_BASE_DIR/nix/base/compose.nix-base.yml")
     [ -n "${DEV_HOST_MOUNTS_OVERRIDE:-}" ] && files+=(-f "$DEV_HOST_MOUNTS_OVERRIDE")
     docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
 }
@@ -261,12 +261,12 @@ dc_exec() {
 }
 
 # Opt-in (DEV_NIX_BASE): build the container on the Nix hybrid base
-# (spike/nix-default) instead of the root Dockerfile. Refuses to combine with a
+# (nix/base) instead of the root Dockerfile. Refuses to combine with a
 # nix *seed-volume* overlay — that mount shadows the base's baked /nix/store and
 # orphans the infra PATH — and ensures devcontainer-nix-base:latest is loaded
 # (building it with nix if absent) so compose can FROM it.
 ensure_nix_base() {
-    local nixdir="$DEV_BASE_DIR/spike/nix-default"
+    local nixdir="$DEV_BASE_DIR/nix/base"
     [ -f "$nixdir/compose.nix-base.yml" ] || {
         echo "error: DEV_NIX_BASE set but $nixdir/compose.nix-base.yml is missing" >&2
         return 1
@@ -315,10 +315,10 @@ config_files() {
     if [ -n "${DEV_NIX_BASE:-}" ]; then
         local nf
         for nf in \
-            "$DEV_BASE_DIR/spike/nix-default/compose.nix-base.yml" \
-            "$DEV_BASE_DIR/spike/nix-default/Dockerfile.nix-default" \
-            "$DEV_BASE_DIR/spike/nix-default/flake.nix" \
-            "$DEV_BASE_DIR/spike/nix-default/pkgs/claude-code.nix"; do
+            "$DEV_BASE_DIR/nix/base/compose.nix-base.yml" \
+            "$DEV_BASE_DIR/nix/base/Dockerfile.nix-default" \
+            "$DEV_BASE_DIR/nix/base/flake.nix" \
+            "$DEV_BASE_DIR/nix/base/pkgs/claude-code.nix"; do
             [ -f "$nf" ] && printf '%s\n' "$nf"
         done
     fi

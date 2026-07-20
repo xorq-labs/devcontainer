@@ -7,7 +7,7 @@
 # ship drift undetected. This test asserts the invariant directly on the tree:
 #
 #   Dockerfile:                       ARG CLAUDE_CODE_VERSION=<v>
-#   spike/nix-default/pkgs/claude-code.nix:   version = "<v>";
+#   nix/base/pkgs/claude-code.nix:   version = "<v>";
 #
 # Anchors mirror the grep/sed anchors in dev/bump-claude-code, so a reformat that
 # would break the tool's sync fails loudly here too (empty match -> fail).
@@ -41,7 +41,7 @@ assert_nonempty() {
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 dockerfile="$DEV_BASE/Dockerfile"
-nix_pin="$DEV_BASE/spike/nix-default/pkgs/claude-code.nix"
+nix_pin="$DEV_BASE/nix/base/pkgs/claude-code.nix"
 
 echo "--- claude-code pin sync (committed files) ---"
 

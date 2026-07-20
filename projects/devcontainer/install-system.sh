@@ -21,7 +21,7 @@ apt-get install -y --no-install-recommends \
 rm -rf /var/lib/apt/lists/*
 
 # Nix (single-user, seeded into the project-scoped `nix` volume on first run):
-# needed to work on spike/nix-default — building the flake, filling its
+# needed to work on nix/base — building the flake, filling its
 # fixed-output hashes, and measuring the layer delta. xz-utils above is the
 # installer's tarball dependency.
 . /usr/local/lib/devcontainer/nix-seed.sh

@@ -13,7 +13,7 @@
 # changes; these RUN/COPY steps re-execute but are near-instant, and the
 # node/gh/sops/... layer blobs are byte-identical and deduped on push/pull.
 #
-# Build the base first:  (from spike/nix-default/)
+# Build the base first:  (from nix/base/)
 #   nix build .#defaultBase && ./result | docker load
 # Then build this on top with the project context injected via compose, or:
 #   docker build -f Dockerfile.nix-default \
@@ -30,7 +30,7 @@ ARG HOST_USER=
 # The chown is guarded, unlike the root Dockerfile's: the Nix base already
 # ships /home/vscode owned 1000:1000, and an unconditional chown -R updates
 # ctime on every file, copying the whole home dir into a fat per-build layer —
-# diluting exactly the layer reuse this spike measures.
+# diluting exactly the layer reuse this base exists to preserve.
 RUN if [ "$USER_GID" != "1000" ]; then groupmod -g "$USER_GID" vscode; fi \
     && if [ "$USER_UID" != "1000" ]; then usermod -u "$USER_UID" vscode; fi \
     && if [ "$USER_UID:$USER_GID" != "1000:1000" ]; then \
