@@ -87,6 +87,26 @@ assert_contains "resolve uses custom name in CONTAINER_NAME" "CONTAINER_NAME=cus
 assert_contains "resolve shows custom PROJECT_NAME" "PROJECT_NAME=custom" "$out"
 assert_contains "resolve tier2 uses custom name" "projects/custom/" "$out"
 
+# ---------- test: /nix delivery routing shown by resolve ----------
+# The defaults overlay mounts no nix seed volume, so it routes to the Nix
+# base unless DEV_NIX_BASE says otherwise; an overlay mounting :/nix routes
+# to the classic Dockerfile. env -u pins the inherited-environment cases.
+echo "--- devcontainer resolve (nix base routing) ---"
+out="$(cd "$MAIN_TREE" && env -u DEV_NIX_BASE "$DC" resolve 2>&1)"
+assert_contains "non-seed overlay defaults to the nix base" "BASE=nix-base (default" "$out"
+
+out="$(cd "$MAIN_TREE" && DEV_NIX_BASE=0 "$DC" resolve 2>&1)"
+assert_contains "DEV_NIX_BASE=0 forces the classic Dockerfile" "BASE=classic (forced by DEV_NIX_BASE=0)" "$out"
+
+out="$(cd "$MAIN_TREE" && DEV_NIX_BASE=1 "$DC" resolve 2>&1)"
+assert_contains "DEV_NIX_BASE=1 forces the nix base" "BASE=nix-base (forced by DEV_NIX_BASE=1)" "$out"
+
+SEED_OVERLAY="$TMPDIR_ROOT/seed-overlay"
+mkdir -p "$SEED_OVERLAY"
+printf 'services:\n  app:\n    volumes:\n      - nix:/nix\n' > "$SEED_OVERLAY/compose.override.yml"
+out="$(cd "$MAIN_TREE" && env -u DEV_NIX_BASE DEV_PROJECT_DIR="$SEED_OVERLAY" "$DC" resolve 2>&1)"
+assert_contains "seed overlay routes to the classic Dockerfile" "BASE=classic (overlay mounts a nix seed volume)" "$out"
+
 # ---------- test: devcontainer resolve with project overlay ----------
 echo "--- devcontainer resolve (project overlay match) ---"
 mkdir -p "$DEV_BASE/projects/fakerepo"

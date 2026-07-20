@@ -80,6 +80,16 @@ jobs:
       - name: Env drift check
         run: nix/base/check-env-drift.sh
 
+      # The path consumers actually build: the project tail over the base,
+      # with the defaults overlay (what a non-seed project gets by default).
+      - name: Build the project tail on the base
+        run: |
+          docker build -f nix/base/Dockerfile.nix-default \
+            --build-context project=./defaults \
+            --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
+            -t nix-base-tail:ci .
+          docker run --rm nix-base-tail:ci sh -c 'claude --version && test -x /usr/local/bin/setup-env'
+
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
