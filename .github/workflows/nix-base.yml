@@ -1,0 +1,134 @@
+name: Nix Base
+
+# Build the Nix hybrid devcontainer base (nix/base/flake.nix) natively per
+# arch, smoke-test each image, and publish per-arch images plus a multi-arch
+# manifest to ghcr. The base is pushed once and pulled many times: a
+# claude-code bump reships only its own layer (plus the ~210 KB infra profile
+# layer), so consumers pull one blob, not the image.
+#
+# Publish rules:
+#   - pull_request: build + smoke + drift check only, nothing is pushed.
+#   - push to main / workflow_dispatch: per-arch images are pushed as
+#     sha-<short>-{amd64,arm64} and assembled into a sha-<short> manifest.
+#   - on main only, the manifest is additionally tagged latest and
+#     claude-<version> (the dominant change driver). A branch dispatch
+#     therefore publishes inspectable sha tags without touching latest.
+#
+# NOTE: ubuntu-24.04-arm runners are free for PUBLIC repos only. If this repo
+# ever goes private, the arm leg needs a paid larger-runner plan (or the
+# matrix drops to amd64 and arm64 builds move elsewhere).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - nix/base/**
+      - .github/workflows/nix-base.yml
+  pull_request:
+    paths:
+      - nix/base/**
+      - .github/workflows/nix-base.yml
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/devcontainer-nix-base
+
+concurrency:
+  group: nix-base-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Build the base image
+        run: nix build ./nix/base#defaultBase --print-build-logs
+
+      - name: Load into docker
+        run: ./result | docker load
+
+      - name: Smoke test
+        run: |
+          docker run --rm devcontainer-nix-base:latest claude --version
+          docker run --rm devcontainer-nix-base:latest sh -c \
+            'gh --version && just --version && sops --version && python3 --version && readlink /bin/sh'
+
+      # Guards the hand-maintained PATH in flake.nix and the fromImage config
+      # merge — see the script header. Pulls the pinned MS base once per run.
+      - name: Env drift check
+        run: nix/base/check-env-drift.sh
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push per-arch image
+        if: github.event_name != 'pull_request'
+        run: |
+          short="${GITHUB_SHA::7}"
+          docker tag devcontainer-nix-base:latest "$IMAGE:sha-${short}-${{ matrix.arch }}"
+          docker push "$IMAGE:sha-${short}-${{ matrix.arch }}"
+
+  manifest:
+    name: Assemble multi-arch manifest
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push the manifest
+        run: |
+          short="${GITHUB_SHA::7}"
+          tags=(-t "$IMAGE:sha-${short}")
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            claude_version="$(grep -m1 -oP '^  version = "\K[^"]*' nix/base/pkgs/claude-code.nix)"
+            tags+=(-t "$IMAGE:latest" -t "$IMAGE:claude-${claude_version}")
+          fi
+          docker buildx imagetools create "${tags[@]}" \
+            "$IMAGE:sha-${short}-amd64" "$IMAGE:sha-${short}-arm64"
+
+      # The manifest digest printed here is what compose.nix-base.yml pins as
+      # BASE_IMAGE (bumped deliberately after a publish, not auto-tracked).
+      - name: Report the published digest
+        run: |
+          short="${GITHUB_SHA::7}"
+          {
+            echo "## Nix base published: \`$IMAGE:sha-${short}\`"
+            echo '```'
+            docker buildx imagetools inspect "$IMAGE:sha-${short}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
