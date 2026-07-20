@@ -142,24 +142,26 @@
                 # not baked in. HOME matches the root Dockerfile's
                 # `ENV HOME=/home/vscode`.
                 WorkingDir = "/workspaces/src";
-                # streamLayeredImage's `config` REPLACES the fromImage config
-                # rather than merging it, so anything the MS base set in Env
-                # must be reproduced here or it's lost. Most load-bearing is
-                # PATH: the base puts its pyenv/py-utils/nvm dirs on PATH, and
-                # dropping them breaks `python`/`pip`. We prepend the infra
-                # profile (so gh/claude win) and keep the rest of the base's
-                # PATH verbatim. Re-derive the base env if MS changes it:
+                # streamLayeredImage (nixpkgs >= 26.05) MERGES the fromImage
+                # config into this one per-variable, with these entries
+                # winning on conflict — the MS base's Env (LANG, PYTHON_*,
+                # PIPX_*, NVM_*) flows through automatically and tracks a
+                # digest repin without hand-copying. (Under 24.11 `config`
+                # replaced the base config wholesale; the old full hand-copy
+                # dates from then.)
+                #
+                # PATH is the one value that must stay hand-maintained: a
+                # per-var merge picks a winner, it can't concatenate — and we
+                # need the infra profile prepended (so gh/claude win) with the
+                # base's own components kept verbatim behind it, or
+                # python/pip/pipx fall off PATH. check-env-drift.sh guards
+                # both this copy and the merge behavior itself in CI; re-derive
+                # the base's PATH after a repin with:
                 #   docker inspect --format '{{json .Config.Env}}' \
-                #     mcr.microsoft.com/devcontainers/python:3.12-bookworm
+                #     mcr.microsoft.com/devcontainers/python@<msBaseDigest>
                 Env = [
                   "HOME=/home/vscode"
-                  "PATH=${infraEnv}/bin:/usr/local/python/current/bin:/usr/local/py-utils/bin:/usr/local/jupyter:/usr/local/share/nvm/current/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin"
-                  "LANG=C.UTF-8"
-                  "PYTHON_PATH=/usr/local/python/current"
-                  "PIPX_HOME=/usr/local/py-utils"
-                  "PIPX_BIN_DIR=/usr/local/py-utils/bin"
-                  "NVM_DIR=/usr/local/share/nvm"
-                  "NVM_SYMLINK_CURRENT=true"
+                  "PATH=${infraEnv}/bin:/usr/local/python/current/bin:/usr/local/py-utils/bin:/usr/local/jupyter:/usr/local/share/nvm/current/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
                   "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
                 ];
                 Cmd = [ "sleep" "infinity" ];
