@@ -193,6 +193,25 @@ else
     export DEV_NIX_HOST_CONF
 fi
 
+# Docker-outside-of-docker is opt-in per overlay: an overlay that bind-mounts
+# /var/run/docker.sock (see projects/devcontainer/compose.override.yml) also
+# needs the container user in a group matching the socket's GID, or the mount
+# is unusable by the non-root vscode user. Detect the host socket and its group
+# here. When the host has no docker socket, fall back to /dev/null (a harmless
+# non-socket mount, mirroring the sops/nix empty-dir fallbacks) and the
+# container's own GID (a no-op group_add) so the override stays valid.
+# SECURITY: the docker socket is host-root-equivalent — this stays scoped to
+# overlays that opt in and is never lifted into the shared docker-compose.yml.
+if [ -S /var/run/docker.sock ]; then
+    export DEV_DOCKER_SOCK=/var/run/docker.sock
+    # GNU stat first, BSD stat (macOS) second; empty result falls back below.
+    export DEV_DOCKER_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || stat -f %g /var/run/docker.sock 2>/dev/null)"
+    [ -n "$DEV_DOCKER_GID" ] || export DEV_DOCKER_GID="$DEV_GID"
+else
+    export DEV_DOCKER_SOCK=/dev/null
+    export DEV_DOCKER_GID="$DEV_GID"
+fi
+
 if [ "$DEV_WORKSPACE" = "$DEV_MAIN_TREE" ]; then
     export DEV_WORKTREE="main"
 else

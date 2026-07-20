@@ -1,6 +1,18 @@
 services:
   app:
     hostname: ${DEV_HOSTNAME:-devcontainer}
+    # Docker-outside-of-docker: bind the host daemon's socket so this repo's own
+    # container can build/load the images it develops (e.g. the nix-default
+    # spike). DEV_DOCKER_SOCK/DEV_DOCKER_GID are resolved by dev/devcontainer and
+    # fall back to /dev/null + the container GID when the host has no docker
+    # socket, so this stays a no-op there. group_add puts the non-root vscode
+    # user in a group matching the socket's GID so it can reach the socket.
+    # SECURITY: the docker socket is host-root-equivalent; kept in this overlay
+    # on purpose — do not lift it into the shared docker-compose.yml.
+    volumes:
+      - ${DEV_DOCKER_SOCK:-/dev/null}:/var/run/docker.sock
+    group_add:
+      - "${DEV_DOCKER_GID:-1000}"
     environment:
       - DEV_CONTAINER_WORKSPACE
       - DEV_WORKSPACE
