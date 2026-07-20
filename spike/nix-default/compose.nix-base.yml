@@ -1,0 +1,26 @@
+# Opt-in override: build the devcontainer on the Nix hybrid base
+# (devcontainer-nix-base, from flake.nix) via Dockerfile.nix-default, instead of
+# the root Dockerfile's linear MS-base build. Activated with:
+#
+#   DEV_NIX_BASE=1 dev/devcontainer up
+#
+# which appends this file to the compose stack (see dev/devcontainer `dc()`), and
+# builds+loads devcontainer-nix-base:latest first when it's absent.
+#
+# The build context (repo root) and the `project` additional context are
+# inherited from docker-compose.yml — Dockerfile.nix-default consumes both
+# (COPY lib/*, setup-claude.py, COPY --from=project ...), matching the manual
+# `docker build --build-context project=...` invocation in the README.
+#
+# INCOMPATIBLE with an overlay that mounts a nix seed volume (`:/nix`): that
+# mount shadows the Nix base's baked /nix/store and orphans the infra PATH
+# (config.Env points at ${infraEnv}/bin under /nix/store). dev/devcontainer
+# refuses the combination — run this against a non-seed overlay (e.g. defaults).
+services:
+  app:
+    build:
+      # relative to the build context (repo root, ${DEV_BASE_DIR})
+      dockerfile: spike/nix-default/Dockerfile.nix-default
+      args:
+        # the Nix base image loaded by `nix build .#defaultBase | docker load`
+        BASE_IMAGE: devcontainer-nix-base:latest
