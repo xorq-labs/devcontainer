@@ -30,7 +30,7 @@ As an alternative to setting up a local environment, you can use the dev contain
 **Prerequisites (host):** Docker, bash, git, and Python 3. No other dependencies required (no Node, no uv). The script must be run from inside a git repo.
 
 > [!IMPORTANT]
-> **Linux x86_64 only.** Installs amd64 binaries and uses GNU coreutils. macOS and Windows are not supported.
+> **Linux only.** The tooling uses GNU coreutils; the Nix base image is multi-arch (amd64 + arm64), while the classic Dockerfile installs amd64 binaries. macOS and Windows are not supported — a macOS entry path (VS Code "Reopen in Container" on the pulled Nix base) is tracked in [#43](https://github.com/xorq-labs/devcontainer/issues/43).
 
 **Toolchain (container):** Python 3.12, just, sops, gh, and Claude Code. Most projects get these from the **Nix base** — a CI-published multi-arch image pulled from ghcr, where a claude-code bump reships one layer instead of rebuilding everything (see `nix/base/README.md`). Overlays that drive their own Nix store (created with `init --nix`) build on the classic root `Dockerfile` instead, which also ships Node 22 and pins its own tool versions. `devcontainer resolve` shows which base a workspace gets (`BASE=...`); `DEV_NIX_BASE=0`/`=1` force it. Project-specific tools (e.g. uv, direnv) are installed by the project overlay's `install-system.sh`; for example, the Python overlays pin uv 0.7.8.
 

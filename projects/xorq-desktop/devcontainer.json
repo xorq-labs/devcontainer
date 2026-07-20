@@ -2,7 +2,7 @@
   "name": "xorq-desktop",
   // Tripwire: blocks VS Code "Reopen in Container" (unsupported).
   // Start the container via `dev/devcontainer up`, then attach VS Code.
-  "initializeCommand": "printf 'ERROR: use dev/devcontainer to start this container.\\nSee the devcontainer repo README.\\n' >&2; exit 1",
+  "initializeCommand": "printf 'ERROR: use dev/devcontainer to start this container (Linux-only).\\nSee the devcontainer repo README; the macOS entry path is tracked in\\nhttps://github.com/xorq-labs/devcontainer/issues/43\\n' >&2; exit 1",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "workspaceFolder": "/workspaces/src",
