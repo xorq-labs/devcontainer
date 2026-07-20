@@ -247,6 +247,9 @@ fi
 dc() {
     local files=(-f "$COMPOSE_FILE")
     [ -f "$COMPOSE_OVERRIDE" ] && files+=(-f "$COMPOSE_OVERRIDE")
+    # Opt-in: build on the Nix hybrid base. Appended AFTER the project override so
+    # its `build.dockerfile` wins. Guarded/loaded by ensure_nix_base() at up time.
+    [ -n "${DEV_NIX_BASE:-}" ] && files+=(-f "$DEV_BASE_DIR/spike/nix-default/compose.nix-base.yml")
     [ -n "${DEV_HOST_MOUNTS_OVERRIDE:-}" ] && files+=(-f "$DEV_HOST_MOUNTS_OVERRIDE")
     docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
 }
@@ -255,6 +258,36 @@ dc_exec() {
     dc exec \
         -e DEV_WORKTREE="$DEV_WORKTREE" \
         app "$@"
+}
+
+# Opt-in (DEV_NIX_BASE): build the container on the Nix hybrid base
+# (spike/nix-default) instead of the root Dockerfile. Refuses to combine with a
+# nix *seed-volume* overlay — that mount shadows the base's baked /nix/store and
+# orphans the infra PATH — and ensures devcontainer-nix-base:latest is loaded
+# (building it with nix if absent) so compose can FROM it.
+ensure_nix_base() {
+    local nixdir="$DEV_BASE_DIR/spike/nix-default"
+    [ -f "$nixdir/compose.nix-base.yml" ] || {
+        echo "error: DEV_NIX_BASE set but $nixdir/compose.nix-base.yml is missing" >&2
+        return 1
+    }
+    if [ -f "$COMPOSE_OVERRIDE" ] && grep -q ':/nix' "$COMPOSE_OVERRIDE"; then
+        echo "error: DEV_NIX_BASE is incompatible with an overlay that mounts a nix seed volume." >&2
+        echo "       $COMPOSE_OVERRIDE mounts :/nix, which shadows the Nix base's baked" >&2
+        echo "       /nix/store and orphans the infra PATH. Use a non-seed overlay, e.g.:" >&2
+        echo "         DEV_PROJECT_DIR=$DEV_BASE_DIR/defaults DEV_NIX_BASE=1 dev/devcontainer up" >&2
+        return 1
+    fi
+    if ! docker image inspect devcontainer-nix-base:latest >/dev/null 2>&1; then
+        command -v nix >/dev/null 2>&1 || {
+            echo "error: devcontainer-nix-base:latest is not loaded, and nix is not on PATH to build it." >&2
+            echo "       Build it on a Nix host, then re-run:" >&2
+            echo "         (cd $nixdir && nix build .#defaultBase && ./result | docker load)" >&2
+            return 1
+        }
+        echo "Building the Nix base image (devcontainer-nix-base:latest)..."
+        ( cd "$nixdir" && nix build .#defaultBase && ./result | docker load ) || return 1
+    fi
 }
 
 is_running() {
@@ -275,6 +308,20 @@ config_files() {
     # Baked into the image and holds the pinned Nix version/sha; hash it so a pin
     # bump actually invalidates the image (the Dockerfile text alone doesn't change).
     [ -f "$DEV_BASE_DIR/lib/nix-seed.sh" ] && printf '%s\n' "$DEV_BASE_DIR/lib/nix-seed.sh"
+    # Nix-base build (DEV_NIX_BASE): the root Dockerfile isn't the build input, so
+    # hash the files that actually determine this image (the override, the tail
+    # Dockerfile, and the flake/pin that produce the base) — otherwise switching
+    # bases or bumping the pin wouldn't invalidate the stamp.
+    if [ -n "${DEV_NIX_BASE:-}" ]; then
+        local nf
+        for nf in \
+            "$DEV_BASE_DIR/spike/nix-default/compose.nix-base.yml" \
+            "$DEV_BASE_DIR/spike/nix-default/Dockerfile.nix-default" \
+            "$DEV_BASE_DIR/spike/nix-default/flake.nix" \
+            "$DEV_BASE_DIR/spike/nix-default/pkgs/claude-code.nix"; do
+            [ -f "$nf" ] && printf '%s\n' "$nf"
+        done
+    fi
     local hm
     for hm in \
         "$DEV_PROJECT_DIR/host-mounts.txt" \
@@ -505,6 +552,7 @@ ensure_up() {
         setup_claude_credentials
         install_hooks
         ensure_external_volumes
+        [ -n "${DEV_NIX_BASE:-}" ] && { ensure_nix_base || exit 1; }
         if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
             (cd "$DEV_WORKSPACE" && "$DEV_BASE_DIR/dev/setup-worktree")
             printf 'copy\t%s\n' ".envrcs/.resolved-env" >> "$DEV_WORKSPACE/.envrcs/.worktree-manifest"
