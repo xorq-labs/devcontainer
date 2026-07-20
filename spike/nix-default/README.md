@@ -90,7 +90,7 @@ Two layers change, not one: the claude-code layer (~251 -> 265 MB, the point)
 and the `devcontainer-infra` buildEnv profile (~210 KB), which necessarily
 rehashes because it references claude-code by store path — that reference is the
 mechanism (`config.Env` PATH) that pulls the closure into the image. The other
-~92 layers (node/gh/just/sops/socat/nix + their closures/cacert + every MS base
+layers (node/gh/just/sops/socat + their closures/cacert + every MS base
 layer) stay byte-identical, so the reship is the new claude-code blob plus a
 ~210 KB profile blob. Compare against a `CLAUDE_CODE_VERSION` bump on the root
 `Dockerfile`, which invalidates every layer after it, including the project
@@ -105,7 +105,7 @@ every bump regardless — at the cost of a longer PATH. Not worth it for 210 KB.
 
 Layering granularity does **not** speed up the local build. Nix is
 content-addressed, so a claude-code bump re-realizes only the claude-code
-derivation + the buildEnv + the streamer script; node/gh/nix/... are
+derivation + the buildEnv + the streamer script; node/gh/... are
 `/nix/store` cache hits. Layering happens *after* derivations are built — it only
 decides how already-built store paths are grouped into tar blobs.
 
@@ -114,7 +114,7 @@ identical digests, so the registry (and every `docker pull`) skips them. With
 one-path-per-layer, a bump reships only the ~265 MB claude-code blob + the
 ~210 KB profile; with claude-code lumped into a fat catch-all (what happens if
 the `maxLayers` budget overflows — see `flake.nix`), that whole blob's digest
-changes and every consumer re-pulls node/nix/aws-sdk/... too.
+changes and every consumer re-pulls node/gh/... too.
 
 So this matters when the base is **pushed once and pulled many times** (shared
 team/CI base). If the image is only ever built and run locally, the granularity

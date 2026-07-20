@@ -24,7 +24,6 @@
         pkgs.socat
         pkgs.just
         pkgs.sops
-        pkgs.nix # the Nix CLI itself, so the baked base can run `nix` in-container
         claude-code
         pkgs.cacert # TLS roots so gh / claude can reach the network
       ];
@@ -80,15 +79,16 @@
           # streamLayeredImage splits the runtime closure into up to maxLayers-1
           # layers (one store path each, most-shared first) plus a final
           # catch-all. The fromImage's ~20 layers and the customisation layer
-          # count against the cap. Adding `pkgs.nix` grew the infra closure to
-          # ~73 paths (it drags in aws-sdk-cpp, aws-c-*, libgit2, boehm-gc, ...),
-          # so 64 overflowed: the tail got lumped into one fat catch-all with
-          # claude-code, defeating the per-layer dedup this spike measures. 110
-          # leaves headroom for every closure path to keep its own layer (20 base
-          # + ~73 paths + customisation, under Docker's ~127-layer ceiling) so a
-          # claude-code bump still reships only its blob. No `contents`: the
-          # closure enters via the infraEnv/cacert references in `config`.
-          maxLayers = 110;
+          # count against the cap. The infra closure (node/gh/socat/just/sops +
+          # claude-code + cacert and their transitive deps) is ~40 paths, so 64
+          # keeps every path in its own layer (20 base + ~40 paths +
+          # customisation, well under Docker's ~127-layer ceiling) and a
+          # claude-code bump still reships only its blob. If the budget ever
+          # overflows, the tail gets lumped into one fat catch-all with
+          # claude-code, defeating the per-layer dedup this spike measures. No
+          # `contents`: the closure enters via the infraEnv/cacert references in
+          # `config`.
+          maxLayers = 64;
 
           # The one invariant imperative bit from the Dockerfile: the
           # credentials symlink into the credentials/ bind-mount. UID remap
