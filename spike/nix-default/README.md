@@ -52,8 +52,10 @@ Refreshing the pins after a version bump:
 - **claude-code** — `dev/bump-claude-code` updates both the Dockerfile `ARG` and
   the spike's `version`, and resets the spike's `src.hash` to the fakeHash
   sentinel. Then run the `nix build` above to fill in the printed hash.
-- **MS base digest** — changes whenever MS repushes `3.12-bookworm`; re-derive
-  with the `nix-prefetch-docker` / `imagetools inspect` commands above.
+- **MS base digest** — pinned by digest, so an MS repush of `3.12-bookworm` does
+  *not* change this build. Refresh only to adopt a newer base (or if the
+  registry GCs the old untagged digest); re-derive with the
+  `nix-prefetch-docker` / `imagetools inspect` commands above.
 
 ## Build & load
 
@@ -81,12 +83,23 @@ docker inspect --format '{{json .RootFS.Layers}}' devcontainer-nix-base:latest \
   > /tmp/layers.after
 
 diff <(tr ',' '\n' < /tmp/layers.before) <(tr ',' '\n' < /tmp/layers.after)
-# expect: exactly ONE layer digest differs
+# measured (2.1.201 -> 2.1.215): TWO layer digests differ
 ```
 
-If the diff is a single line, the hypothesis holds. Compare against the cost of
-a `CLAUDE_CODE_VERSION` bump on the current root `Dockerfile` (which rebuilds
-the infra + project layers).
+Two layers change, not one: the claude-code layer (~251 -> 265 MB, the point)
+and the `devcontainer-infra` buildEnv profile (299 symlinks, ~210 KB), which
+necessarily rehashes because it references claude-code by store path — that
+reference is the mechanism (`config.Env` PATH) that pulls the closure into the
+image. The other ~53 layers (node/gh/just/sops/socat/cacert + every MS base
+layer) stay byte-identical, so the reship is the new claude-code blob plus a
+~210 KB profile blob. Compare against a `CLAUDE_CODE_VERSION` bump on the root
+`Dockerfile`, which invalidates every layer after it, including the project
+system layer.
+
+(If a literal single changed layer is ever wanted, drop the buildEnv and list
+each package's `/bin` in `config.Env` PATH directly: that moves the claude
+reference out of a layer and into the image config JSON — which changes on
+every bump regardless — at the cost of a longer PATH. Not worth it for 210 KB.)
 
 ## Optional: exercise the full default image
 
@@ -108,7 +121,9 @@ docker build -f Dockerfile.nix-default \
   with `docker inspect` if MS changes the base.
 - **UID remap** stays in `Dockerfile.nix-default` — don't bake it into the
   shared derivation (it would defeat layer sharing).
-- **MS digest pin** must be refreshed when MS repushes `3.12-bookworm`.
+- **MS digest pin** insulates the build from upstream repushes (pinned by
+  digest); refresh is a deliberate choice to adopt a newer base, not forced
+  maintenance — see "Refreshing the pins" above.
 - **Host Nix requirement** — building this needs Nix on the builder; for the
   lowest-barrier *default* path that's an accessibility regression to weigh
   before shipping (fine for a spike).

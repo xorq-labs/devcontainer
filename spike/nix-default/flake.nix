@@ -46,8 +46,12 @@
         imageName = "mcr.microsoft.com/devcontainers/python";
         finalImageTag = "3.12-bookworm";
         # imageDigest is the top-level manifest-list digest; pullImage selects the
-        # amd64 sub-manifest via os/arch below. It changes whenever MS repushes
-        # the 3.12-bookworm tag — re-derive with:
+        # amd64 sub-manifest via os/arch below. Pinning by digest makes the build
+        # reproducible: an MS repush of the 3.12-bookworm tag does NOT affect this
+        # build — we keep resolving this exact digest. Refresh only when you *want*
+        # a newer base (security/toolchain updates), or in the rare case the
+        # registry garbage-collects this now-untagged manifest (then the pull
+        # 404s and you're forced to repin). Re-derive with:
         #   nix run nixpkgs#nix-prefetch-docker -- \
         #     --image-name mcr.microsoft.com/devcontainers/python --image-tag 3.12-bookworm
         # (or `docker buildx imagetools inspect` for the digest alone).
