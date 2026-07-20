@@ -52,8 +52,13 @@ would shadow `/nix/store` and orphan the infra `PATH` (`config.Env` points at
 the profile under `/nix/store`).
 
 `dev/devcontainer` routes automatically: an overlay whose
-`compose.override.yml` mounts `:/nix` builds on the classic `Dockerfile`;
-everything else builds on this base. Escape hatches:
+`compose.override.yml` mounts `:/nix` (short or long compose syntax) builds
+on the classic `Dockerfile`, and so does one that overrides classic-only
+build args (`BASE_IMAGE`, `NODE_MAJOR`, `CLAUDE_CODE_VERSION`,
+`JUST_VERSION`, `SOPS_VERSION`, and their checksum companions) — this compose
+file is appended last and would silently clobber them otherwise. Everything
+else builds on this base. Escape hatches (`false`/`no`/`off` and
+`true`/`yes`/`on` work too; anything else errors):
 
     DEV_NIX_BASE=0 dev/devcontainer up    # force the classic Dockerfile
     DEV_NIX_BASE=1 dev/devcontainer up    # force the Nix base (refuses seed overlays)

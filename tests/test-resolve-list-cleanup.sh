@@ -107,6 +107,49 @@ printf 'services:\n  app:\n    volumes:\n      - nix:/nix\n' > "$SEED_OVERLAY/co
 out="$(cd "$MAIN_TREE" && env -u DEV_NIX_BASE DEV_PROJECT_DIR="$SEED_OVERLAY" "$DC" resolve 2>&1)"
 assert_contains "seed overlay routes to the classic Dockerfile" "BASE=classic (overlay mounts a nix seed volume)" "$out"
 
+# false-friendly spellings of "off" must not force the base ON, and an
+# unrecognized value must error rather than silently picking a side
+out="$(cd "$MAIN_TREE" && DEV_NIX_BASE=false "$DC" resolve 2>&1)"
+assert_contains "DEV_NIX_BASE=false forces classic too" "BASE=classic (forced by DEV_NIX_BASE=false)" "$out"
+if out="$(cd "$MAIN_TREE" && DEV_NIX_BASE=bogus "$DC" resolve 2>&1)"; then rcU=0; else rcU=$?; fi
+assert_eq "unrecognized DEV_NIX_BASE exits nonzero" "1" "$rcU"
+assert_contains "unrecognized DEV_NIX_BASE names the value" "unrecognized DEV_NIX_BASE='bogus'" "$out"
+
+# compose long-syntax seed volumes must be detected too
+LONG_SEED_OVERLAY="$TMPDIR_ROOT/long-seed-overlay"
+mkdir -p "$LONG_SEED_OVERLAY"
+printf 'services:\n  app:\n    volumes:\n      - type: volume\n        source: nix\n        target: /nix\n' \
+    > "$LONG_SEED_OVERLAY/compose.override.yml"
+out="$(cd "$MAIN_TREE" && env -u DEV_NIX_BASE DEV_PROJECT_DIR="$LONG_SEED_OVERLAY" "$DC" resolve 2>&1)"
+assert_contains "long-syntax seed volume routes to classic" "BASE=classic (overlay mounts a nix seed volume)" "$out"
+
+# a target merely PREFIXED with /nix (e.g. /nixcache) is not a seed volume,
+# and comments mentioning :/nix don't count
+NEAR_MISS_OVERLAY="$TMPDIR_ROOT/near-miss-overlay"
+mkdir -p "$NEAR_MISS_OVERLAY"
+printf '# not a seed mount: this overlay has nothing at :/nix\nservices:\n  app:\n    volumes:\n      - cache:/nixcache\n' \
+    > "$NEAR_MISS_OVERLAY/compose.override.yml"
+out="$(cd "$MAIN_TREE" && env -u DEV_NIX_BASE DEV_PROJECT_DIR="$NEAR_MISS_OVERLAY" "$DC" resolve 2>&1)"
+assert_contains "/nixcache mount still routes to the nix base" "BASE=nix-base (default" "$out"
+
+# an overlay overriding classic-only Dockerfile build args keeps the classic
+# base — the nix-base compose would silently clobber them otherwise
+ARGS_OVERLAY="$TMPDIR_ROOT/classic-args-overlay"
+mkdir -p "$ARGS_OVERLAY"
+printf 'services:\n  app:\n    build:\n      args:\n        BASE_IMAGE: mcr.microsoft.com/devcontainers/base:ubuntu\n' \
+    > "$ARGS_OVERLAY/compose.override.yml"
+out="$(cd "$MAIN_TREE" && env -u DEV_NIX_BASE DEV_PROJECT_DIR="$ARGS_OVERLAY" "$DC" resolve 2>&1)"
+assert_contains "classic-args overlay routes to classic" "BASE=classic (overlay overrides classic Dockerfile build args)" "$out"
+
+# EXTRA_PATH is honored by both Dockerfiles, so it must NOT trip the
+# classic-args routing (regression guard for the arg list)
+EXTRA_OVERLAY="$TMPDIR_ROOT/extra-path-overlay"
+mkdir -p "$EXTRA_OVERLAY"
+printf 'services:\n  app:\n    build:\n      args:\n        EXTRA_PATH: "/workspaces/src/.venv/bin"\n' \
+    > "$EXTRA_OVERLAY/compose.override.yml"
+out="$(cd "$MAIN_TREE" && env -u DEV_NIX_BASE DEV_PROJECT_DIR="$EXTRA_OVERLAY" "$DC" resolve 2>&1)"
+assert_contains "EXTRA_PATH-only overlay stays on the nix base" "BASE=nix-base (default" "$out"
+
 # ---------- test: devcontainer resolve with project overlay ----------
 echo "--- devcontainer resolve (project overlay match) ---"
 mkdir -p "$DEV_BASE/projects/fakerepo"

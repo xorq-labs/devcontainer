@@ -115,22 +115,62 @@ COMPOSE_OVERRIDE="$DEV_PROJECT_DIR/compose.override.yml"
 
 # /nix delivery routing. An overlay that mounts a nix seed volume (`:/nix`)
 # drives its own writable, vscode-owned store and builds on the classic root
-# Dockerfile; every other overlay defaults to the CI-published Nix base
-# (pulled by pinned digest, per-layer deduped — see nix/base/). The two are
-# alternative /nix delivery strategies, not layers: the seed mount would
-# shadow the baked /nix/store and orphan its infra PATH.
-#   DEV_NIX_BASE=0   force the classic Dockerfile for any overlay
-#   DEV_NIX_BASE=1   force the Nix base (still refuses seed overlays at up)
-#   unset or empty   route by the overlay's compose.override.yml
-if [ "${DEV_NIX_BASE:-}" = "0" ]; then
-    DEV_USE_NIX_BASE=false
-elif [ -n "${DEV_NIX_BASE:-}" ]; then
-    DEV_USE_NIX_BASE=true
-elif [ -f "$COMPOSE_OVERRIDE" ] && grep -q ':/nix' "$COMPOSE_OVERRIDE"; then
-    DEV_USE_NIX_BASE=false
-else
-    DEV_USE_NIX_BASE=true
-fi
+# Dockerfile; so does an overlay that overrides classic-only Dockerfile build
+# args (BASE_IMAGE, tool pins) — the nix-base compose is appended last and
+# would silently clobber them. Every other overlay defaults to the
+# CI-published Nix base (pulled by pinned digest, per-layer deduped — see
+# nix/base/). The base and the seed volume are alternative /nix delivery
+# strategies, not layers: the seed mount would shadow the baked /nix/store
+# and orphan its infra PATH.
+#   DEV_NIX_BASE=0|false|no|off   force the classic Dockerfile for any overlay
+#   DEV_NIX_BASE=1|true|yes|on    force the Nix base (still refuses seed overlays at up)
+#   unset or empty                route by the overlay's compose.override.yml
+
+# Detection helpers, shared with ensure_nix_base(). Comment lines are
+# stripped first so prose mentioning the patterns can't trigger them. The
+# seed pattern anchors the mount target: short syntax `…:/nix` (optionally
+# followed by options/quotes, but not `:/nixcache`) or long syntax
+# `target: /nix`.
+overlay_has_seed_volume() {
+    [ -f "$COMPOSE_OVERRIDE" ] || return 1
+    grep -vE '^[[:space:]]*#' "$COMPOSE_OVERRIDE" \
+        | grep -qE ':/nix(:|"|[[:space:]]|$)|target:[[:space:]]*"?/nix"?[[:space:]]*$'
+}
+# Build args only the classic root Dockerfile declares and honors. Keep in
+# sync with the ARG list there (minus the args Dockerfile.nix-default also
+# honors: USER_UID/USER_GID/HOST_USER/DEV_CONTAINER_WORKSPACE/EXTRA_PATH).
+overlay_sets_classic_args() {
+    [ -f "$COMPOSE_OVERRIDE" ] || return 1
+    grep -vE '^[[:space:]]*#' "$COMPOSE_OVERRIDE" \
+        | grep -qE '^[[:space:]]*(BASE_IMAGE|NODE_MAJOR|NODESOURCE_SHA256|JUST_VERSION|JUST_SHA256|SOPS_VERSION|SOPS_SHA256|CLAUDE_CODE_VERSION)[[:space:]]*:'
+}
+
+case "${DEV_NIX_BASE:-}" in
+    '')
+        if overlay_has_seed_volume; then
+            DEV_USE_NIX_BASE=false
+            DEV_BASE_REASON="overlay mounts a nix seed volume"
+        elif overlay_sets_classic_args; then
+            DEV_USE_NIX_BASE=false
+            DEV_BASE_REASON="overlay overrides classic Dockerfile build args"
+        else
+            DEV_USE_NIX_BASE=true
+            DEV_BASE_REASON="default; DEV_NIX_BASE=0 for the classic Dockerfile"
+        fi
+        ;;
+    0|false|no|off)
+        DEV_USE_NIX_BASE=false
+        DEV_BASE_REASON="forced by DEV_NIX_BASE=$DEV_NIX_BASE"
+        ;;
+    1|true|yes|on)
+        DEV_USE_NIX_BASE=true
+        DEV_BASE_REASON="forced by DEV_NIX_BASE=$DEV_NIX_BASE"
+        ;;
+    *)
+        echo "error: unrecognized DEV_NIX_BASE='$DEV_NIX_BASE' (use 0/false/no/off, 1/true/yes/on, or unset to route automatically)" >&2
+        exit 1
+        ;;
+esac
 
 # not configurable — compose, Dockerfile, and setup-claude all assume this path
 DEV_CONTAINER_WORKSPACE="/workspaces/src"
@@ -296,8 +336,8 @@ ensure_nix_base() {
         echo "error: DEV_NIX_BASE set but $nixcompose is missing" >&2
         return 1
     }
-    if [ -f "$COMPOSE_OVERRIDE" ] && grep -q ':/nix' "$COMPOSE_OVERRIDE"; then
-        echo "error: DEV_NIX_BASE=1 forces the Nix base, but this overlay mounts a nix seed volume." >&2
+    if overlay_has_seed_volume; then
+        echo "error: DEV_NIX_BASE=${DEV_NIX_BASE:-1} forces the Nix base, but this overlay mounts a nix seed volume." >&2
         echo "       $COMPOSE_OVERRIDE mounts :/nix, which would shadow the Nix base's baked" >&2
         echo "       /nix/store and orphan the infra PATH. Unset DEV_NIX_BASE — routing picks" >&2
         echo "       the classic Dockerfile for seed overlays automatically." >&2
@@ -368,6 +408,7 @@ config_files() {
             "$DEV_BASE_DIR/nix/base/compose.nix-base.yml" \
             "$DEV_BASE_DIR/nix/base/Dockerfile.nix-default" \
             "$DEV_BASE_DIR/nix/base/flake.nix" \
+            "$DEV_BASE_DIR/nix/base/flake.lock" \
             "$DEV_BASE_DIR/nix/base/pkgs/claude-code.nix"; do
             [ -f "$nf" ] && printf '%s\n' "$nf"
         done
@@ -573,6 +614,11 @@ disconnect_stale_networks() {
 # Run `dc up --build -d`, streaming output while also capturing it to detect
 # known failure patterns (e.g. Docker network exhaustion).
 dc_up() {
+    # The base image is only needed when we actually build. Pulling here —
+    # not up in ensure_up — keeps `up`/`exec`/`claude` against an
+    # already-running container from downloading ~0.76 GB it won't use (or
+    # hard-failing on an unreachable registry it doesn't need).
+    $DEV_USE_NIX_BASE && { ensure_nix_base || return 1; }
     local _up_tmp _up_rc
     _up_tmp=$(mktemp)
     # shellcheck disable=SC2064
@@ -614,7 +660,6 @@ ensure_up() {
         setup_claude_credentials
         install_hooks
         ensure_external_volumes
-        $DEV_USE_NIX_BASE && { ensure_nix_base || exit 1; }
         if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
             (cd "$DEV_WORKSPACE" && "$DEV_BASE_DIR/dev/setup-worktree")
             printf 'copy\t%s\n' ".envrcs/.resolved-env" >> "$DEV_WORKSPACE/.envrcs/.worktree-manifest"
@@ -956,17 +1001,9 @@ case "${1:-up}" in
         echo "  DANGEROUSLY_SKIP_PERMISSIONS=${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-<unset>}"
         echo "  CONTAINER_NAME=$DEV_CONTAINER_NAME"
         if $DEV_USE_NIX_BASE; then
-            if [ -n "${DEV_NIX_BASE:-}" ]; then
-                echo "  BASE=nix-base (forced by DEV_NIX_BASE=${DEV_NIX_BASE})"
-            else
-                echo "  BASE=nix-base (default; DEV_NIX_BASE=0 for the classic Dockerfile)"
-            fi
+            echo "  BASE=nix-base ($DEV_BASE_REASON)"
         else
-            if [ "${DEV_NIX_BASE:-}" = "0" ]; then
-                echo "  BASE=classic (forced by DEV_NIX_BASE=0)"
-            else
-                echo "  BASE=classic (overlay mounts a nix seed volume)"
-            fi
+            echo "  BASE=classic ($DEV_BASE_REASON)"
         fi
         if [ -f "$_project_env" ]; then
             echo ""

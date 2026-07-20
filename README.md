@@ -93,7 +93,7 @@ devcontainer up
 
 Project-specific configuration lives in a **project overlay** — either `projects/<name>/` in the devcontainer repo (shipped defaults) or `.devcontainer/` in the consumer workspace (local override). Everything outside the overlay (the `Dockerfile`, `nix/base/`, `docker-compose.yml`, `dev/devcontainer`, `lib/`, etc.) is generic infrastructure. The overlay is resolved automatically: workspace `.devcontainer/` takes precedence over `projects/<name>/`, which falls back to `defaults/`. Per-project `devcontainer.json` lives alongside the overlay because the spec doesn't support sub-file includes (see step 5 below).
 
-The overlay also selects the container's **base image**: an overlay whose `compose.override.yml` mounts a nix seed volume (`:/nix`, from `init --nix`) builds on the classic root `Dockerfile`; every other overlay builds on the pulled Nix base via `nix/base/Dockerfile.nix-default`. The two are alternative `/nix` delivery strategies — see `nix/base/README.md` for the model table and escape hatches.
+The overlay also selects the container's **base image**: an overlay whose `compose.override.yml` mounts a nix seed volume (`:/nix`, from `init --nix`) or overrides classic-only Dockerfile build args (`BASE_IMAGE`, tool pins) builds on the classic root `Dockerfile`; every other overlay builds on the pulled Nix base via `nix/base/Dockerfile.nix-default`. The two are alternative `/nix` delivery strategies — see `nix/base/README.md` for the model table and escape hatches.
 
 | File | Role |
 |---|---|

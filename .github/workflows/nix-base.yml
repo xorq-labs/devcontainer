@@ -17,16 +17,36 @@ name: Nix Base
 # NOTE: ubuntu-24.04-arm runners are free for PUBLIC repos only. If this repo
 # ever goes private, the arm leg needs a paid larger-runner plan (or the
 # matrix drops to amd64 and arm64 builds move elsewhere).
+#
+# If one matrix leg fails after the other already pushed, its
+# sha-<short>-<arch> tag is left orphaned on ghcr (the manifest job skips).
+# Harmless — consumers only ever pin manifest-list digests — delete stray
+# tags by hand if they bother you.
+#
+# Paths beyond nix/base/** are the tail-build inputs (Dockerfile.nix-default
+# COPYs them): a change there must prove the default consumer image still
+# builds. A push-triggered republish of an unchanged base is a no-op — the
+# build is reproducible, so digests (and the pin) don't move.
 
 on:
   push:
     branches: [main]
     paths:
       - nix/base/**
+      - defaults/**
+      - lib/nix-seed.sh
+      - lib/git.sh
+      - setup-claude.py
+      - audit-hook
       - .github/workflows/nix-base.yml
   pull_request:
     paths:
       - nix/base/**
+      - defaults/**
+      - lib/nix-seed.sh
+      - lib/git.sh
+      - setup-claude.py
+      - audit-hook
       - .github/workflows/nix-base.yml
   workflow_dispatch:
 

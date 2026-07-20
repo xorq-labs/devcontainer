@@ -1,13 +1,13 @@
-# Opt-in override: build the devcontainer on the Nix hybrid base
-# (devcontainer-nix-base, from flake.nix) via Dockerfile.nix-default, instead of
-# the root Dockerfile's linear MS-base build. Activated with:
+# Compose override for the Nix hybrid base (devcontainer-nix-base, from
+# flake.nix) via Dockerfile.nix-default. dev/devcontainer appends this file
+# automatically when routing selects the Nix base — the DEFAULT for overlays
+# that neither mount a nix seed volume nor override classic-only Dockerfile
+# build args. DEV_NIX_BASE=0 forces the classic root Dockerfile instead;
+# DEV_NIX_BASE=1 forces this base.
 #
-#   DEV_NIX_BASE=1 dev/devcontainer up
-#
-# which appends this file to the compose stack (see dev/devcontainer `dc()`).
-# ensure_nix_base() makes the base image present first: already local -> done,
-# else `docker pull` of the pinned ref below. Building locally stays the
-# documented fallback for hosts that can't reach the registry:
+# ensure_nix_base() makes the base image present before a build: already
+# local -> done, else `docker pull` of the pinned ref below. Building locally
+# stays the documented fallback for hosts that can't reach the registry:
 #
 #   (cd nix/base && nix build .#defaultBase && ./result | docker load)
 #   DEV_NIX_BASE_IMAGE=devcontainer-nix-base:latest DEV_NIX_BASE=1 dev/devcontainer up
