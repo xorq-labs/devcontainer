@@ -32,6 +32,17 @@ NIX_USER="${NIX_USER:-vscode}"
 # build time (root, during docker build): single-user install, tar a seed,
 # stamp its sha, and drop the live /nix tree.
 nix_build_install() {
+    # If the base image already ships a populated Nix store (e.g. building on the
+    # streamLayeredImage Nix base, which bakes /nix into image layers), Nix is
+    # already delivered: the build-time install + seed-volume dance is redundant,
+    # and the single-user installer — run as $NIX_USER — can't even write into
+    # the base's root-owned /nix/store. Skip it; nix_seed_volume likewise no-ops
+    # at runtime when no seed tarball was produced. (NIX_SEED_ROOT is empty at
+    # build time, so this checks the real /nix/store; it's set only under test.)
+    if [ -d "${NIX_SEED_ROOT}/nix/store" ] && [ -n "$(ls -A "${NIX_SEED_ROOT}/nix/store" 2>/dev/null)" ]; then
+        echo "nix-seed: /nix/store already populated by the base image; skipping build-time Nix install."
+        return 0
+    fi
     local installer=/tmp/nix-install.sh
     # Clean up the installer on any exit path (e.g. a failed install mid-way).
     trap 'rm -f "$installer"' RETURN
@@ -73,7 +84,12 @@ nix_write_conf() {
 # sandbox), then source the profile.
 nix_seed_volume() {
     local nix="${NIX_SEED_ROOT}/nix"
-    if [ ! -d "$nix/store" ]; then
+    if [ ! -f "$NIX_SEED_TAR" ]; then
+        # No seed tarball: nix_build_install skipped because the base image ships
+        # /nix directly (the Nix base). Nothing to unpack — fall through to the
+        # profile/conf setup below so nix still works off the baked store.
+        echo "nix-seed: no seed tarball at $NIX_SEED_TAR; assuming the base image provides /nix — skipping volume seed."
+    elif [ ! -d "$nix/store" ]; then
         echo "Seeding Nix store into volume..."
         tar xf "$NIX_SEED_TAR" -C "${NIX_SEED_ROOT:-/}"
         # Stamp only after extraction: a partial `tar xf` aborts here under
