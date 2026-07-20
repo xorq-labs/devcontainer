@@ -1,6 +1,6 @@
 # Thin invariant layer over the Nix-built base (devcontainer-nix-base:latest).
 #
-# Everything expensive (node, gh, sops, socat, just, claude-code) lives in the
+# Everything expensive (gh, sops, socat, just, claude-code) lives in the
 # Nix base's content-addressed layers. This Dockerfile holds only the bits that
 # must stay imperative and match the root Dockerfile's tail:
 #   - per-user UID/GID remap (can't be baked into a shared derivation without
@@ -26,6 +26,12 @@ FROM ${BASE_IMAGE}
 ARG USER_UID=1000
 ARG USER_GID=1000
 ARG HOST_USER=
+# Declared for parity with the root Dockerfile: docker-compose.yml passes it
+# as a required build arg, and an undeclared arg draws a warning on every
+# build. The runtime working dir comes from compose's working_dir (and the
+# base's baked WorkingDir), not from this arg.
+ARG DEV_CONTAINER_WORKSPACE
+ARG EXTRA_PATH=
 
 # The chown is guarded, unlike the root Dockerfile's: the Nix base already
 # ships /home/vscode owned 1000:1000, and an unconditional chown -R updates
@@ -56,3 +62,9 @@ RUN HOST_USER="$(basename "$HOST_USER")" && \
     if [ -n "$HOST_USER" ] && [ "$HOST_USER" != "vscode" ]; then \
         ln -s /home/vscode "/home/$HOST_USER"; \
     fi
+
+# Same EXTRA_PATH contract as the root Dockerfile (overlays prepend e.g. a
+# per-user profile dir). ${PATH} here is the Nix base's config Env PATH — the
+# /nix/store infra profile plus the MS base's dirs — so the prepend composes
+# with it rather than replacing it.
+ENV PATH="${EXTRA_PATH}${EXTRA_PATH:+:}${PATH}"
