@@ -11,17 +11,25 @@ set -euo pipefail
 #
 # Add --nix to any of the above to layer a Nix store (build-time install,
 # runtime-volume-backed) onto the overlay.
+#
+# --nix refuses to overwrite files that have diverged from the defaults baseline
+# (i.e. a customized overlay like the shipped `devcontainer` one) — pass --force
+# to overwrite anyway, or --dry-run to preview every action without writing.
 
 base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$base/lib/git.sh"
 
 local_mode=false
 nix_mode=false
+force=false
+dry_run=false
 project_name=""
 for arg in "$@"; do
     case "$arg" in
         --local) local_mode=true ;;
         --nix) nix_mode=true ;;
+        --force) force=true ;;
+        --dry-run) dry_run=true ;;
         -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
         *) project_name="$arg" ;;
     esac
@@ -30,7 +38,7 @@ done
 if [ -z "$project_name" ]; then
     main_tree="$(dev_main_tree)" || {
         echo "error: not in a git repo and no project name given" >&2
-        echo "usage: devcontainer init [--local] [--nix] [project-name]" >&2
+        echo "usage: devcontainer init [--local] [--nix] [--force] [--dry-run] [project-name]" >&2
         exit 1
     }
     project_name="$(basename "$main_tree")"
@@ -57,7 +65,7 @@ else
     label="projects/$project_name/"
 fi
 
-mkdir -p "$target"
+$dry_run || mkdir -p "$target"
 
 echo "Creating project overlay: $label"
 
@@ -66,8 +74,12 @@ for f in install-system.sh setup-env.sh compose.override.yml devcontainer.json \
          external-volumes.txt worktree-symlinks.txt worktree-copies.txt \
          audit-prefixes.txt host-mounts.txt project.env.example; do
     if [ ! -f "$target/$f" ]; then
-        cp "$source_dir/$f" "$target/$f"
-        echo "  created $f"
+        if $dry_run; then
+            echo "  would create $f"
+        else
+            cp "$source_dir/$f" "$target/$f"
+            echo "  created $f"
+        fi
         copied=$((copied + 1))
     else
         echo "  exists  $f (skipped)"
@@ -75,7 +87,11 @@ for f in install-system.sh setup-env.sh compose.override.yml devcontainer.json \
 done
 
 echo ""
-echo "Created $copied file(s) in $target/"
+if $dry_run; then
+    echo "Would create $copied file(s) in $target/"
+else
+    echo "Created $copied file(s) in $target/"
+fi
 
 # --nix layers the nix fragment (install-system.sh, setup-env.sh,
 # compose.override.yml, external-volumes.txt) over the defaults copy above,
@@ -85,16 +101,73 @@ echo "Created $copied file(s) in $target/"
 # generated scripts source — no per-overlay copy of it.
 if $nix_mode; then
     nix_frag="$base/templates/nix"
+    nix_files=(install-system.sh setup-env.sh compose.override.yml external-volumes.txt)
+
+    # --nix overwrites these four with the fragment. That's safe only while the
+    # target is still pristine scaffolding: absent, already the fragment
+    # (idempotent re-run), or byte-identical to the defaults baseline it was
+    # copied from. A file that has diverged from defaults is a customized overlay
+    # (e.g. the shipped `devcontainer` overlay's docker-socket compose.override
+    # and linter install-system.sh) — silently overwriting it is data loss, so
+    # classify first and refuse the customized ones unless --force.
+    apply_files=()
+    skip_files=()
+    conflict_files=()
+    for f in "${nix_files[@]}"; do
+        if [ ! -f "$target/$f" ]; then
+            apply_files+=("$f")
+        elif cmp -s "$target/$f" "$nix_frag/$f"; then
+            skip_files+=("$f")               # already the fragment
+        elif cmp -s "$target/$f" "$source_dir/$f"; then
+            apply_files+=("$f")              # pristine defaults copy
+        else
+            conflict_files+=("$f")           # customized — needs --force
+        fi
+    done
+
+    # Hard stop before any write: a real (non-dry-run) run that would clobber
+    # customized files without --force fails wholesale rather than leaving the
+    # overlay half-converted.
+    if [ ${#conflict_files[@]} -gt 0 ] && ! $force && ! $dry_run; then
+        {
+            echo ""
+            echo "error: --nix would overwrite customized file(s) in $label:"
+            for f in "${conflict_files[@]}"; do
+                echo "  - $f (differs from the defaults baseline)"
+            done
+            echo ""
+            echo "--nix layers onto freshly-scaffolded files; these have diverged from"
+            echo "defaults, so overwriting them would discard those edits. Preview with"
+            echo "--dry-run, or re-run with --force to overwrite anyway."
+        } >&2
+        exit 1
+    fi
+
+    to_apply=("${apply_files[@]}")
+    $force && to_apply+=("${conflict_files[@]}")
+
     echo ""
     echo "Applying --nix fragment:"
-    # These four are always applied (that's the point of --nix), so an existing
-    # target is overwritten rather than skipped like the base loop — say so
-    # honestly instead of reporting every file as freshly written.
-    for f in install-system.sh setup-env.sh compose.override.yml external-volumes.txt; do
-        [ -f "$target/$f" ] && suffix=" (overwrote)" || suffix=""
-        cp "$nix_frag/$f" "$target/$f"
-        echo "  nix     $f$suffix"
+    for f in "${skip_files[@]}"; do
+        echo "  nix     $f (already applied, skipped)"
     done
+    for f in "${to_apply[@]}"; do
+        if $dry_run; then
+            [ -f "$target/$f" ] && suffix=" (would overwrite)" || suffix=""
+            echo "  would apply $f$suffix"
+        else
+            [ -f "$target/$f" ] && suffix=" (overwrote)" || suffix=""
+            cp "$nix_frag/$f" "$target/$f"
+            echo "  nix     $f$suffix"
+        fi
+    done
+    # Only reachable under --dry-run (a real conflicting run exited above).
+    if ! $force; then
+        for f in "${conflict_files[@]}"; do
+            echo "  nix     $f (would refuse — customized; use --force)"
+        done
+    fi
+
     echo ""
     echo "Nix is a project-scoped shared volume (\${DEV_PROJECT_NAME}-nix), reused by"
     echo "every worktree; remove it later with 'devcontainer clean-caches'."
