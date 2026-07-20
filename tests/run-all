@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Run every test suite under tests/ (the same entry point CI uses — see
+# .github/workflows/test.yml). Suites are tests/*.sh; shared helpers live in
+# tests/lib/ so this glob doesn't execute them as suites.
+set -euo pipefail
+
+cd "$(dirname "$(readlink -f "$0")")"
+
+shopt -s nullglob
+suites=(*.sh)
+if [ "${#suites[@]}" -eq 0 ]; then
+    echo "no test scripts found under tests/" >&2
+    exit 1
+fi
+
+rc=0
+for t in "${suites[@]}"; do
+    echo "== $t =="
+    bash "$t" || rc=1
+done
+exit "$rc"

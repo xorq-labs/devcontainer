@@ -11,31 +11,15 @@
 # the one in dev/devcontainer.
 set -euo pipefail
 
-PASS=0 FAIL=0
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
-assert_eq() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected: $expected"
-        echo "    actual:   $actual"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
+# The harness has no regex asserter; keep a thin one wired to its counters.
 assert_match() {
     local label="$1" regex="$2" value="$3"
     if [[ "$value" =~ $regex ]]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
+        _pass "$label"
     else
-        echo "  FAIL: $label"
-        echo "    expected to match: $regex"
-        echo "    actual:            $value"
-        FAIL=$((FAIL + 1))
+        _fail "$label" "expected to match: $regex" "actual:            $value"
     fi
 }
 
@@ -59,13 +43,11 @@ assert_eq "exactly one interpolation in the compose file" \
 dockerfile="$(grep -oP '^\s*dockerfile:\s*\K\S+' "$nixcompose" || true)"
 assert_eq "compose points at the nix-base tail Dockerfile" \
     "nix/base/Dockerfile.nix-default" "$dockerfile"
-assert_eq "the tail Dockerfile exists at that path" \
-    "true" "$([ -f "$DEV_BASE/$dockerfile" ] && echo true || echo false)"
+assert_true "the tail Dockerfile exists at that path" \
+    test -f "$DEV_BASE/$dockerfile"
 
 # config_files() hashes the lock for local-build staleness; it must exist.
-assert_eq "flake.lock exists (hashed by config_files)" \
-    "true" "$([ -f "$DEV_BASE/nix/base/flake.lock" ] && echo true || echo false)"
+assert_true "flake.lock exists (hashed by config_files)" \
+    test -f "$DEV_BASE/nix/base/flake.lock"
 
-echo ""
-echo "$PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ]
+finish

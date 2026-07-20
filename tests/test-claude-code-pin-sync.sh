@@ -13,29 +13,16 @@
 # would break the tool's sync fails loudly here too (empty match -> fail).
 set -euo pipefail
 
-PASS=0 FAIL=0
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
-assert_eq() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected: $expected"
-        echo "    actual:   $actual"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
+# The harness has no bare non-empty asserter; this guard leans on it to prove
+# the grep anchors still match (an empty capture means the anchor missed).
 assert_nonempty() {
     local label="$1" value="$2"
     if [ -n "$value" ]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
+        _pass "$label"
     else
-        echo "  FAIL: $label (empty — anchor missed? file moved?)"
-        FAIL=$((FAIL + 1))
+        _fail "$label" "empty — anchor missed? file moved?"
     fi
 }
 
@@ -57,5 +44,4 @@ assert_eq "Dockerfile and Nix pin agree" "$docker_version" "$nix_version"
 
 echo ""
 echo "Dockerfile: $docker_version    Nix pin: $nix_version"
-echo "$PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ]
+finish
