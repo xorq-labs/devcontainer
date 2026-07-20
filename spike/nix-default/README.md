@@ -159,6 +159,83 @@ base: the seed volume and the baked base are alternative ways to deliver `/nix`,
 not layers. Everything above `DEV_NIX_BASE` (build args, contexts, the
 `Dockerfile.nix-default` tail) is unchanged; the flag only reroutes the base.
 
+## Building on macOS / arm (assessment)
+
+Two independent facts shape how a Mac (or any arm) user gets this base.
+
+**1. The flake is `x86_64-linux`-only.** `system` is hardcoded and the claude-code
+binary is fetched from the `-linux-x64` npm package. Multi-arch is mechanical but
+not free: wrap outputs in a systems list (`aarch64-linux` + `x86_64-linux`), add
+the `-linux-arm64` claude-code tarball + its `hash`, and re-pin the MS base
+*per arch* — `pullImage` currently pins the amd64 sub-manifest (`arch = "amd64"`
+plus a `sha256` of that flattened image); arm64 needs the arm64 sub-manifest
+digest and its own `sha256`. Roughly a day of re-pinning.
+
+**2. Nix cannot natively build a *Linux* image on macOS.** `nix build .#defaultBase`
+emits a Linux image, but macOS Nix builds `*-darwin` by default; Linux
+derivations need a **Linux builder**. Three routes:
+
+- **nix-darwin `linux-builder`** — a NixOS VM as a remote `aarch64-linux` builder.
+  The "official" answer, but requires running nix-darwin, a multi-GB VM, and
+  per-machine setup.
+- **Build inside Docker's existing Linux VM** *(recommended escape hatch)* —
+  Docker Desktop already runs a Linux VM, so a `nixos/nix` container can do the
+  build with no nix-darwin and no separate VM. Correctness risk is low (see the
+  caveats below); it is *not* a one-liner.
+- **Remote / CI builder** — not really "build for themselves."
+
+### The docker-in-VM recipe and its caveats
+
+```bash
+# in Docker Desktop's Linux VM; nixstore is a persistent named volume for /nix
+docker run --rm -v "$PWD:/work" -v nixstore:/nix nixos/nix \
+  sh -c 'cd /work && nix build --option sandbox false \
+           --extra-experimental-features "nix-command flakes" .#defaultBase \
+         && ./result > /work/image.tar'
+docker load < image.tar      # from the host CLI (same VM)
+```
+
+Caveats, in order of friction:
+
+1. **No `docker load` inside the container** — no daemon/socket there. Build →
+   write `./result > image.tar` to a bind mount → `docker load` from the host CLI.
+   A two-step, not a single pipe.
+2. **Sandbox must be off** — `--option sandbox false` (the same setting the
+   devcontainer's nix.conf already carries); container builds fail without it.
+3. **Cold `/nix` is a large first run** — a fresh container has an empty store and
+   pulls the MS base + evaluates nixpkgs + builds the infra closure (GB-scale).
+   Use a **persistent named volume for `/nix`** or every run re-downloads.
+4. **Not independent of arch** — on Apple Silicon this only builds *natively* if
+   the flake supports `aarch64-linux`; otherwise it builds `x86_64-linux` under
+   QEMU (slow, occasionally flaky).
+
+Verified along the way: the flake builds cleanly **from a bare non-git directory**,
+so a plain Docker bind mount is fine — flake git-purity is a non-issue here.
+
+### Verdict: build locally is a fallback; pull is the primary path
+
+Local Mac build is *possible and low-risk* once the four caveats are scripted, but
+it **rebuilds instead of pulls** — throwing away the dedup win that is the whole
+point (see "What the layering actually buys") while keeping all the setup friction.
+The high-value path is **CI builds a multi-arch base once and pushes it; every
+machine `docker pull`s it** — and a claude-code bump then ships only the changed
+layer, so consumers pull one blob, not the image.
+
+This does **not** put CI in the inner dev loop, because **the base is expected to
+change rarely.** It carries *shared infra only* (node/gh/socat/just/sops/claude-code)
+— no project dependencies — so it only changes on a shared-infra event: a
+claude-code bump (the most frequent, and the case layering optimizes) or adding a
+new base tool. Neither is part of anyone's edit-run loop. Changing a project's
+deps touches the local overlay (`Dockerfile.nix-default` + `install-system.sh`,
+built on `up`) or the workspace (`uv sync`), never the base and never CI.
+
+Because base changes are infrequent *and* shared, amortizing one CI build across
+every consumer's `docker pull` is a clear win — and a claude-code bump ships only
+the changed layer, so consumers pull one blob, not the image. And even for a base
+change you are never *forced* onto CI: `ensure_nix_base()` can build it locally
+(cheap on Linux via Nix's content-addressed cache). The CI-built image is a
+convenience and the only sane arm/Mac path, not a gate on anyone's work.
+
 ## Open decisions this spike surfaces
 
 - **`config` replaces the base config** — `streamLayeredImage`'s `config` does
@@ -173,18 +250,29 @@ not layers. Everything above `DEV_NIX_BASE` (build args, contexts, the
 - **Host Nix requirement** — building this needs Nix on the builder; for the
   lowest-barrier *default* path that's an accessibility regression to weigh
   before shipping (fine for a spike).
-- **`nix` in the base** — the infra list includes `pkgs.nix` so the baked base
-  can run `nix` in-container (not just be built by it). Its closure is large
-  (aws-sdk-cpp, aws-c-*, libgit2, boehm-gc, ...): it grew the base from 34 -> 73
-  store paths and forced `maxLayers` 64 -> 110 to keep claude-code in its own
-  layer (~+50 MB image, still one changed blob per bump). Drop it if in-container
-  `nix` isn't needed and the size/layer cost isn't worth it.
+- **`nix` in the base — resolved: NOT shipped.** An earlier revision added
+  `pkgs.nix` to the infra list so the baked base could run `nix` in-container;
+  it was dropped (its closure — aws-sdk-cpp, aws-c-*, libgit2, boehm-gc, ... —
+  grew the base 34 -> 73 store paths and forced `maxLayers` 64 -> 110). The
+  deciding reason wasn't size: `streamLayeredImage` bakes `/nix/store`
+  **root-owned**, so `nix profile install` as the `vscode` user hits
+  permission-denied without an extra chown or a multi-user daemon — the CLI
+  couldn't self-serve anyway. The seed-volume overlay (vscode-owned `/nix`)
+  already provides sudo-free self-service; the baked base does not. If in-container
+  `nix` is ever wanted here, it needs a store-ownership fix, not just the package.
 - **arch** — x86_64 only here (the claude-code binary is fetched per-platform);
   wrap outputs in a systems list and select the matching platform package for
-  arm64 parity.
+  arm64 parity. See "Building on macOS / arm" below for why this is really a
+  *distribution* decision (publish a multi-arch base), not just a flake tweak.
 - **node may be redundant** — claude-code 2.x is a native binary and no longer
   needs node. The spike keeps `nodejs_22` for parity with the current
   Dockerfile, but both could likely drop it if nothing else needs npm.
 - **version-pin coupling** — `pkgs/claude-code.nix` duplicates the Dockerfile's
-  `CLAUDE_CODE_VERSION`; `dev/bump-claude-code` keeps them in sync. If the spike
-  graduates, fold the pin into a single shared source instead.
+  `CLAUDE_CODE_VERSION`; `dev/bump-claude-code` keeps them in sync, and
+  `tests/test-claude-code-pin-sync.sh` guards that the two committed files agree
+  (so a hand edit that skips the bump tool fails CI). Folding the pin into a
+  single shared source is tempting but a net loss: the tarball `hash` is
+  version-coupled and must stay in `claude-code.nix`, so a bare version file
+  would only separate the version from its own hash and strip the Dockerfile's
+  self-contained default (a bare `docker build` would silently install `@latest`).
+  The duplicate-plus-guard is the more defensible design.
