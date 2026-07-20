@@ -56,6 +56,9 @@ Commands:
                                         pull a host session started after the container was up)
   fix-credentials                     repair credentials symlink in a running container
                                         (needed after upgrading from pre-shared-credentials build)
+  set-credentials <file>|-            give this container a private token from <file> or stdin
+                                        (e.g. claude-profile export-to <p> - | devcontainer set-credentials -);
+                                        revert with fix-credentials
   fix-network                         disconnect stale networks from a stopped container
                                         (needed after ungraceful host shutdown)
   unlock                              remove stale lockfile (safe — refuses if lock is actively held)
@@ -702,6 +705,42 @@ case "${1:-up}" in
             chown -h vscode:vscode /home/vscode/.claude/.credentials.json
         '
         echo "Credentials symlink repaired in $DEV_CONTAINER_NAME"
+        ;;
+    set-credentials)
+        # Give THIS container its own token, independent of the host/shared one:
+        # replace the shared-mount symlink at ~/.claude/.credentials.json with a
+        # private regular file on the claude-home volume. Bytes are streamed on
+        # stdin (from a file arg or a pipe) straight into the container, so no
+        # credential file need ever touch the host disk. `fix-credentials` is the
+        # inverse — it restores the shared symlink.
+        shift
+        src="${1:-}"
+        if [ -z "$src" ]; then
+            echo "usage: devcontainer set-credentials <file>|-" >&2
+            echo "  stream form (nothing touches the host disk):" >&2
+            echo "    claude-profile export-to <profile> /dev/stdout | devcontainer set-credentials -" >&2
+            echo "    devcontainer set-credentials <(claude-profile export-to <profile> /dev/stdout)" >&2
+            echo "  revert to the shared host token with: devcontainer fix-credentials" >&2
+            exit 1
+        fi
+        if ! is_running; then
+            echo "error: container is not running (start with 'devcontainer up' first)" >&2
+            exit 1
+        fi
+        # -e (not -f) so a process-substitution path (/dev/fd/N) or fifo is accepted.
+        if [ "$src" != "-" ] && [ ! -e "$src" ]; then
+            echo "error: no such source: $src" >&2
+            exit 1
+        fi
+        installer="$(cat "$DEV_BASE_DIR/lib/install-claude-credentials.sh")"
+        dest=/home/vscode/.claude/.credentials.json
+        if [ "$src" = "-" ]; then
+            dc exec -T -u root app sh -c "$installer" _ "$dest" vscode:vscode
+        else
+            dc exec -T -u root app sh -c "$installer" _ "$dest" vscode:vscode <"$src"
+        fi
+        echo "Installed private credentials in $DEV_CONTAINER_NAME"
+        echo "  (this container no longer shares the host token; revert with: devcontainer fix-credentials)"
         ;;
     fix-network)
         container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true

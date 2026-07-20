@@ -10,7 +10,7 @@ _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials fix-network unlock ps audit bump-claude-code completions install-completions"
+    local subcmds="init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials set-credentials fix-network unlock ps audit bump-claude-code completions install-completions"
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -39,6 +39,9 @@ _devcontainer() {
             ;;
         exec)
             COMPREPLY=($(compgen -c -- "$cur"))
+            ;;
+        set-credentials)
+            _filedir
             ;;
         ps)
             COMPREPLY=($(compgen -W "--all" -- "$cur"))
@@ -78,6 +81,7 @@ _devcontainer() {
         'refresh-gpg:re-forward GPG agent without container restart'
         'copy-host-transcripts:mirror host session transcripts so claude --resume finds them'
         'fix-credentials:repair credentials symlink (after upgrading from pre-shared-credentials build)'
+        'set-credentials:give this container a private token from a file or stdin'
         'fix-network:disconnect stale networks (after ungraceful host shutdown)'
         'unlock:remove stale lockfile'
         'ps:show running claude sessions'
@@ -100,6 +104,7 @@ _devcontainer() {
             case $words[1] in
                 init) _values 'flag' --local --nix ;;
                 exec) _command_names ;;
+                set-credentials) _files ;;
                 ps) _values 'flag' --all ;;
                 audit) _values 'mode' --summary --new --all --clear ;;
                 bump-claude-code) _values 'flag' --check ;;
@@ -130,6 +135,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-s
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-gpg -d 're-forward GPG agent without container restart'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a copy-host-transcripts -d 'mirror host session transcripts so claude --resume finds them'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-credentials -d 'repair credentials symlink'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a set-credentials -d 'give this container a private token from a file or stdin'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-network -d 'disconnect stale networks'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a unlock -d 'remove stale lockfile'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a ps -d 'show running claude sessions'
@@ -144,6 +150,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a install-c
 complete -c devcontainer -n "__fish_seen_subcommand_from init" -l local -d 'create overlay in workspace .devcontainer/'
 complete -c devcontainer -n "__fish_seen_subcommand_from init" -l nix -d 'layer a Nix store onto the overlay'
 complete -c devcontainer -n "__fish_seen_subcommand_from ps" -l all -d 'show all containers'
+complete -c devcontainer -n "__fish_seen_subcommand_from set-credentials" -F -d 'credentials file'
 complete -c devcontainer -n "__fish_seen_subcommand_from audit" -a "--summary --new --all --clear"
 complete -c devcontainer -n "__fish_seen_subcommand_from bump-claude-code" -l check -d 'report current vs latest without editing'
 complete -c devcontainer -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
