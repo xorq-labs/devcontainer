@@ -71,6 +71,82 @@ no node runtime. `npx`-based MCP servers or project tooling must install node
 in the project overlay's `install-system.sh` — or run with `DEV_NIX_BASE=0`.
 The classic Dockerfile still ships node because it installs claude via npm.
 
+## Recipe: driving Nix with a seed-model overlay
+
+Use this when your project *drives* Nix (its own flake, `nix develop`,
+`nix build`, self-service `nix profile install`) rather than only consuming the
+baked toolchain. The seed model gives you a writable, `vscode`-owned `/nix` on a
+durable, project-scoped volume. Mechanism: Nix is installed at `docker build`
+time, tarred into an image-baked seed, and unpacked into the `nix` volume on
+first run (`lib/nix-seed.sh`; a sha stamp lets a newer image overlay fresh store
+paths onto an existing volume).
+
+**1. Scaffold the overlay.**
+
+    devcontainer init --nix [project-name]     # or: --local --nix for .devcontainer/
+
+`--nix` layers four files onto pristine scaffolding (it refuses to clobber ones
+you've customized without `--force`):
+
+- `install-system.sh` — sources `lib/nix-seed.sh` and calls `nix_build_install`
+  (build time, root).
+- `setup-env.sh` — calls `nix_seed_volume` in `first-run` (runtime, vscode).
+- `compose.override.yml` — the `nix:/nix` external volume, the host `nix.conf`
+  read-only mount, and `EXTRA_PATH=/home/vscode/.nix-profile/bin`.
+- `external-volumes.txt` — lists `nix` so `dev/devcontainer` pre-creates it as
+  `${DEV_PROJECT_NAME}-nix`.
+
+**2. Confirm the routing.** `devcontainer resolve` must print
+`BASE=classic (overlay mounts a nix seed volume)` — the seed volume and the
+baked base are mutually exclusive (a mount at `/nix` would shadow the baked
+store), so seed overlays always build on the classic root `Dockerfile`.
+
+**3. Pin the Nix release (optional).** `nix_build_install` defaults to the
+version/sha in `lib/nix-seed.sh`. To pin a different release, set both before
+the call in `install-system.sh` — they stay coupled so a version bump without
+its checksum fails loudly:
+
+    NIX_VERSION=2.28.3
+    NIX_INSTALLER_SHA256=…
+    . /usr/local/lib/devcontainer/nix-seed.sh
+    nix_build_install
+
+**4. Declare project dependencies — prefer a committed flake.** The store is
+writable, so `nix profile install nixpkgs#foo` works and persists in the volume
+— but imperative installs are *unpinned* and invisible to teammates. For
+reproducibility, put a `flake.nix` + **committed `flake.lock`** in the repo and
+drive everything through it:
+
+    # setup-env.sh, first-run (after nix_seed_volume):
+    nix develop --command true      # realise the devShell into the volume once
+
+    # sync-if-needed (re-runs on every exec/claude entry):
+    # cheap no-op when the lock is unchanged; re-realises after a flake bump.
+    nix develop --command true
+
+Pin `nixpkgs` in `flake.nix` (a release branch or a specific rev), commit
+`flake.lock`, and let `flake.lock` — not the volume's mutable state — be the
+source of truth. The volume is a *cache*, not the spec: `devcontainer
+clean-caches` removes it and the next `up` re-realises from the lock. This is
+what makes the drive-track's reproducibility real; a store full of
+`nix profile install`s is not reproducible.
+
+**5. Host cache config is inherited.** `nix_write_conf` merges the host's
+read-only `nix.conf`/`registry.json` (mounted at `~/.config/nix-host`) into the
+container, so your host substituters/caches apply. It strips `sandbox` and
+forces `sandbox = false` — the container is already the sandbox.
+
+**6. Worktrees.** The `nix` volume is `external: true` and project-scoped, so
+every worktree of the project shares one store (safe — it's content-addressed
+and CLI-locked). You pay the realise/download cost once per project, not per
+worktree.
+
+**Coexistence note.** If you force this overlay onto the Nix base
+(`DEV_NIX_BASE=1`), `up` refuses — but the guards degrade safely if wiring ever
+crosses: `nix_build_install` skips when `/nix/store` is already populated by a
+base image, and `nix_seed_volume` no-ops (falling through to profile/conf setup)
+when no seed tarball was baked.
+
 ## Layout
 
 - `flake.nix` — `streamLayeredImage` over the MS base (`fromImage`), one
