@@ -20,11 +20,7 @@ name: Nix Base
 
 on:
   push:
-    # feat/nix-base is TEMPORARY: workflow_dispatch only works once the
-    # workflow exists on the default branch, so the graduation branch
-    # publishes its sha-tagged (never latest) images via push instead.
-    # Drop it before merge.
-    branches: [main, feat/nix-base]
+    branches: [main]
     paths:
       - nix/base/**
       - .github/workflows/nix-base.yml
