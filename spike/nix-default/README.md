@@ -87,10 +87,10 @@ diff <(tr ',' '\n' < /tmp/layers.before) <(tr ',' '\n' < /tmp/layers.after)
 ```
 
 Two layers change, not one: the claude-code layer (~251 -> 265 MB, the point)
-and the `devcontainer-infra` buildEnv profile (299 symlinks, ~210 KB), which
-necessarily rehashes because it references claude-code by store path — that
-reference is the mechanism (`config.Env` PATH) that pulls the closure into the
-image. The other ~53 layers (node/gh/just/sops/socat/cacert + every MS base
+and the `devcontainer-infra` buildEnv profile (~210 KB), which necessarily
+rehashes because it references claude-code by store path — that reference is the
+mechanism (`config.Env` PATH) that pulls the closure into the image. The other
+~92 layers (node/gh/just/sops/socat/nix + their closures/cacert + every MS base
 layer) stay byte-identical, so the reship is the new claude-code blob plus a
 ~210 KB profile blob. Compare against a `CLAUDE_CODE_VERSION` bump on the root
 `Dockerfile`, which invalidates every layer after it, including the project
@@ -100,6 +100,26 @@ system layer.
 each package's `/bin` in `config.Env` PATH directly: that moves the claude
 reference out of a layer and into the image config JSON — which changes on
 every bump regardless — at the cost of a longer PATH. Not worth it for 210 KB.)
+
+### What the layering actually buys (and what it doesn't)
+
+Layering granularity does **not** speed up the local build. Nix is
+content-addressed, so a claude-code bump re-realizes only the claude-code
+derivation + the buildEnv + the streamer script; node/gh/nix/... are
+`/nix/store` cache hits. Layering happens *after* derivations are built — it only
+decides how already-built store paths are grouped into tar blobs.
+
+The payoff is **distribution**: on a re-push, layers with unchanged content keep
+identical digests, so the registry (and every `docker pull`) skips them. With
+one-path-per-layer, a bump reships only the ~265 MB claude-code blob + the
+~210 KB profile; with claude-code lumped into a fat catch-all (what happens if
+the `maxLayers` budget overflows — see `flake.nix`), that whole blob's digest
+changes and every consumer re-pulls node/nix/aws-sdk/... too.
+
+So this matters when the base is **pushed once and pulled many times** (shared
+team/CI base). If the image is only ever built and run locally, the granularity
+is close to free insurance rather than a measurable win — nix's cache makes the
+rebuild cheap and `docker load` dedups unchanged layers on local disk anyway.
 
 ## Optional: exercise the full default image
 
@@ -127,6 +147,12 @@ docker build -f Dockerfile.nix-default \
 - **Host Nix requirement** — building this needs Nix on the builder; for the
   lowest-barrier *default* path that's an accessibility regression to weigh
   before shipping (fine for a spike).
+- **`nix` in the base** — the infra list includes `pkgs.nix` so the baked base
+  can run `nix` in-container (not just be built by it). Its closure is large
+  (aws-sdk-cpp, aws-c-*, libgit2, boehm-gc, ...): it grew the base from 34 -> 73
+  store paths and forced `maxLayers` 64 -> 110 to keep claude-code in its own
+  layer (~+50 MB image, still one changed blob per bump). Drop it if in-container
+  `nix` isn't needed and the size/layer cost isn't worth it.
 - **arch** — x86_64 only here (the claude-code binary is fetched per-platform);
   wrap outputs in a systems list and select the matching platform package for
   arm64 parity.
