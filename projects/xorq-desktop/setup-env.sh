@@ -11,37 +11,14 @@ cmd="${1:-first-run}"
 
 case "$cmd" in
     first-run)
-        # Nix: seed durable /nix volume from build-time tarball.
-        # Empty volume → fresh extract. Populated volume from an older image
-        # → overlay the new seed (--skip-old-files preserves user-installed
-        # paths; content-addressed store makes overlays safe). Version stamp
-        # avoids re-running the overlay on every first-run.
-        # NOTE: /nix/var (db, profiles) is also overlaid. If the Nix version
-        # changes its DB schema, bump the seed version and wipe the volume.
-        if [ ! -d /nix/store ]; then
-            echo "Seeding Nix store into volume..."
-            tar xf /nix-seed.tar -C /
-            cp /nix-seed.version /nix/.seed-version
-        elif [ ! -f /nix/.seed-version ] || ! cmp -s /nix-seed.version /nix/.seed-version; then
-            echo "Nix seed version differs from volume — overlaying new paths..."
-            tar xf /nix-seed.tar --skip-old-files -C /
-            cp /nix-seed.version /nix/.seed-version
-        fi
-        # Restore profile symlink (lost when container is recreated from image)
-        if [ ! -e "$HOME/.nix-profile" ]; then
-            ln -sf "/nix/var/nix/profiles/per-user/$(id -un)/profile" "$HOME/.nix-profile"
-        fi
-        # Merge host nix config with container overrides (sandbox off — container is the sandbox)
-        if [ ! -f "$HOME/.config/nix/nix.conf" ]; then
-            mkdir -p "$HOME/.config/nix"
-            [ -f "$HOME/.config/nix-host/nix.conf" ] && grep -v '^sandbox' "$HOME/.config/nix-host/nix.conf" > "$HOME/.config/nix/nix.conf"
-            printf 'sandbox = false\nfilter-syscalls = false\n' >> "$HOME/.config/nix/nix.conf"
-            for f in "$HOME/.config/nix-host"/*; do
-                [ "$(basename "$f")" = "nix.conf" ] && continue
-                ln -sf "$f" "$HOME/.config/nix/$(basename "$f")"
-            done
-        fi
-        . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+        # Nix: unpack the build-time seed into the durable `nix` volume, restore
+        # the profile symlink, merge host nix.conf (sandbox off — the container
+        # is the sandbox), and source the profile. Shared logic lives in
+        # lib/nix-seed.sh, COPYd to /usr/local/lib/devcontainer by the root
+        # Dockerfile. (Empty volume -> fresh extract; a volume from an older
+        # image -> overlay fresh paths with --skip-old-files.)
+        . /usr/local/lib/devcontainer/nix-seed.sh
+        nix_seed_volume
 
         # Source cargo env for this session
         . "$HOME/.cargo/env"

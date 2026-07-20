@@ -21,23 +21,14 @@ apt-get install -y --no-install-recommends \
     xauth
 rm -rf /var/lib/apt/lists/*
 
-# Nix (single-user for vscode, no daemon needed in containers).
-# /nix is overlaid by a durable volume at runtime, so we tar the build-time
-# install into a seed that setup-env unpacks on first run, then drop the
-# live /nix tree (saves ~hundreds of MB in the final image — the tarball
-# alone is enough; the volume mount provides an empty /nix at runtime).
-# A sha256 of the seed is stamped into the image so setup-env can detect
-# stale seeds in volumes that predate an image rebuild.
-NIX_VERSION=2.28.3
-NIX_INSTALLER_SHA256=46b8d7165dceb471f4346366b3a93f1009407b99729b843b8664918f4cc800a0
-curl -LsSf "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" -o /tmp/nix-install.sh
-echo "$NIX_INSTALLER_SHA256  /tmp/nix-install.sh" | sha256sum -c -
-mkdir -p /nix && chown vscode:vscode /nix
-su - vscode -c 'sh /tmp/nix-install.sh --no-daemon'
-rm /tmp/nix-install.sh
-tar cf /nix-seed.tar -C / nix
-sha256sum /nix-seed.tar | cut -d' ' -f1 > /nix-seed.version
-rm -rf /nix
+# Nix (single-user for vscode, no daemon in containers): install at build time,
+# bake a seed tarball, then drop the live /nix tree (keeps the image small).
+# setup-env first-run unpacks the seed into the durable, project-scoped `nix`
+# volume. Shared logic lives in lib/nix-seed.sh, COPYd to
+# /usr/local/lib/devcontainer by the root Dockerfile (version/sha default to
+# 2.28.3 there; set NIX_VERSION/NIX_INSTALLER_SHA256 before the call to pin).
+. /usr/local/lib/devcontainer/nix-seed.sh
+nix_build_install
 
 # uv (Python package manager)
 UV_VERSION=0.7.8
