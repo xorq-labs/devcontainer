@@ -10,7 +10,7 @@ _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials set-credentials fix-network unlock ps audit bump-claude-code completions install-completions"
+    local subcmds="init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials set-credentials fix-network unlock ps audit bump-claude-code bump-nix completions install-completions"
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -49,7 +49,7 @@ _devcontainer() {
         audit)
             COMPREPLY=($(compgen -W "--summary --new --all --clear" -- "$cur"))
             ;;
-        bump-claude-code)
+        bump-claude-code|bump-nix)
             COMPREPLY=($(compgen -W "--check" -- "$cur"))
             ;;
         completions)
@@ -87,6 +87,7 @@ _devcontainer() {
         'ps:show running claude sessions'
         'audit:show permission audit log'
         'bump-claude-code:update pinned Claude Code version in the Dockerfile'
+        'bump-nix:update pinned Nix version and installer sha in lib/nix-seed.sh'
         'status:show whether the container is running'
         'list:list all worktrees with container status and overlay'
         'resolve:show resolved overlay and configuration (dry run)'
@@ -107,7 +108,7 @@ _devcontainer() {
                 set-credentials) _files ;;
                 ps) _values 'flag' --all ;;
                 audit) _values 'mode' --summary --new --all --clear ;;
-                bump-claude-code) _values 'flag' --check ;;
+                bump-claude-code|bump-nix) _values 'flag' --check ;;
                 completions) _values 'shell' bash zsh fish ;;
                 install-completions) _values 'shell' bash zsh fish --print-paths ;;
             esac
@@ -119,7 +120,7 @@ ZSH
         ;;
     fish)
         cat <<'FISH'
-set -l cmds init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials fix-network unlock ps audit bump-claude-code completions install-completions
+set -l cmds init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials fix-network unlock ps audit bump-claude-code bump-nix completions install-completions
 complete -c devcontainer -f
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a init -d 'create a project overlay'
@@ -141,6 +142,7 @@ complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a unlock -d
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a ps -d 'show running claude sessions'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a audit -d 'show permission audit log'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a bump-claude-code -d 'update pinned Claude Code version in the Dockerfile'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a bump-nix -d 'update pinned Nix version and installer sha in lib/nix-seed.sh'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a status -d 'show whether the container is running'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a list -d 'list all worktrees with container status and overlay'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a resolve -d 'show resolved overlay and configuration (dry run)'
@@ -153,6 +155,7 @@ complete -c devcontainer -n "__fish_seen_subcommand_from ps" -l all -d 'show all
 complete -c devcontainer -n "__fish_seen_subcommand_from set-credentials" -F -d 'credentials file'
 complete -c devcontainer -n "__fish_seen_subcommand_from audit" -a "--summary --new --all --clear"
 complete -c devcontainer -n "__fish_seen_subcommand_from bump-claude-code" -l check -d 'report current vs latest without editing'
+complete -c devcontainer -n "__fish_seen_subcommand_from bump-nix" -l check -d 'report current vs latest without editing'
 complete -c devcontainer -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
 complete -c devcontainer -n "__fish_seen_subcommand_from install-completions" -a "bash zsh fish"
 complete -c devcontainer -n "__fish_seen_subcommand_from install-completions" -l print-paths -d 'show target paths without installing'
