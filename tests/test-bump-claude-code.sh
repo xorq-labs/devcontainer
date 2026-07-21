@@ -8,41 +8,7 @@
 # and no network is required.
 set -euo pipefail
 
-PASS=0 FAIL=0
-_cleanup_dirs=()
-
-cleanup() {
-    for d in "${_cleanup_dirs[@]}"; do
-        rm -rf "$d" 2>/dev/null || true
-    done
-}
-trap cleanup EXIT
-
-assert_eq() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected: $expected"
-        echo "    actual:   $actual"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-assert_contains() {
-    local label="$1" needle="$2" haystack="$3"
-    if [[ "$haystack" == *"$needle"* ]]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected to contain: $needle"
-        echo "    got: $haystack"
-        FAIL=$((FAIL + 1))
-    fi
-}
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 SRC="$DEV_BASE/dev/bump-claude-code"
@@ -307,7 +273,4 @@ run_bump "2.0.0"
 assert_eq "exit nonzero" "1" "$rc"
 assert_contains "reports missing pin" "could not find" "$out"
 
-# ---------- summary ----------
-echo ""
-echo "Results: $PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ] || exit 1
+finish

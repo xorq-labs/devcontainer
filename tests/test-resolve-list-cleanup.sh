@@ -3,54 +3,7 @@
 # Runs against a disposable git repo in /tmp — no docker required.
 set -euo pipefail
 
-PASS=0 FAIL=0
-_cleanup_dirs=()
-
-cleanup() {
-    for d in "${_cleanup_dirs[@]}"; do
-        rm -rf "$d" 2>/dev/null || true
-    done
-}
-trap cleanup EXIT
-
-assert_eq() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected: $expected"
-        echo "    actual:   $actual"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-assert_contains() {
-    local label="$1" needle="$2" haystack="$3"
-    if [[ "$haystack" == *"$needle"* ]]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected to contain: $needle"
-        echo "    got: $haystack"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-assert_not_contains() {
-    local label="$1" needle="$2" haystack="$3"
-    if [[ "$haystack" != *"$needle"* ]]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected NOT to contain: $needle"
-        echo "    got: $haystack"
-        FAIL=$((FAIL + 1))
-    fi
-}
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DC="$DEV_BASE/dev/devcontainer"
@@ -59,10 +12,7 @@ DC="$DEV_BASE/dev/devcontainer"
 TMPDIR_ROOT="$(mktemp -d)"
 _cleanup_dirs+=("$TMPDIR_ROOT")
 
-MAIN_TREE="$TMPDIR_ROOT/fakerepo"
-mkdir -p "$MAIN_TREE"
-git -C "$MAIN_TREE" init -b main --quiet
-git -C "$MAIN_TREE" commit --allow-empty -m "init" --quiet
+MAIN_TREE="$(new_repo "$TMPDIR_ROOT/fakerepo")"
 
 # Run devcontainer from inside the fake repo so dev_main_tree() resolves there.
 # DEV_BASE_DIR is derived from the script's own path, so overlay lookup still
@@ -241,7 +191,4 @@ echo "--- new-worktree --help ---"
 out="$("$DEV_BASE/dev/new-worktree" --help 2>&1)"
 assert_contains "new-worktree help text" "Usage: new-worktree" "$out"
 
-# ---------- summary ----------
-echo ""
-echo "Results: $PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ] || exit 1
+finish

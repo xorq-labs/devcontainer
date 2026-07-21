@@ -22,7 +22,12 @@ pre-commit run --all-files
 
 ## Testing
 
+Suites live in `tests/*.sh` and share a harness (`tests/lib/harness.sh`:
+assert helpers, PASS/FAIL accounting, disposable repos). Run the whole suite
+(the same entry point CI uses) with `tests/run-all`, or run one on its own:
+
 ```bash
+bash tests/run-all
 bash tests/test-resolve-list-cleanup.sh
 ```
 

@@ -6,66 +6,7 @@
 # Runs against disposable dirs in /tmp — no docker required.
 set -euo pipefail
 
-PASS=0 FAIL=0
-_cleanup_dirs=()
-
-cleanup() {
-    for d in "${_cleanup_dirs[@]}"; do
-        rm -rf "$d" 2>/dev/null || true
-    done
-}
-trap cleanup EXIT
-
-assert_eq() {
-    local label="$1" expected="$2" actual="$3"
-    if [ "$expected" = "$actual" ]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected: $expected"
-        echo "    actual:   $actual"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-assert_contains() {
-    local label="$1" needle="$2" haystack="$3"
-    if [[ "$haystack" == *"$needle"* ]]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected to contain: $needle"
-        echo "    got: $haystack"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-assert_not_contains() {
-    local label="$1" needle="$2" haystack="$3"
-    if [[ "$haystack" != *"$needle"* ]]; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    expected NOT to contain: $needle"
-        echo "    got: $haystack"
-        FAIL=$((FAIL + 1))
-    fi
-}
-
-assert_files_eq() {
-    local label="$1" a="$2" b="$3"
-    if cmp -s "$a" "$b"; then
-        echo "  PASS: $label"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $label"
-        echo "    files differ: $a vs $b"
-        FAIL=$((FAIL + 1))
-    fi
-}
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 INIT="$DEV_BASE/dev/init"
@@ -81,22 +22,13 @@ DEFAULTS="$DEV_BASE/defaults"
 TMPDIR_ROOT="$(mktemp -d)"
 _cleanup_dirs+=("$TMPDIR_ROOT")
 
-# --- helper: fresh disposable repo + local overlay target ---
-new_repo() {
-    local dir="$TMPDIR_ROOT/$1"
-    mkdir -p "$dir"
-    git -C "$dir" init -b main --quiet
-    git -C "$dir" commit --allow-empty -m "init" --quiet
-    echo "$dir"
-}
-
 # ============================================================
 # init --nix (file-copy behavior)
 # ============================================================
 
 # ---------- test: init --local --nix layers the fragment ----------
 echo "--- init --local --nix ---"
-REPO="$(new_repo nixrepo)"
+REPO="$(new_repo "$TMPDIR_ROOT/nixrepo")"
 out="$(cd "$REPO" && "$INIT" --local --nix 2>&1)"
 overlay="$REPO/.devcontainer"
 
@@ -125,7 +57,7 @@ assert_contains "EXTRA_PATH matches NIX_USER's home" "/home/$NIX_USER/.nix-profi
 
 # ---------- test: init --local (no --nix) leaves defaults in place ----------
 echo "--- init --local (no --nix) ---"
-REPO2="$(new_repo plainrepo)"
+REPO2="$(new_repo "$TMPDIR_ROOT/plainrepo")"
 out2="$(cd "$REPO2" && "$INIT" --local 2>&1)"
 overlay2="$REPO2/.devcontainer"
 
@@ -310,7 +242,4 @@ assert_contains "announces base-provided nix" "assuming the base image provides 
 assert_not_contains "does not seed the volume" "Seeding Nix store" "$out_ns"
 assert_contains "still writes nix.conf" "sandbox = false" "$(cat "$HOMES3/.config/nix/nix.conf")"
 
-# ---------- summary ----------
-echo ""
-echo "Results: $PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ] || exit 1
+finish
