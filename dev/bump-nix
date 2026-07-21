@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bump the pinned Nix version in lib/nix-seed.sh.
+#
+# Usage:
+#   devcontainer bump-nix            # bump to the latest Nix release
+#   devcontainer bump-nix 2.29.1     # pin an explicit version
+#   devcontainer bump-nix --check    # report current vs latest, don't edit
+#
+# The pin is a coupled pair — NIX_VERSION and NIX_INSTALLER_SHA256 — so unlike
+# bump-claude-code this also downloads the target version's installer and
+# computes its sha256, updating both defaults together. (A half-bump would
+# fail the docker build's `sha256sum -c` loudly, but it can't be written here
+# in the first place.)
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+seed_lib="$base/lib/nix-seed.sh"
+
+check_only=false
+target=""
+for arg in "$@"; do
+    case "$arg" in
+        --check) check_only=true ;;
+        -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
+        *)
+            if [ -n "$target" ]; then
+                echo "error: unexpected extra argument: $arg" >&2
+                exit 1
+            fi
+            target="$arg"
+            ;;
+    esac
+done
+
+[ -f "$seed_lib" ] || { echo "error: nix-seed.sh not found at $seed_lib" >&2; exit 1; }
+
+current="$(grep -oP '^NIX_VERSION="\$\{NIX_VERSION:-\K[^}]*' "$seed_lib")" || true
+if [ -z "$current" ]; then
+    echo "error: could not find the NIX_VERSION default in $seed_lib" >&2
+    exit 1
+fi
+
+# Resolve the latest Nix release from the GitHub API. On failure print nothing
+# and let the empty-result check below produce a clean error.
+latest_version() {
+    curl -sf "https://api.github.com/repos/NixOS/nix/releases/latest" 2>/dev/null \
+        | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin)["tag_name"])
+except Exception:
+    pass' 2>/dev/null || true
+}
+
+if [ -n "$target" ]; then
+    new="$target"
+else
+    new="$(latest_version)" || true
+    if [ -z "$new" ]; then
+        echo "error: could not determine the latest Nix version" >&2
+        exit 1
+    fi
+fi
+
+# Nix tags occasionally carry a leading "v"; the release URLs never do.
+new="${new#v}"
+
+# Validate before the version can reach a URL or the sed below; forbidding the
+# sed delimiter keeps the substitution injection-safe.
+if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
+    echo "error: invalid version: $new" >&2
+    exit 1
+fi
+
+# --check reports the current/target versions and never edits, whether or not
+# they already match.
+if $check_only; then
+    printf '%-11s%s\n' "current:" "$current"
+    if [ -n "$target" ]; then
+        printf '%-11s%s\n' "requested:" "$new"
+    else
+        printf '%-11s%s\n' "latest:" "$new"
+    fi
+    if [ "$current" = "$new" ]; then
+        echo "already up to date"
+    else
+        echo "run 'devcontainer bump-nix' to update lib/nix-seed.sh"
+    fi
+    exit 0
+fi
+
+if [ "$current" = "$new" ]; then
+    echo "Nix already pinned to $current${target:+ (requested)}"
+    [ -n "$target" ] || echo "(latest release)"
+    exit 0
+fi
+
+# Fetch the target installer and compute the coupled checksum. A bad version
+# 404s here, before anything is written.
+installer_url="https://releases.nixos.org/nix/nix-${new}/install"
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+if ! curl -LsSf --retry 3 --retry-connrefused "$installer_url" -o "$tmp"; then
+    echo "error: could not download $installer_url — does the version exist?" >&2
+    exit 1
+fi
+sha="$(sha256sum "$tmp" | cut -d' ' -f1)"
+
+sed -i "s|^NIX_VERSION=.*|NIX_VERSION=\"\${NIX_VERSION:-${new}}\"|" "$seed_lib"
+sed -i "s|^NIX_INSTALLER_SHA256=.*|NIX_INSTALLER_SHA256=\"\${NIX_INSTALLER_SHA256:-${sha}}\"|" "$seed_lib"
+
+echo "Bumped Nix: $current → $new (installer sha256 updated in lockstep)"
+echo "Rebuild to apply: nix overlays will detect the config change and prompt;"
+echo "existing nix volumes reset from the new seed on their next first-run."

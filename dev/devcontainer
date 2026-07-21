@@ -27,6 +27,11 @@ if [ "${1:-}" = "bump-claude-code" ]; then
     exec "$(dirname "$(readlink -f "$0")")/bump-claude-code" "$@"
 fi
 
+if [ "${1:-}" = "bump-nix" ]; then
+    shift
+    exec "$(dirname "$(readlink -f "$0")")/bump-nix" "$@"
+fi
+
 show_usage() {
     cat <<'USAGE'
 Usage: devcontainer [-w dir] <command>
@@ -67,6 +72,8 @@ Commands:
                                       show permission audit log (default: --summary)
   bump-claude-code [version|--check]  update pinned Claude Code version in the Dockerfile
                                         (default: latest from npm; --check reports without editing)
+  bump-nix [version|--check]          update pinned Nix version + installer sha in lib/nix-seed.sh
+                                        (default: latest release; --check reports without editing)
   completions [bash|zsh|fish]         emit shell completions
   install-completions [bash|zsh|fish] install completions to each shell's autoload dir
                                         (default: every shell present; --print-paths to preview)
