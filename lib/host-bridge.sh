@@ -366,15 +366,12 @@ setup_gh() {
 }
 
 setup_claude_credentials() {
-    # Host-side prep for the credentials bind-mount declared in compose.yml.
-    # Two responsibilities:
-    #   1. Ensure ~/.claude/credentials/ exists so the bind-mount source is
-    #      present (otherwise Docker creates it root-owned).
-    #   2. Migrate any legacy ~/.claude/.credentials.json into credentials/
-    #      and leave a host-side symlink so host claude-code follows the
-    #      same shared file.
-    # The container-side ~/.claude/.credentials.json symlink is image-baked
-    # in the Dockerfile and not managed here.
+    # Host-side maintenance of the host's own credential layout (the container no
+    # longer bind-mounts this dir — it seeds a private token from it read-only;
+    # see docs/adr/0001-devcontainer-private-token-isolation.md). Ensures the
+    # profile store dir exists (it is the container's :ro seed source), and
+    # migrates any legacy ~/.claude/.credentials.json into credentials/ with a
+    # host-side symlink so host claude-code and claude-profile share one layout.
     local cred_dir="$HOME/.claude/credentials"
     local cred_file="$HOME/.claude/.credentials.json"
 
@@ -391,10 +388,9 @@ setup_claude() {
     host_project_key="$(echo "$DEV_WORKSPACE" | sed 's|/|-|g')"
     container_project_key="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|/|-|g')"
 
-    # Named volume root comes up root-owned; fix so vscode can write.
-    # Top-level only — recursing would descend into the credentials/ bind
-    # mount and rewrite ownership on host files. Image-baked contents
-    # (.credentials.json symlink, subdirs) are already vscode-owned.
+    # Named volume root comes up root-owned; fix so vscode can write. Top-level
+    # is enough — setup-claude creates the contents as vscode. (There is no
+    # longer a credentials/ bind mount to avoid recursing into.)
     dc exec -u root app chown vscode:vscode /home/vscode/.claude
 
     dc exec \
@@ -402,6 +398,7 @@ setup_claude() {
         -e DEV_CONTAINER_WORKSPACE="$DEV_CONTAINER_WORKSPACE" \
         -e DEV_HOST_PROJECT_KEY="$host_project_key" \
         -e DEV_CONTAINER_PROJECT_KEY="$container_project_key" \
+        -e DEV_CLAUDE_PROFILE="${DEV_CLAUDE_PROFILE:-}" \
         app python3 /usr/local/bin/setup-claude
 }
 

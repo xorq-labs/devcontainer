@@ -2,15 +2,16 @@
 """Set up Claude Code config inside the dev container.
 
 Sets up Claude Code config inside the container's isolated ~/.claude volume.
-Credentials are shared via a bind-mounted directory (not copied); permissions,
-global instructions, global memory, and per-project memory are copied from the
-read-only host mount.
+Permissions, global instructions, global memory, and per-project memory are
+copied from the read-only host mount.
 Installs a PreToolUse audit hook and symlinks sessions for host log capture.
 
-Note: ~/.claude/.credentials.json is a symlink to credentials/.credentials.json
-created at image-build time (see Dockerfile) and copied into the claude-home
-named volume on first init — this script does not manage it. The host-side
-migration of legacy credentials lives in .devcontainer/lib/host-bridge.sh.
+Credentials: this script seeds a PRIVATE token + identity into the isolated
+~/.claude, copied once from the read-only host profile store
+(.claude-host/credentials/<profile>.json). The container is NOT bind-mounted to
+the host credential file and refreshes its own token independently — see
+docs/adr/0001-devcontainer-private-token-isolation.md. `seed-credentials` is a
+standalone subcommand (used by `devcontainer fix-credentials`).
 
 Expected environment variables (set by dev/devcontainer):
     DEV_CONTAINER_WORKSPACE  — container workspace path (e.g. /workspaces/src)
@@ -18,6 +19,8 @@ Expected environment variables (set by dev/devcontainer):
     DEV_CONTAINER_PROJECT_KEY — mangled container workspace path (e.g. -workspaces-src)
     DEV_WORKSPACE            — host workspace path; optional, used to rewrite the
                                cwd prefix in copied session transcripts
+    DEV_CLAUDE_PROFILE       — profile to seed credentials from; optional,
+                               defaults to the host's active profile
 """
 
 import json
@@ -26,15 +29,26 @@ import shutil
 import sys
 from pathlib import Path
 
-HOST = Path("/home/vscode/.claude-host")
-HOME = Path("/home/vscode/.claude")
-HOST_PREFS = Path("/home/vscode/.claude-host.json")
-CONTAINER_PREFS = Path("/home/vscode/.claude.json")
+# Paths default to the in-container layout; overridable via env so the seeding
+# logic can be exercised off-container (see tests/test-claude-seed.sh).
+HOST = Path(os.environ.get("CLAUDE_HOST_DIR", "/home/vscode/.claude-host"))
+HOME = Path(os.environ.get("CLAUDE_HOME_DIR", "/home/vscode/.claude"))
+HOST_PREFS = Path(os.environ.get("CLAUDE_HOST_PREFS", "/home/vscode/.claude-host.json"))
+CONTAINER_PREFS = Path(os.environ.get("CLAUDE_CONTAINER_PREFS", "/home/vscode/.claude.json"))
 
 REQUIRED_VARS = (
     "DEV_CONTAINER_WORKSPACE",
     "DEV_HOST_PROJECT_KEY",
     "DEV_CONTAINER_PROJECT_KEY",
+)
+
+# Caches in .claude.json that are scoped to the logged-in account; dropped when
+# seeding a different profile's identity so they refetch for the new account.
+ACCOUNT_SCOPED_CACHES = (
+    "clientDataCacheSlots",
+    "orgModelDefaultCache",
+    "modelAccessCache",
+    "s1mAccessCache",
 )
 
 
@@ -64,6 +78,74 @@ def copy_user_prefs(workspace):
 
     with open(CONTAINER_PREFS, "w") as f:
         json.dump(prefs, f, indent=2)
+
+
+def resolve_profile():
+    """Which profile to seed: DEV_CLAUDE_PROFILE, else the host's active profile."""
+    profile = os.environ.get("DEV_CLAUDE_PROFILE", "").strip()
+    if profile:
+        return profile
+    marker = HOST / "credentials" / "active-profile"
+    if marker.exists():
+        return marker.read_text().strip()
+    return ""
+
+
+def seed_credentials(profile):
+    """Seed a PRIVATE token + identity into the container's isolated ~/.claude.
+
+    Replaces the old shared-mount model (devcontainer ADR-0001): instead of
+    bind-mounting the host credentials dir and symlinking into it, each container
+    gets its own token, copied once from the read-only host profile store
+    (.claude-host/credentials/<profile>.json). The container then refreshes its
+    own token independently — no shared inode, so no cross-session refresh race.
+    Identity comes from the profile's oauthAccount sidecar; account-scoped caches
+    are dropped so a different account refetches. Idempotent; safe to re-run.
+    """
+    if not profile:
+        print("note: no DEV_CLAUDE_PROFILE and no host active-profile — credentials left untouched")
+        return
+
+    store = HOST / "credentials"
+    token_src = store / f"{profile}.json"
+    if not token_src.exists():
+        print(
+            f"warning: profile '{profile}' not found in host store ({token_src}) — credentials not seeded",
+            file=sys.stderr,
+        )
+        return
+
+    # Private token: a regular file on the isolated volume — never a symlink, never
+    # the shared host file. 0600.
+    dest = HOME / ".credentials.json"
+    if dest.is_symlink() or dest.exists():
+        dest.unlink()
+    shutil.copyfile(token_src, dest)
+    os.chmod(dest, 0o600)
+
+    # Identity: patch oauthAccount into .claude.json from the profile sidecar so
+    # `auth status` reports the seeded account, not a stale build-time cache.
+    prefs = {}
+    if CONTAINER_PREFS.exists():
+        with open(CONTAINER_PREFS) as f:
+            prefs = json.load(f)
+    oauth_src = store / f"{profile}.oauthAccount.json"
+    if oauth_src.exists():
+        with open(oauth_src) as f:
+            prefs["oauthAccount"] = json.load(f)
+        for key in ACCOUNT_SCOPED_CACHES:
+            prefs.pop(key, None)
+    else:
+        print(
+            f"note: no oauthAccount sidecar for '{profile}' — identity blank until "
+            f"refetch (refresh on host with: claude-profile save {profile})"
+        )
+    # Load-bearing for skipping the onboarding flow (field-notes-public#10).
+    prefs.setdefault("hasCompletedOnboarding", True)
+    prefs.setdefault("installMethod", "native")
+    with open(CONTAINER_PREFS, "w") as f:
+        json.dump(prefs, f, indent=2)
+    print(f"seeded private credentials for profile '{profile}'")
 
 
 def setup_settings(workspace, host_project_key):
@@ -201,6 +283,14 @@ def setup_audit(workspace):
 
 
 def main():
+    # Standalone credential re-seed (invoked by `devcontainer fix-credentials`).
+    # Needs only a profile + the host store, not the project-key vars, so it runs
+    # before the REQUIRED_VARS check.
+    if sys.argv[1:] == ["seed-credentials"]:
+        HOME.mkdir(parents=True, exist_ok=True)
+        seed_credentials(resolve_profile())
+        return
+
     missing = [v for v in REQUIRED_VARS if v not in os.environ]
     if missing:
         print(
@@ -231,6 +321,7 @@ def main():
     copy_global_instructions()
     copy_global_memory()
     copy_user_prefs(workspace)
+    seed_credentials(resolve_profile())
     setup_settings(workspace, host_project_key)
     setup_project_settings(host_project_key, container_project_key)
     copy_sessions(workspace, host_project_key, container_project_key)
