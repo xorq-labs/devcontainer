@@ -274,21 +274,23 @@ The two paths diverge in what they provide:
     ```
 
     Then restart the agent: `gpgconf --kill gpg-agent`. The values above give an 8-hour window. To re-warm without restarting the container: `devcontainer refresh-gpg`.
-- **Container claude can't see host OAuth token after upgrading from a pre-shared-credentials build** — the shared-credentials design relies on a `~/.claude/.credentials.json -> credentials/.credentials.json` symlink baked into the image and copied into the per-worktree `claude-home` named volume on first creation. Volumes that predate the symlink still hold the old plain file. Each worktree has its own `claude-home` volume, so repeat per worktree — new worktrees and fresh checkouts aren't affected. Two ways to recover:
+- **Container claude isn't authenticated, or shows the wrong account** — each container seeds its own private token from a host profile (`DEV_CLAUDE_PROFILE`, else the host's active profile). If that token expired, you re-logged-in on the host, or you want a different account, re-seed:
 
     ```bash
-    # surgical: repair the symlink in a running container (keeps venv volume)
+    # surgical: re-seed the private token from its profile (keeps venv volume)
     devcontainer fix-credentials
 
     # full reset: destroy volumes and rebuild (also rebuilds the venv)
     devcontainer reset && devcontainer up
     ```
 
+    To pin a container to a specific profile, set `DEV_CLAUDE_PROFILE=<name>` before `up`/`fix-credentials`.
+
 ## Claude isolation & permission audit
 
-The container's `~/.claude` is a per-worktree Docker volume, isolated from the host except for credentials (see the shared-credentials note below). On each entry (`up`, `exec`, `claude`, `claude-dangerously-skip-permissions`), `setup-claude` sets up the following:
+The container's `~/.claude` is a per-worktree Docker volume, fully isolated from the host — including credentials: each container is seeded its own private token rather than sharing the host's credential file. On each entry (`up`, `exec`, `claude`, `claude-dangerously-skip-permissions`), `setup-claude` sets up the following:
 
-- **Credentials** — `~/.claude/credentials/` is bind-mounted read-write from the host. All containers and the host share a single `.credentials.json` via this mount, so OAuth token refreshes in any container are immediately visible everywhere. On first run, `setup_claude_credentials` migrates the host's `~/.claude/.credentials.json` into `~/.claude/credentials/` and leaves a symlink.
+- **Credentials** — `setup-claude` seeds a private `~/.claude/.credentials.json` (a regular file on the isolated volume), copied once from the read-only host profile store at `~/.claude-host/credentials/<profile>.json` — profile chosen by `DEV_CLAUDE_PROFILE`, defaulting to the host's active profile — and patches the matching `oauthAccount` into `~/.claude.json` so `auth status` reports the right account. The container refreshes its own token independently: no shared credential inode, so concurrent sessions never race on OAuth refresh (the failure mode of the old shared-mount design). See [docs/adr/0001-devcontainer-private-token-isolation.md](docs/adr/0001-devcontainer-private-token-isolation.md). Re-seed with `devcontainer fix-credentials`; override with an explicit token via `devcontainer set-credentials`.
 - **Global permissions and `CLAUDE.md`** — the `permissions` block from `~/.claude/settings.json`, plus `~/.claude/CLAUDE.md` (copied from the read-only host mount)
 - **Project permissions and memory** — the `permissions` block from `~/.claude/projects/<host-project-key>/settings.json` and `settings.local.json`, plus the project's `memory/` directory (copied)
 - **Session transcripts** — every `*.jsonl` under the host project key is mirrored into the container project key so `claude --resume` can continue a session started on the host. Resume locates a session by a cwd-derived project key (which differs between host and container) and each record carries an absolute cwd, so the host workspace prefix is rewritten to the container path as transcripts are copied. Host → container only; transcripts already present container-side are left untouched so continued work isn't clobbered.
@@ -321,9 +323,9 @@ devcontainer audit --clear
 Container session logs are written to `.claude/container-sessions/` in the workspace, visible from the host.
 
 > [!NOTE]
-> **Shared credentials:** The `~/.claude/credentials/` directory is bind-mounted read-write into every container. A container compromise gains write access to the host's credential file (read access was already possible via the read-only mount). This is a deliberate tradeoff to avoid cascading 401s from OAuth token refresh invalidating copies.
+> **Private credentials:** Each container seeds its own token from the read-only host profile store; the host credential file is never bind-mounted read-write. A container compromise can *read* the host profile store (via the `:ro` `.claude-host` mount) but cannot write host credentials, and cannot invalidate other containers' or the host's tokens. This also removes the concurrent-refresh auth loss the old read-write shared mount was built to tolerate (see [docs/adr/0001-devcontainer-private-token-isolation.md](docs/adr/0001-devcontainer-private-token-isolation.md)).
 >
-> **Volume persistence:** `down` stops the container but leaves Docker volumes intact. Credentials live on the host filesystem (not in the volume), so `reset` does not scrub them — revoke tokens via your OAuth provider if needed.
+> **Volume persistence:** `down` stops the container but leaves Docker volumes intact. The seeded token now lives in the `claude-home` volume, so `reset` scrubs it (re-seeded on the next `up`) — revoke tokens via your OAuth provider if a container is compromised.
 >
 > **Host git access:** The host's `.git` directory is mounted read-write inside the container (required for git operations in worktrees). A container compromise could modify host git history, hooks, and refs.
 >
