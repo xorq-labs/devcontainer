@@ -693,7 +693,11 @@ disconnect_stale_networks() {
 # failure patterns (e.g. Docker network exhaustion). No `--build`: the image is
 # made present by ensure_image() beforehand, so `up` only creates/starts the
 # container. (If the image vanished between the two, compose falls back to
-# building it — unlocked, but it tags the same fingerprint ref.)
+# building it — unlocked, and without ensure_image's nix-base pull, so a
+# missing nix base would surface as a FROM failure here rather than a clear
+# message; it still tags the same fingerprint ref. This window is a sibling
+# worktree evicting the image mid-`up`, e.g. via clean-images — rare enough to
+# leave to the fallback build.)
 dc_up() {
     local _up_tmp _up_rc
     _up_tmp=$(mktemp)
