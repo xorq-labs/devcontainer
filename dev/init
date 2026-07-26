@@ -46,6 +46,11 @@ else
     main_tree="$(dev_main_tree 2>/dev/null)" || true
 fi
 
+# Match the runtime: dev/devcontainer sanitizes DEV_PROJECT_NAME before
+# resolving projects/<name>, so scaffold under the same sanitized name (a
+# ".dotfiles" checkout -> projects/dotfiles) or the two would never agree.
+project_name="$(sanitize_name "$project_name")"
+
 if $local_mode; then
     if [ -z "${main_tree:-}" ]; then
         echo "error: --local requires being inside a git repo" >&2

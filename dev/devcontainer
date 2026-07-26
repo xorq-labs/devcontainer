@@ -112,9 +112,14 @@ export DEV_BASE_DIR
 DEV_MAIN_TREE="$(dev_main_tree)" || exit 1
 export DEV_MAIN_TREE
 
+# sanitize_name (from lib/git.sh) normalizes every name that feeds a compose
+# project or Docker volume — see its definition for the leading-dot rationale.
+
 # Project overlay resolution: DEV_PROJECT_DIR env var (explicit) takes
-# precedence, otherwise resolve_project_dir walks the standard tiers.
-DEV_PROJECT_NAME="${DEV_PROJECT_NAME:-$(basename "$DEV_MAIN_TREE")}"
+# precedence, otherwise resolve_project_dir walks the standard tiers. Sanitized
+# so a dotted repo basename (.dotfiles) yields a valid compose/volume prefix and
+# a consistent projects/<name> overlay tier.
+DEV_PROJECT_NAME="$(sanitize_name "${DEV_PROJECT_NAME:-$(basename "$DEV_MAIN_TREE")}")"
 if [ -z "${DEV_PROJECT_DIR:-}" ]; then
     DEV_PROJECT_DIR="$(resolve_project_dir "$DEV_BASE_DIR" "$DEV_MAIN_TREE" "$DEV_PROJECT_NAME")"
 fi
@@ -287,8 +292,9 @@ else
     export DEV_WORKTREE="$(basename "$DEV_WORKSPACE")"
 fi
 
-# sanitize for docker compose: project names allow only [a-z0-9_-]
-DEV_CONTAINER_NAME="$(echo "${DEV_PROJECT_NAME}-dev-$(basename "$DEV_WORKSPACE")" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//' | tr '[:upper:]' '[:lower:]')"
+# sanitize for docker compose: project names allow only [a-z0-9_-] and must
+# lead with an alphanumeric (see sanitize_name above).
+DEV_CONTAINER_NAME="$(sanitize_name "${DEV_PROJECT_NAME}-dev-$(basename "$DEV_WORKSPACE")")"
 DEV_LOCKFILE="/tmp/devcontainer-${DEV_CONTAINER_NAME}.lock"
 
 write_resolved_env() {
@@ -1084,7 +1090,7 @@ case "${1:-up}" in
                 # shellcheck disable=SC1090
                 _cname="$(. "$_resolved" && printf '%s' "$CONTAINER_NAME")" 2>/dev/null || true
             fi
-            [ -z "$_cname" ] && _cname="${DEV_PROJECT_NAME}-dev-$(basename "$_wt")"
+            [ -z "$_cname" ] && _cname="$(sanitize_name "${DEV_PROJECT_NAME}-dev-$(basename "$_wt")")"
             if ! docker inspect --format '{{.State.Running}}' "$_cname-app-1" >/dev/null 2>&1; then
                 _st="not created"
             elif docker inspect --format '{{.State.Running}}' "$_cname-app-1" 2>/dev/null | grep -q true; then

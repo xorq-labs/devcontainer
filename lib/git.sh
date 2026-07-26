@@ -43,6 +43,25 @@ project_dir_label() {
     esac
 }
 
+# Docker Compose project names and volume names must match [a-z0-9][a-z0-9_-]*
+# (lowercase, leading alphanumeric). Repo and worktree basenames don't have to:
+# a dotfiles checkout is literally ".dotfiles", whose leading dot maps to a
+# leading "-" and makes `docker compose -p` reject the project ("must ... start
+# with a letter or number"). Normalize every name that feeds a compose project,
+# a Docker volume, or a projects/<name> overlay tier: map disallowed characters
+# to "-" (squeezing runs), lowercase, then trim leading/trailing
+# non-alphanumerics. Falls back to "project" when nothing survives (e.g. an
+# all-dots name). Shared by dev/devcontainer (runtime names) and dev/init
+# (scaffolded projects/<name> path), so the two always agree.
+sanitize_name() {
+    local s
+    s="$(printf '%s' "$1" \
+        | tr -cs 'a-zA-Z0-9_-' '-' \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -e 's/^[^a-z0-9]*//' -e 's/[^a-z0-9]*$//')"
+    printf '%s' "${s:-project}"
+}
+
 # Symlink hooks from dev/hooks/ into .git/hooks/ for a given repo root.
 # Works in both main worktrees and linked worktrees (where .git is a file).
 # Refuses to clobber a non-symlink hook.
