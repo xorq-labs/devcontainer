@@ -403,19 +403,27 @@ is_running() {
     dc ps --status running --format '{{.Service}}' 2>/dev/null | grep -q '^app$'
 }
 
-# Every file baked into the image (each COPY source in both Dockerfiles) must
-# be listed here: config_hash gates whether a build runs at all, so an omission
-# means edits to that file silently never reach the image.
+# The fingerprint is split in two (issue #53):
+#   image_config_files      — inputs baked into the image; image_config_hash
+#                             tags DEV_IMAGE_REF and gates whether a build runs.
+#   staleness_config_files  — image inputs PLUS purely-runtime inputs (host
+#                             mounts); staleness_config_hash drives the
+#                             container-recreate prompt (container_stale).
+# Splitting them means a runtime-only edit (a host mount) recreates the
+# container without minting a new image tag or triggering a rebuild.
+#
+# Every file baked into the image (each COPY source in the active Dockerfile)
+# must appear in image_config_files: the hash gates whether a build runs at
+# all, so an omission means edits to that file silently never reach the image.
 # tests/test-image-fingerprint.sh asserts COPY-source coverage.
-config_files() {
-    # Required inputs are verified readable before being emitted: config_hash
+image_config_files() {
+    # Required inputs are verified readable before being emitted: the hash
     # `cat`s each entry inside a pipeline where a failure is silent, so a
     # missing file would otherwise yield a *different but valid-looking*
     # fingerprint and a raw docker error later at COPY time. Failing here
     # routes to the :unresolved fallback / the explicit ensure_image refusal.
     local f
     for f in \
-        "$DEV_BASE_DIR/Dockerfile" \
         "$COMPOSE_FILE" \
         "$DEV_BASE_DIR/setup-claude.py" \
         "$DEV_BASE_DIR/audit-hook" \
@@ -425,6 +433,19 @@ config_files() {
         [ -r "$f" ] || { echo "error: build input not found (or unreadable): $f" >&2; return 1; }
         printf '%s\n' "$f"
     done
+    # The root Dockerfile is a build input only on the classic route. On the
+    # nix-base route Dockerfile.nix-default (below) is what's built and the root
+    # Dockerfile is never referenced, so hashing it there only over-invalidates
+    # nix images on unrelated edits (issue #53 nit). It's still required to
+    # exist on the classic route — a missing one routes to :unresolved.
+    if ! $DEV_USE_NIX_BASE; then
+        [ -r "$DEV_BASE_DIR/Dockerfile" ] || { echo "error: build input not found (or unreadable): $DEV_BASE_DIR/Dockerfile" >&2; return 1; }
+        printf '%s\n' "$DEV_BASE_DIR/Dockerfile"
+    fi
+    # Compose files are hashed whole (file-granularity): they mix build: and
+    # runtime config in one document, so a runtime-only compose edit (a port,
+    # an env var) over-invalidates the tag into a fully-cached rebuild — noisy
+    # but never wrong (issue #53 accepted this over build:-subtree extraction).
     [ -f "$COMPOSE_OVERRIDE" ] && printf '%s\n' "$COMPOSE_OVERRIDE"
     # Baked into the image and holds the pinned Nix version/sha; hash it so a pin
     # bump actually invalidates the image (the Dockerfile text alone doesn't change).
@@ -444,6 +465,14 @@ config_files() {
             [ -f "$nf" ] && printf '%s\n' "$nf"
         done
     fi
+    :
+}
+
+# image inputs + purely-runtime inputs. host-mounts.* only affect the
+# container's bind mounts, never the image, so they live here and not in
+# image_config_files — editing one recreates the container without a rebuild.
+staleness_config_files() {
+    image_config_files || return 1
     local hm
     for hm in \
         "$DEV_PROJECT_DIR/host-mounts.txt" \
@@ -453,34 +482,45 @@ config_files() {
     :
 }
 
+# Build args interpolated into compose at build time are baked into the image
+# and don't show up in file-content hashing — emit them explicitly so a change
+# forces a rebuild. They're image inputs, so they feed both hashes (the
+# staleness hash is a superset). Anything else baked via env interpolation must
+# be added here. Values only, never paths-as-identity: the overlay dir's
+# *contents* are hashed via the file list, and hashing its absolute path would
+# give identical worktrees different fingerprints whenever the script is
+# invoked from a different checkout.
+emit_build_args() {
+    printf 'DEV_CONTAINER_WORKSPACE=%s\n' "$DEV_CONTAINER_WORKSPACE"
+    printf 'DEV_UID=%s\n' "$DEV_UID"
+    printf 'DEV_GID=%s\n' "$DEV_GID"
+    printf 'DEV_HOST_USER=%s\n' "$DEV_HOST_USER"
+    # The pinned default lives in compose.nix-base.yml (hashed via the file list
+    # when routed); the env override swaps the FROM image without touching a
+    # file, so it must be hashed explicitly too. (if, not `[ ] &&`: a false
+    # condition as the group's last command would fail the hash pipeline under
+    # pipefail.)
+    if $DEV_USE_NIX_BASE; then
+        printf 'DEV_NIX_BASE_IMAGE=%s\n' "${DEV_NIX_BASE_IMAGE:-}"
+    fi
+}
+
+# sha256 over the contents of every file emitted by $1 (a *_config_files
+# function) plus the baked build args. Fails (return 1) if the file list does,
+# routing callers to the :unresolved fallback / explicit refusal.
 config_hash() {
     local files
-    files="$(config_files)" || return 1
+    files="$("$1")" || return 1
     {
         while IFS= read -r f; do
             cat "$f"
         done <<< "$files"
-        # Build args interpolated into compose at build time are baked into
-        # the image and don't show up in file-content hashing — include them
-        # explicitly so a change forces rebuild. Anything else baked via env
-        # interpolation must be added here. Values only, never paths-as-identity:
-        # the overlay dir's *contents* are hashed above, and hashing its absolute
-        # path would give identical worktrees different fingerprints whenever the
-        # script is invoked from a different checkout.
-        printf 'DEV_CONTAINER_WORKSPACE=%s\n' "$DEV_CONTAINER_WORKSPACE"
-        printf 'DEV_UID=%s\n' "$DEV_UID"
-        printf 'DEV_GID=%s\n' "$DEV_GID"
-        printf 'DEV_HOST_USER=%s\n' "$DEV_HOST_USER"
-        # The pinned default lives in compose.nix-base.yml (hashed above when
-        # routed); the env override swaps the FROM image without touching a
-        # file, so it must be hashed explicitly too. (if, not `[ ] &&`: a
-        # false condition as the group's last command would fail the hash
-        # pipeline under pipefail.)
-        if $DEV_USE_NIX_BASE; then
-            printf 'DEV_NIX_BASE_IMAGE=%s\n' "${DEV_NIX_BASE_IMAGE:-}"
-        fi
+        emit_build_args
     } | sha256sum | cut -d' ' -f1
 }
+
+image_config_hash()     { config_hash image_config_files; }
+staleness_config_hash() { config_hash staleness_config_files; }
 
 config_file_desc() {
     case "$(basename "$1")" in
@@ -502,10 +542,16 @@ config_file_desc() {
     esac
 }
 
+# Baseline for the next run's staleness check, written whenever the container
+# is (re)created. Two artifacts over the *staleness* set (the superset):
+#   .file-hashes    — per-file, for show_config_changes' human-readable diff
+#   .staleness-hash — the combined hash container_stale compares against to
+#                     catch runtime-only edits that leave the image ID unchanged
 save_config_hashes() {
-    config_files | while IFS= read -r f; do
+    staleness_config_files | while IFS= read -r f; do
         [ -f "$f" ] && sha256sum "$f"
     done > "/tmp/devcontainer-${DEV_CONTAINER_NAME}.file-hashes"
+    staleness_config_hash > "/tmp/devcontainer-${DEV_CONTAINER_NAME}.staleness-hash" 2>/dev/null || true
 }
 
 show_config_changes() {
@@ -515,7 +561,7 @@ show_config_changes() {
         return
     fi
     local files current_hash saved_hash desc
-    files="$(config_files)" || return 1
+    files="$(staleness_config_files)" || return 1
     while IFS= read -r f; do
         [ -f "$f" ] || continue
         current_hash="$(sha256sum "$f" | cut -d' ' -f1)"
@@ -541,7 +587,7 @@ show_config_changes() {
 # build path refuses explicitly via DEV_IMAGE_HASH_OK.
 DEV_IMAGE_REPO="${DEV_PROJECT_NAME}-devimg"
 DEV_IMAGE_HASH_OK=true
-if _cfg_hash="$(config_hash 2>/dev/null)"; then
+if _cfg_hash="$(image_config_hash 2>/dev/null)"; then
     DEV_IMAGE_REF="${DEV_IMAGE_REPO}:${_cfg_hash}"
 else
     DEV_IMAGE_REF="${DEV_IMAGE_REPO}:unresolved"
@@ -549,16 +595,42 @@ else
 fi
 export DEV_IMAGE_REF
 
-image_stale() {
+# Is the running container out of date w.r.t. current config? Returns 0 (stale)
+# / 1 (fresh) and prints the *kind* of staleness so the caller can word the
+# prompt — a build-input change means an image rebuild, a runtime-only change
+# means just a container recreate (issue #53). Two independent signals:
+#   image    the container's image id != what DEV_IMAGE_REF resolves to now (a
+#            build input changed and the new tag differs, or the container
+#            predates the shared-image scheme / its tag was clean-images'd).
+#            Needs an image (re)build. Also the conservative default when we
+#            can't inspect — prompt rather than silently continue.
+#   runtime  image matches, but a runtime-only input (a host mount) changed
+#            since the container was created — the saved staleness hash differs.
+#            Needs only a recreate, no rebuild.
+container_stale() {
     local container_id
-    container_id="$(dc ps -q app 2>/dev/null | head -1)" || return 0
-    [ -z "$container_id" ] && return 0
+    container_id="$(dc ps -q app 2>/dev/null | head -1)" || { echo image; return 0; }
+    [ -z "$container_id" ] && { echo image; return 0; }
 
     local container_image tagged_image
-    container_image="$(docker inspect --format '{{.Image}}' "$container_id")" || return 0
-    tagged_image="$(docker image inspect --format '{{.ID}}' "$DEV_IMAGE_REF" 2>/dev/null)" || return 0
+    container_image="$(docker inspect --format '{{.Image}}' "$container_id" 2>/dev/null)" || { echo image; return 0; }
+    tagged_image="$(docker image inspect --format '{{.ID}}' "$DEV_IMAGE_REF" 2>/dev/null)" || { echo image; return 0; }
+    if [ "$container_image" != "$tagged_image" ]; then
+        echo image
+        return 0
+    fi
 
-    [ "$container_image" != "$tagged_image" ]
+    # Image is current; check for runtime-only drift against the saved baseline.
+    # No baseline (pre-#53 container) or an unhashable set → not runtime-stale;
+    # the image-id check above already covers the migration case.
+    local saved="/tmp/devcontainer-${DEV_CONTAINER_NAME}.staleness-hash" current
+    if [ -f "$saved" ] && current="$(staleness_config_hash 2>/dev/null)"; then
+        if [ "$current" != "$(cat "$saved")" ]; then
+            echo runtime
+            return 0
+        fi
+    fi
+    return 1
 }
 
 # Make $DEV_IMAGE_REF present: reuse it when it exists, else build under a
@@ -568,8 +640,8 @@ image_stale() {
 # $DEV_IMAGE_REF via the service's `image:` key.
 ensure_image() {
     if ! $DEV_IMAGE_HASH_OK; then
-        echo "error: cannot fingerprint the image build inputs (see config_files) — refusing to build" >&2
-        config_files >/dev/null    # surface the underlying error
+        echo "error: cannot fingerprint the image build inputs (see image_config_files) — refusing to build" >&2
+        image_config_files >/dev/null    # surface the underlying error
         return 1
     fi
     docker image inspect "$DEV_IMAGE_REF" >/dev/null 2>&1 && return 0
@@ -752,22 +824,28 @@ ensure_up() {
             # not just after a build, so every worktree gets a change baseline.
             save_config_hashes
             setup
-        elif image_stale; then
-            # An empty change list is the migration case: image_stale fired
-            # because the container's image isn't the current fingerprint tag
-            # (pre-shared-image container, or a tag removed by clean-images),
-            # while every tracked file still matches the saved baseline.
+        elif _stale_kind="$(container_stale)"; then
             _changes="$(show_config_changes)"
-            if [ -n "$_changes" ]; then
-                echo "Devcontainer config has changed since the container was built:"
+            if [ "$_stale_kind" = runtime ]; then
+                # Runtime-only drift (a host mount): the image is current, so a
+                # recreate applies it with no rebuild.
+                echo "Devcontainer runtime config has changed since the container was created"
+                echo "(recreating applies it — no image rebuild):"
+                printf '%s\n' "$_changes"
+            elif [ -n "$_changes" ]; then
+                echo "Devcontainer build config has changed since the image was built:"
                 printf '%s\n' "$_changes"
             else
+                # Empty change list on an image-kind staleness is the migration
+                # case: the container's image isn't the current fingerprint tag
+                # (pre-shared-image container, or a tag removed by clean-images),
+                # while every tracked file still matches the saved baseline.
                 echo "The running container was built before the current image fingerprint"
                 echo "(no tracked file differs — typically a container from before the"
                 echo "shared-image scheme, or an image removed by clean-images)."
             fi
             echo ""
-            echo "  r) Rebuild container to apply changes"
+            echo "  r) Recreate the container (rebuilding the image only if a build input changed)"
             echo "  c) Continue with existing container"
             echo "  q) Quit"
             read -rp "Choice [r/c/q]: " answer
@@ -783,7 +861,7 @@ ensure_up() {
                     exit 2
                     ;;
                 *)
-                    echo "Continuing with existing container. Changes apply on next rebuild."
+                    echo "Continuing with existing container. Changes apply on next recreate."
                     ;;
             esac
         fi
@@ -1182,6 +1260,10 @@ case "${1:-up}" in
         echo "  DANGEROUSLY_SKIP_PERMISSIONS=${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-<unset>}"
         echo "  CONTAINER_NAME=$DEV_CONTAINER_NAME"
         echo "  IMAGE=$DEV_IMAGE_REF"
+        # Staleness hash (image inputs + runtime inputs) drives the recreate
+        # prompt; it differs from the image tag whenever a runtime-only input
+        # (a host mount) changed. <unresolved> mirrors the IMAGE fallback.
+        echo "  STALENESS=$(staleness_config_hash 2>/dev/null || echo '<unresolved>')"
         if $DEV_USE_NIX_BASE; then
             echo "  BASE=nix-base ($DEV_BASE_REASON)"
         else

@@ -46,8 +46,8 @@ assert_eq "compose points at the nix-base tail Dockerfile" \
 assert_true "the tail Dockerfile exists at that path" \
     test -f "$DEV_BASE/$dockerfile"
 
-# config_files() hashes the lock for local-build staleness; it must exist.
-assert_true "flake.lock exists (hashed by config_files)" \
+# image_config_files() hashes the lock for local-build staleness; it must exist.
+assert_true "flake.lock exists (hashed by image_config_files)" \
     test -f "$DEV_BASE/nix/base/flake.lock"
 
 finish

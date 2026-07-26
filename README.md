@@ -94,6 +94,8 @@ devcontainer up
 
 Worktrees of one project **share a single image**, tagged `<project>-devimg:<fingerprint>` where the fingerprint hashes every build input (Dockerfile, compose files, overlay scripts, baked build args). The first worktree builds it; siblings with identical build inputs reuse it and skip the build entirely. A branch that edits a build input gets its own tag — the two images coexist, so nothing is clobbered or rebuilt on every branch switch. Containers, networks, and per-worktree volumes stay isolated per worktree; `devcontainer clean-images` removes the project's images (all fingerprints) once no container uses them, and old fingerprints otherwise accumulate until you run it.
 
+The image tag hashes **build inputs only**. Purely runtime inputs (`host-mounts.txt` / `host-mounts.local.txt`) feed a separate *staleness* hash that drives the "config changed, recreate?" prompt on a running container — so editing a host mount recreates the container without minting a new image tag or triggering a rebuild. Compose files are hashed whole (they mix build and runtime config), so a runtime-only compose edit still re-tags into a fully-cached rebuild — correct, just slightly noisy.
+
 ## Project configuration
 
 Project-specific configuration lives in a **project overlay** — either `projects/<name>/` in the devcontainer repo (shipped defaults) or `.devcontainer/` in the consumer workspace (local override). Everything outside the overlay (the `Dockerfile`, `nix/base/`, `docker-compose.yml`, `dev/devcontainer`, `lib/`, etc.) is generic infrastructure. The overlay is resolved automatically: workspace `.devcontainer/` takes precedence over `projects/<name>/`, which falls back to `defaults/`. Per-project `devcontainer.json` lives alongside the overlay because the spec doesn't support sub-file includes (see step 5 below).
@@ -259,7 +261,7 @@ The two paths diverge in what they provide:
 | Port forwarding | Not handled (use `docker compose` ports) | `forwardPorts` in `devcontainer.json` |
 | VS Code extensions & settings | Not applied | `customizations.vscode` in `devcontainer.json` |
 | Dep sync on lockfile change | `sync_if_needed` in the script | **Not applied** |
-| Image staleness check | Content hash of Dockerfile, compose, and COPY'd files | Handled by VS Code |
+| Image staleness check | Fingerprint of build inputs (image hash) + runtime inputs (staleness hash) | Handled by VS Code |
 
 ## Troubleshooting
 

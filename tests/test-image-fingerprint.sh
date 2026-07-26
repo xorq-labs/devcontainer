@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# Tests for the shared, fingerprint-tagged project image (DEV_IMAGE_REF).
+# Tests for the shared, fingerprint-tagged project image (DEV_IMAGE_REF) and
+# its split from the container-staleness hash (issue #53).
 #
-# The fingerprint (config_hash) gates whether an image build runs at all, so
-# these tests guard its two failure modes:
-#   - a build input missing from config_files() -> edits silently never reach
-#     the image (the COPY-source coverage check);
+# The image fingerprint (image_config_hash) gates whether an image build runs
+# at all, so these tests guard its two failure modes:
+#   - a build input missing from image_config_files() -> edits silently never
+#     reach the image (the COPY-source coverage check);
 #   - path-as-identity in the hash -> identical worktrees get different
 #     fingerprints and stop sharing (the tool-copy equality checks).
+# The split adds a second axis: a runtime-only input (a host mount) must move
+# the staleness hash (container recreate) WITHOUT moving the image tag (no
+# rebuild), and the root Dockerfile must not feed the image hash on the nix
+# route (over-invalidation nit).
 # Runs against a disposable git repo and copies of the tooling — no docker.
 set -euo pipefail
 
@@ -20,11 +25,11 @@ _cleanup_dirs+=("$TMPDIR_ROOT")
 
 MAIN_TREE="$(new_repo "$TMPDIR_ROOT/fakerepo")"
 
-# ---------- test: every Dockerfile COPY source is hashed by config_files ----------
-# config_hash decides whether a build runs, so a COPY'd file it doesn't cover
-# can change without ever reaching the image.
-echo "--- COPY-source coverage in config_files ---"
-config_files_body="$(sed -n '/^config_files()/,/^}$/p' "$DC")"
+# ---------- test: every Dockerfile COPY source is hashed by image_config_files ----------
+# image_config_hash decides whether a build runs, so a COPY'd file it doesn't
+# cover can change without ever reaching the image.
+echo "--- COPY-source coverage in image_config_files ---"
+config_files_body="$(sed -n '/^image_config_files()/,/^}$/p' "$DC")"
 for df in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
     while IFS= read -r src; do
         if grep -qF "$src" <<< "$config_files_body"; then
@@ -58,6 +63,14 @@ image_of() {
     shift
     (cd "$MAIN_TREE" && env "$@" "$tool/dev/devcontainer" resolve 2>/dev/null) \
         | grep -oE 'IMAGE=\S+'
+}
+
+# STALENESS=<hash> as printed by resolve (image inputs + runtime inputs).
+staleness_of() {
+    local tool="$1"
+    shift
+    (cd "$MAIN_TREE" && env "$@" "$tool/dev/devcontainer" resolve 2>/dev/null) \
+        | grep -oE 'STALENESS=\S+'
 }
 
 # ---------- test: resolve prints a fingerprint-tagged image ----------
@@ -103,12 +116,15 @@ assert_true "different host user/uid changes the fingerprint" [ "$img_a" != "$im
 
 # ---------- test: unhashable inputs degrade, not die ----------
 # Teardown (down/reset/clean) runs through the same top-level code; a missing
-# Dockerfile must fall back to a never-existing tag instead of aborting.
+# required build input must fall back to a never-existing tag instead of
+# aborting. Forced to the classic route (DEV_NIX_BASE=0), where the root
+# Dockerfile IS a required build input — on the nix route it isn't one, so its
+# absence is correctly not a hash failure (see the nix-route test below).
 echo "--- hash-failure fallback ---"
 COPY_C="$TMPDIR_ROOT/tool-c"
 make_toolcopy "$COPY_C"
 rm "$COPY_C/Dockerfile"
-if img_c="$(image_of "$COPY_C")"; then
+if img_c="$(image_of "$COPY_C" DEV_NIX_BASE=0)"; then
     assert_eq "missing Dockerfile falls back to :unresolved" \
         "IMAGE=fakerepo-devimg:unresolved" "$img_c"
 else
@@ -126,6 +142,54 @@ if img_d="$(image_of "$COPY_D")"; then
 else
     _fail "resolve survives a missing overlay file" "resolve exited nonzero"
 fi
+
+# ---------- test: staleness hash splits from the image tag (issue #53) ----------
+# A purely-runtime input (host-mounts.txt) must move the staleness hash — so the
+# container recreate prompt still fires — WITHOUT moving the image tag, so no
+# rebuild is triggered. A build input, being in both sets, must move both.
+echo "--- image / staleness split ---"
+COPY_E="$TMPDIR_ROOT/tool-e"
+make_toolcopy "$COPY_E"
+# Reduce the staleness set to the image set (defaults/ ships a host-mounts.txt):
+# with no runtime inputs the two hashes are byte-identical.
+rm -f "$COPY_E/defaults/host-mounts.txt" "$COPY_E/defaults/host-mounts.local.txt"
+img_e0="$(image_of "$COPY_E")"
+stale_e0="$(staleness_of "$COPY_E")"
+assert_true "resolve prints a staleness hash" [ -n "$stale_e0" ]
+assert_eq "no runtime inputs -> staleness hash equals image hash" \
+    "${img_e0##*:}" "${stale_e0#STALENESS=}"
+
+# Add a runtime-only input.
+printf '%s\n' "/tmp:/mnt/tmp" > "$COPY_E/defaults/host-mounts.txt"
+img_e1="$(image_of "$COPY_E")"
+stale_e1="$(staleness_of "$COPY_E")"
+assert_eq "host-mounts edit leaves the image tag unchanged" "$img_e0" "$img_e1"
+assert_true "host-mounts edit changes the staleness hash" [ "$stale_e0" != "$stale_e1" ]
+
+# A build input still moves both hashes (staleness is a superset).
+printf '\n# split test mutation\n' >> "$COPY_E/lib/git.sh"
+img_e2="$(image_of "$COPY_E")"
+stale_e2="$(staleness_of "$COPY_E")"
+assert_true "build-input edit changes the image tag" [ "$img_e1" != "$img_e2" ]
+assert_true "build-input edit changes the staleness hash too" [ "$stale_e1" != "$stale_e2" ]
+
+# ---------- test: nix route excludes the root Dockerfile from the image hash ----------
+# On the nix route Dockerfile.nix-default is the build input and the root
+# Dockerfile is never referenced, so hashing it there only over-invalidates
+# nix images (issue #53 nit). Classic route must still track it.
+echo "--- nix route excludes the root Dockerfile ---"
+COPY_F="$TMPDIR_ROOT/tool-f"
+make_toolcopy "$COPY_F"
+img_classic="$(image_of "$COPY_F" DEV_NIX_BASE=0)"
+img_nix="$(image_of "$COPY_F" DEV_NIX_BASE=1)"
+assert_true "classic and nix routes fingerprint differently" [ "$img_classic" != "$img_nix" ]
+printf '\n# nix-route root Dockerfile mutation\n' >> "$COPY_F/Dockerfile"
+img_classic2="$(image_of "$COPY_F" DEV_NIX_BASE=0)"
+img_nix2="$(image_of "$COPY_F" DEV_NIX_BASE=1)"
+assert_true "classic route: root Dockerfile edit changes the image" \
+    [ "$img_classic" != "$img_classic2" ]
+assert_eq "nix route: root Dockerfile edit does NOT change the image" \
+    "$img_nix" "$img_nix2"
 
 # ---------- test: compose wires the shared image ref ----------
 echo "--- compose wiring ---"
