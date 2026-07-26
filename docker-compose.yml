@@ -1,5 +1,11 @@
 services:
   app:
+    # One image per project, shared across worktrees: dev/devcontainer computes
+    # DEV_IMAGE_REF = <project>-devimg:<fingerprint-of-build-inputs>, builds it
+    # only when absent (ensure_image), and `devcontainer clean-images` removes
+    # it project-wide. Identical worktrees reuse one image; divergent build
+    # inputs get distinct tags and coexist.
+    image: ${DEV_IMAGE_REF:?DEV_IMAGE_REF is required}
     build:
       context: ${DEV_BASE_DIR:-.}
       additional_contexts:
