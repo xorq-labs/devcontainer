@@ -408,16 +408,23 @@ is_running() {
 # means edits to that file silently never reach the image.
 # tests/test-image-fingerprint.sh asserts COPY-source coverage.
 config_files() {
-    local df="$DEV_BASE_DIR/Dockerfile"
-    [ -f "$df" ] || { echo "error: $df not found" >&2; return 1; }
-    printf '%s\n' \
-        "$df" \
+    # Required inputs are verified readable before being emitted: config_hash
+    # `cat`s each entry inside a pipeline where a failure is silent, so a
+    # missing file would otherwise yield a *different but valid-looking*
+    # fingerprint and a raw docker error later at COPY time. Failing here
+    # routes to the :unresolved fallback / the explicit ensure_image refusal.
+    local f
+    for f in \
+        "$DEV_BASE_DIR/Dockerfile" \
         "$COMPOSE_FILE" \
         "$DEV_BASE_DIR/setup-claude.py" \
         "$DEV_BASE_DIR/audit-hook" \
         "$DEV_BASE_DIR/lib/git.sh" \
         "$DEV_PROJECT_DIR/install-system.sh" \
-        "$DEV_PROJECT_DIR/setup-env.sh"
+        "$DEV_PROJECT_DIR/setup-env.sh"; do
+        [ -r "$f" ] || { echo "error: build input not found (or unreadable): $f" >&2; return 1; }
+        printf '%s\n' "$f"
+    done
     [ -f "$COMPOSE_OVERRIDE" ] && printf '%s\n' "$COMPOSE_OVERRIDE"
     # Baked into the image and holds the pinned Nix version/sha; hash it so a pin
     # bump actually invalidates the image (the Dockerfile text alone doesn't change).
@@ -567,7 +574,10 @@ ensure_image() {
     fi
     docker image inspect "$DEV_IMAGE_REF" >/dev/null 2>&1 && return 0
     (
-        flock 8
+        if ! flock -n 8; then
+            echo "Waiting for another worktree's build of $DEV_IMAGE_REF..."
+            flock 8
+        fi
         # double-check: a sibling worktree may have built it while we waited
         docker image inspect "$DEV_IMAGE_REF" >/dev/null 2>&1 && exit 0
         # The nix base is only needed when we actually build. Pulling here —
@@ -820,6 +830,11 @@ case "${1:-up}" in
         dc down --volumes
         # Sweep legacy per-worktree image names from before the shared-image
         # scheme (compose default <container>-app + <container>:<hash> tags).
+        # Known ambiguity inherent to the legacy naming: with sibling worktrees
+        # <x> and <x>-app, cleaning <x> also matches <x>-app's legacy hash-tag
+        # repo. Legacy images only, and in-use ones survive (docker rmi refuses,
+        # errors swallowed) — worst case a sibling's unused legacy image goes
+        # slightly early.
         docker images --format '{{.Repository}}:{{.Tag}}' \
             | grep -E "^${DEV_CONTAINER_NAME}(-app)?:" \
             | xargs -r docker rmi 2>/dev/null || true

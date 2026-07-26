@@ -114,6 +114,18 @@ if img_c="$(image_of "$COPY_C")"; then
 else
     _fail "resolve survives unhashable build inputs" "resolve exited nonzero"
 fi
+# A missing *overlay* file must refuse too — config_hash `cat`s each entry
+# inside a pipeline where the failure is silent, so without the readability
+# guard this would mint a different but valid-looking fingerprint.
+COPY_D="$TMPDIR_ROOT/tool-d"
+make_toolcopy "$COPY_D"
+rm "$COPY_D/defaults/setup-env.sh"
+if img_d="$(image_of "$COPY_D")"; then
+    assert_eq "missing overlay file falls back to :unresolved" \
+        "IMAGE=fakerepo-devimg:unresolved" "$img_d"
+else
+    _fail "resolve survives a missing overlay file" "resolve exited nonzero"
+fi
 
 # ---------- test: compose wires the shared image ref ----------
 echo "--- compose wiring ---"
