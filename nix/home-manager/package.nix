@@ -77,6 +77,19 @@ stdenvNoCC.mkDerivation {
     # a read-only store and on hosts without /usr/bin/env.
     patchShebangs "$tree/dev" "$tree/lib" "$tree"/*.py
 
+    # Ship shell completions in the standard per-shell locations so that
+    # nixpkgs / home-manager pick them up automatically from the profile — no
+    # `devcontainer install-completions` step needed. Generated from the same
+    # single source of truth (`devcontainer-completions <shell>`) the runtime
+    # command uses, so the two can never drift.
+    gen="$tree/dev/devcontainer-completions"
+    mkdir -p "$out/share/bash-completion/completions" \
+             "$out/share/zsh/site-functions" \
+             "$out/share/fish/vendor_completions.d"
+    "$gen" bash > "$out/share/bash-completion/completions/devcontainer"
+    "$gen" zsh  > "$out/share/zsh/site-functions/_devcontainer"
+    "$gen" fish > "$out/share/fish/vendor_completions.d/devcontainer.fish"
+
     # Wrap each entry point so the host toolchain is on PATH. --argv0 pins $0
     # back to the real script in the store so the scripts' own
     # `readlink -f "$0"` + "../lib" self-location keeps resolving — a plain
