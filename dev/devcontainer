@@ -749,8 +749,19 @@ ensure_up() {
             save_config_hashes
             setup
         elif image_stale; then
-            echo "Devcontainer config has changed since the container was built:"
-            show_config_changes
+            # An empty change list is the migration case: image_stale fired
+            # because the container's image isn't the current fingerprint tag
+            # (pre-shared-image container, or a tag removed by clean-images),
+            # while every tracked file still matches the saved baseline.
+            _changes="$(show_config_changes)"
+            if [ -n "$_changes" ]; then
+                echo "Devcontainer config has changed since the container was built:"
+                printf '%s\n' "$_changes"
+            else
+                echo "The running container was built before the current image fingerprint"
+                echo "(no tracked file differs — typically a container from before the"
+                echo "shared-image scheme, or an image removed by clean-images)."
+            fi
             echo ""
             echo "  r) Rebuild container to apply changes"
             echo "  c) Continue with existing container"
