@@ -55,8 +55,11 @@ devcontainer down
 # destroy container and all volumes (venv, uv cache) to start fresh
 devcontainer reset
 
-# reset + remove images and host-side artifacts
+# reset + remove host-side artifacts (keeps the shared project image)
 devcontainer clean
+
+# remove the project's shared images — affects ALL worktrees
+devcontainer clean-images
 
 # check whether the container is running
 devcontainer status
@@ -88,6 +91,8 @@ devcontainer -w ../xorq-my-feature up
 # or from inside the worktree (direnv adds dev/ to PATH)
 devcontainer up
 ```
+
+Worktrees of one project **share a single image**, tagged `<project>-devimg:<fingerprint>` where the fingerprint hashes every build input (Dockerfile, compose files, overlay scripts, baked build args). The first worktree builds it; siblings with identical build inputs reuse it and skip the build entirely. A branch that edits a build input gets its own tag — the two images coexist, so nothing is clobbered or rebuilt on every branch switch. Containers, networks, and per-worktree volumes stay isolated per worktree; `devcontainer clean-images` removes the project's images (all fingerprints) once no container uses them, and old fingerprints otherwise accumulate until you run it.
 
 ## Project configuration
 
@@ -261,8 +266,8 @@ The two paths diverge in what they provide:
 - **`devcontainer: command not found`** — `dev/` isn't on PATH. Run `direnv allow` in the repo root, or invoke as `./dev/devcontainer`.
 - **`docker: command not found` or "Cannot connect to the Docker daemon"** — Docker isn't installed or the daemon isn't running. Start Docker (`systemctl --user start docker` or your distro's equivalent).
 - **`docker compose` reports "unknown command"** — you have Compose v1. Install Compose v2 (the script uses `docker compose`, not `docker-compose`).
-- **Build fails partway through `up`** — inspect with `devcontainer logs`, then `devcontainer clean && devcontainer up` to rebuild from scratch.
-- **Files in `.venv/` owned by root, or `Permission denied` writing to the workspace** — UID/GID drift between the host and the image. `devcontainer clean && devcontainer up` rebuilds with the current host UID/GID.
+- **Build fails partway through `up`** — inspect with `devcontainer logs` and retry: a failed build leaves no fingerprint tag, so the next `up` rebuilds. For corrupted cached layers, `devcontainer clean-images` then `docker builder prune` before retrying.
+- **Files in `.venv/` owned by root, or `Permission denied` writing to the workspace** — UID/GID drift between the host and the image. The host UID/GID is part of the image fingerprint, so `devcontainer clean && devcontainer up` builds a fresh image matching the current host IDs.
 - **`uv sync` runs every entry** — the lockfile is newer than `.venv/.last-sync`. Expected after `git pull`; harmless.
 - **"all predefined address pools have been fully subnetted"** — Docker ran out of subnet ranges for new networks. Orphaned networks accumulate when containers exit without going through `devcontainer down` (host reboot, Docker daemon restart, `docker stop`). Clean up with `docker network prune` and retry.
 - **Auto-rebuild prompt won't go away** — the content hash of `Dockerfile` / compose changed. Accept the rebuild, or `devcontainer clean` to reset state.

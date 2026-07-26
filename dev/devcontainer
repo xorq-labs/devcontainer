@@ -41,9 +41,12 @@ Commands:
   up                                  start the dev container (default)
   down [--yes]                        stop the dev container
   reset [--yes]                       destroy container and all volumes
-  clean [--yes]                       reset + remove images and host-side artifacts
+  clean [--yes]                       reset + remove host-side artifacts and legacy
+                                        per-worktree images (the shared project image is kept)
   clean-caches [--yes]                remove the project's shared caches (external volumes:
                                         nix store, package caches) — affects ALL worktrees
+  clean-images [--yes]                remove the project's shared images (all fingerprint
+                                        tags) — affects ALL worktrees
   status                              show whether the container is running
   list                                list all worktrees with container status and overlay
   resolve                             show resolved overlay and configuration (dry run)
@@ -192,7 +195,7 @@ DEV_CONTAINER_WORKSPACE="/workspaces/src"
 
 DEV_WORKSPACE="${DEV_WORKSPACE:-.}"
 
-if [[ "${1:-up}" =~ ^(down|reset|clean|clean-caches|status|logs|list|resolve)$ ]]; then
+if [[ "${1:-up}" =~ ^(down|reset|clean|clean-caches|clean-images|status|logs|list|resolve)$ ]]; then
     if [ -d "$DEV_WORKSPACE" ]; then
         export DEV_WORKSPACE="$(cd "$DEV_WORKSPACE" && pwd)"
     else
@@ -520,6 +523,25 @@ show_config_changes() {
     done <<< "$files"
 }
 
+# One image per project, shared across worktrees, tagged by the fingerprint of
+# its build inputs: identical branches resolve to the same ref (first worktree
+# builds, the rest reuse), divergent build inputs get their own tag and coexist
+# — no clobber, no rebuild thrash. Computed once per invocation (TOCTOU: an
+# edit mid-run must not desync the presence gate from the tag compose writes)
+# and exported for compose's `image:` interpolation. On hash failure fall back
+# to a ref that never exists — teardown (down/reset/clean) must keep working
+# with unhashable inputs (e.g. Dockerfile missing mid-branch-surgery), and the
+# build path refuses explicitly via DEV_IMAGE_HASH_OK.
+DEV_IMAGE_REPO="${DEV_PROJECT_NAME}-devimg"
+DEV_IMAGE_HASH_OK=true
+if _cfg_hash="$(config_hash 2>/dev/null)"; then
+    DEV_IMAGE_REF="${DEV_IMAGE_REPO}:${_cfg_hash}"
+else
+    DEV_IMAGE_REF="${DEV_IMAGE_REPO}:unresolved"
+    DEV_IMAGE_HASH_OK=false
+fi
+export DEV_IMAGE_REF
+
 image_stale() {
     local container_id
     container_id="$(dc ps -q app 2>/dev/null | head -1)" || return 0
@@ -527,15 +549,35 @@ image_stale() {
 
     local container_image tagged_image
     container_image="$(docker inspect --format '{{.Image}}' "$container_id")" || return 0
-    tagged_image="$(docker image inspect --format '{{.ID}}' "${DEV_CONTAINER_NAME}:$(config_hash)" 2>/dev/null)" || return 0
+    tagged_image="$(docker image inspect --format '{{.ID}}' "$DEV_IMAGE_REF" 2>/dev/null)" || return 0
 
     [ "$container_image" != "$tagged_image" ]
 }
 
-tag_image() {
-    docker tag "$(dc images -q app)" "${DEV_CONTAINER_NAME}:$(config_hash)" \
-        || echo "warning: could not tag image — staleness check will re-trigger next run" >&2
-    save_config_hashes
+# Make $DEV_IMAGE_REF present: reuse it when it exists, else build under a
+# repo-scoped lock (the ensure_up flock is per-worktree, so sibling worktrees
+# would otherwise race to build the same tag). Only the build is serialized —
+# container start stays outside the lock. compose tags the result as
+# $DEV_IMAGE_REF via the service's `image:` key.
+ensure_image() {
+    if ! $DEV_IMAGE_HASH_OK; then
+        echo "error: cannot fingerprint the image build inputs (see config_files) — refusing to build" >&2
+        config_files >/dev/null    # surface the underlying error
+        return 1
+    fi
+    docker image inspect "$DEV_IMAGE_REF" >/dev/null 2>&1 && return 0
+    (
+        flock 8
+        # double-check: a sibling worktree may have built it while we waited
+        docker image inspect "$DEV_IMAGE_REF" >/dev/null 2>&1 && exit 0
+        # The nix base is only needed when we actually build. Pulling here —
+        # not in ensure_up — keeps `up`/`exec`/`claude` against a present
+        # image from downloading ~0.76 GB it won't use (or hard-failing on an
+        # unreachable registry it doesn't need).
+        $DEV_USE_NIX_BASE && { ensure_nix_base || exit 1; }
+        echo "Building image $DEV_IMAGE_REF..."
+        dc build app
+    ) 8>"/tmp/devcontainer-${DEV_PROJECT_NAME}.build.lock"
 }
 
 require_tty() {
@@ -637,19 +679,17 @@ disconnect_stale_networks() {
     return "$fixed"
 }
 
-# Run `dc up --build -d`, streaming output while also capturing it to detect
-# known failure patterns (e.g. Docker network exhaustion).
+# Run `dc up -d`, streaming output while also capturing it to detect known
+# failure patterns (e.g. Docker network exhaustion). No `--build`: the image is
+# made present by ensure_image() beforehand, so `up` only creates/starts the
+# container. (If the image vanished between the two, compose falls back to
+# building it — unlocked, but it tags the same fingerprint ref.)
 dc_up() {
-    # The base image is only needed when we actually build. Pulling here —
-    # not up in ensure_up — keeps `up`/`exec`/`claude` against an
-    # already-running container from downloading ~0.76 GB it won't use (or
-    # hard-failing on an unreachable registry it doesn't need).
-    $DEV_USE_NIX_BASE && { ensure_nix_base || return 1; }
     local _up_tmp _up_rc
     _up_tmp=$(mktemp)
     # shellcheck disable=SC2064
     trap "rm -f '$_up_tmp'" RETURN
-    dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
+    dc up -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
     if [ "$_up_rc" -ne 0 ]; then
         if grep -q "network.*not found" "$_up_tmp"; then
             echo "" >&2
@@ -659,7 +699,7 @@ dc_up() {
             container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true
             if [ -n "$container_id" ]; then
                 disconnect_stale_networks "$container_id" || true
-                dc up --build -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
+                dc up -d 2>&1 | tee "$_up_tmp" && _up_rc=0 || _up_rc=$?
             fi
         fi
         if [ "$_up_rc" -ne 0 ] && grep -q "could not find an available.*address pool" "$_up_tmp"; then
@@ -692,8 +732,11 @@ ensure_up() {
         fi
 
         if ! is_running; then
+            ensure_image
             dc_up
-            tag_image
+            # Baseline for show_config_changes — saved on the reuse path too,
+            # not just after a build, so every worktree gets a change baseline.
+            save_config_hashes
             setup
         elif image_stale; then
             echo "Devcontainer config has changed since the container was built:"
@@ -706,8 +749,9 @@ ensure_up() {
             case "$answer" in
                 [rR]*)
                     dc down
+                    ensure_image
                     dc_up
-                    tag_image
+                    save_config_hashes
                     setup
                     ;;
                 [qQ]*)
@@ -763,7 +807,7 @@ case "${1:-up}" in
         ;;
     clean)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, images, audit log, and session captures). Shared project caches (external volumes) are kept — use 'devcontainer clean-caches' to remove those. Continue? [y/N] " answer
+            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, audit log, and session captures). The project image and shared caches are kept (shared by ALL worktrees) — use 'devcontainer clean-images' / 'clean-caches' to remove those. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
@@ -771,10 +815,15 @@ case "${1:-up}" in
         stop_ssh_forward
         stop_gpg_forward
         stop_x11_forward
-        dc down --volumes --rmi local
+        # No --rmi: the image is project-shared ($DEV_IMAGE_REPO) — siblings may
+        # run on it. clean-images removes it project-wide.
+        dc down --volumes
+        # Sweep legacy per-worktree image names from before the shared-image
+        # scheme (compose default <container>-app + <container>:<hash> tags).
         docker images --format '{{.Repository}}:{{.Tag}}' \
-            | grep "^${DEV_CONTAINER_NAME}:" \
+            | grep -E "^${DEV_CONTAINER_NAME}(-app)?:" \
             | xargs -r docker rmi 2>/dev/null || true
+        rm -f "/tmp/devcontainer-${DEV_CONTAINER_NAME}.file-hashes"
         rm -rf "$DEV_WORKSPACE/.claude/container-audit"
         rm -rf "$DEV_WORKSPACE/.claude/container-sessions"
         echo "Cleaned: $DEV_CONTAINER_NAME"
@@ -824,6 +873,47 @@ case "${1:-up}" in
         done
         if [ "$_rc" -ne 0 ]; then
             echo "Some caches were not removed. Stop the containers listed above first ('devcontainer down' in each worktree), then retry." >&2
+        fi
+        exit "$_rc"
+        ;;
+    clean-images)
+        # Remove the project's shared images (every fingerprint tag under
+        # DEV_IMAGE_REPO). Like clean-caches this is project-wide, not
+        # per-worktree: per-worktree `clean` never touches these.
+        mapfile -t _images < <(docker images --format '{{.Repository}}:{{.Tag}}' \
+            | grep "^${DEV_IMAGE_REPO}:" || true)
+
+        if [ "${#_images[@]}" -eq 0 ]; then
+            echo "No shared images found for project '$DEV_PROJECT_NAME' (${DEV_IMAGE_REPO}:*)."
+            exit 0
+        fi
+
+        if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
+            echo "This removes shared images for project '$DEV_PROJECT_NAME', used by ALL its worktrees:"
+            printf '  %s\n' "${_images[@]}"
+            read -rp "Continue? [y/N] " answer
+            if [[ "$answer" != [yY]* ]]; then
+                exit 0
+            fi
+        fi
+
+        _rc=0
+        for _img in "${_images[@]}"; do
+            _users="$(docker ps -a --filter ancestor="$_img" --format '{{.Names}}' | paste -sd, -)"
+            if [ -n "$_users" ]; then
+                echo "in use, not removed: $_img (containers: $_users)" >&2
+                _rc=1
+                continue
+            fi
+            if docker rmi "$_img" >/dev/null 2>&1; then
+                echo "removed: $_img"
+            else
+                echo "failed: $_img" >&2
+                _rc=1
+            fi
+        done
+        if [ "$_rc" -ne 0 ]; then
+            echo "Some images were not removed. Remove the containers listed above first ('devcontainer down' or 'clean' in each worktree), then retry." >&2
         fi
         exit "$_rc"
         ;;
@@ -1061,6 +1151,7 @@ case "${1:-up}" in
         echo "  MODEL_VERSION=${DEV_MODEL_VERSION:-<unset>}"
         echo "  DANGEROUSLY_SKIP_PERMISSIONS=${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-<unset>}"
         echo "  CONTAINER_NAME=$DEV_CONTAINER_NAME"
+        echo "  IMAGE=$DEV_IMAGE_REF"
         if $DEV_USE_NIX_BASE; then
             echo "  BASE=nix-base ($DEV_BASE_REASON)"
         else

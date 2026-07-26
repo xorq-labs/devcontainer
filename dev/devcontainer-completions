@@ -10,7 +10,7 @@ _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials set-credentials fix-network unlock ps audit bump-claude-code bump-nix completions install-completions"
+    local subcmds="init up down reset clean clean-caches clean-images status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials set-credentials fix-network unlock ps audit bump-claude-code bump-nix completions install-completions"
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -72,8 +72,9 @@ _devcontainer() {
         'up:start the dev container'
         'down:stop the dev container'
         'reset:destroy container and all volumes'
-        'clean:reset + remove images and host-side artifacts'
+        'clean:reset + remove host-side artifacts (keeps the shared project image)'
         'clean-caches:remove the project shared caches (affects all worktrees)'
+        'clean-images:remove the project shared images (affects all worktrees)'
         'exec:run a command in the dev container'
         'claude:run claude in the dev container'
         'claude-dangerously-skip-permissions:run claude with --dangerously-skip-permissions'
@@ -120,15 +121,16 @@ ZSH
         ;;
     fish)
         cat <<'FISH'
-set -l cmds init up down reset clean clean-caches status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials fix-network unlock ps audit bump-claude-code bump-nix completions install-completions
+set -l cmds init up down reset clean clean-caches clean-images status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg copy-host-transcripts fix-credentials fix-network unlock ps audit bump-claude-code bump-nix completions install-completions
 complete -c devcontainer -f
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a init -d 'create a project overlay'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a up -d 'start the dev container'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a down -d 'stop the dev container'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a reset -d 'destroy container and all volumes'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a clean -d 'reset + remove images and host-side artifacts'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a clean -d 'reset + remove host-side artifacts (keeps the shared project image)'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a clean-caches -d 'remove the project shared caches (affects all worktrees)'
+complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a clean-images -d 'remove the project shared images (affects all worktrees)'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a exec -d 'run a command in the dev container'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a claude -d 'run claude in the dev container'
 complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a claude-dangerously-skip-permissions -d 'run claude with --dangerously-skip-permissions'
