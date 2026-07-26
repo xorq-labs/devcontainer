@@ -400,6 +400,10 @@ is_running() {
     dc ps --status running --format '{{.Service}}' 2>/dev/null | grep -q '^app$'
 }
 
+# Every file baked into the image (each COPY source in both Dockerfiles) must
+# be listed here: config_hash gates whether a build runs at all, so an omission
+# means edits to that file silently never reach the image.
+# tests/test-image-fingerprint.sh asserts COPY-source coverage.
 config_files() {
     local df="$DEV_BASE_DIR/Dockerfile"
     [ -f "$df" ] || { echo "error: $df not found" >&2; return 1; }
@@ -408,6 +412,7 @@ config_files() {
         "$COMPOSE_FILE" \
         "$DEV_BASE_DIR/setup-claude.py" \
         "$DEV_BASE_DIR/audit-hook" \
+        "$DEV_BASE_DIR/lib/git.sh" \
         "$DEV_PROJECT_DIR/install-system.sh" \
         "$DEV_PROJECT_DIR/setup-env.sh"
     [ -f "$COMPOSE_OVERRIDE" ] && printf '%s\n' "$COMPOSE_OVERRIDE"
@@ -448,9 +453,14 @@ config_hash() {
         # Build args interpolated into compose at build time are baked into
         # the image and don't show up in file-content hashing — include them
         # explicitly so a change forces rebuild. Anything else baked via env
-        # interpolation must be added here.
+        # interpolation must be added here. Values only, never paths-as-identity:
+        # the overlay dir's *contents* are hashed above, and hashing its absolute
+        # path would give identical worktrees different fingerprints whenever the
+        # script is invoked from a different checkout.
         printf 'DEV_CONTAINER_WORKSPACE=%s\n' "$DEV_CONTAINER_WORKSPACE"
-        printf 'DEV_PROJECT_DIR=%s\n' "$DEV_PROJECT_DIR"
+        printf 'DEV_UID=%s\n' "$DEV_UID"
+        printf 'DEV_GID=%s\n' "$DEV_GID"
+        printf 'DEV_HOST_USER=%s\n' "$DEV_HOST_USER"
         # The pinned default lives in compose.nix-base.yml (hashed above when
         # routed); the env override swaps the FROM image without touching a
         # file, so it must be hashed explicitly too. (if, not `[ ] &&`: a
