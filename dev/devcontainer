@@ -67,6 +67,10 @@ Commands:
   set-credentials <file>|-            override with a private token from <file> or stdin
                                         (e.g. claude-profile export-to <p> - | devcontainer set-credentials -);
                                         revert to the profile seed with fix-credentials
+  set-token <file>|-                  install a raw setup-token bearer from <file> or stdin for a
+                                        mountless runtime (CI/Codespaces): injected as
+                                        CLAUDE_CODE_OAUTH_TOKEN at launch (ADR-0002)
+                                        (e.g. claude-profile export-to <p> --token - | devcontainer set-token -)
   fix-network                         disconnect stale networks from a stopped container
                                         (needed after ungraceful host shutdown)
   unlock                              remove stale lockfile (safe — refuses if lock is actively held)
@@ -371,6 +375,19 @@ dc_exec() {
     dc exec \
         -e DEV_WORKTREE="$DEV_WORKTREE" \
         app "$@"
+}
+
+# Launch claude in the container, injecting a claude-profile setup-token as
+# CLAUDE_CODE_OAUTH_TOKEN when one is active
+# (docs/adr/0002-devcontainer-setup-token-env-delivery.md). A `dc exec` inherits
+# neither /etc/profile.d nor /etc/bash.bashrc, so the token-env snippet — which
+# selects the token and neutralizes higher-precedence sources — is sourced
+# explicitly here. It is a no-op for OAuth profiles (the seeded .credentials.json
+# is used instead). Args after the function name are passed through to claude.
+dc_exec_claude() {
+    dc_exec sh -c \
+        '. /usr/local/lib/devcontainer/claude-code-token-env.sh; exec claude "$@"' \
+        claude "$@"
 }
 
 # Runs whenever routing selects the Nix base (the default for non-seed
@@ -1106,7 +1123,7 @@ case "${1:-up}" in
         fi
         model_args=()
         [ -n "${DEV_MODEL_VERSION:-}" ] && model_args=(--model "$DEV_MODEL_VERSION")
-        dc_exec claude "${danger_args[@]}" "${model_args[@]}" "$@"
+        dc_exec_claude "${danger_args[@]}" "${model_args[@]}" "$@"
         ;;
     claude-dangerously-skip-permissions)
         shift
@@ -1115,7 +1132,7 @@ case "${1:-up}" in
         echo "Entering claude in $DEV_CONTAINER_NAME (--dangerously-skip-permissions)..."
         model_args=()
         [ -n "${DEV_MODEL_VERSION:-}" ] && model_args=(--model "$DEV_MODEL_VERSION")
-        dc_exec claude --dangerously-skip-permissions "${model_args[@]}" "$@"
+        dc_exec_claude --dangerously-skip-permissions "${model_args[@]}" "$@"
         ;;
     refresh-ssh)
         if ! is_running; then
@@ -1194,6 +1211,45 @@ case "${1:-up}" in
         fi
         echo "Installed private credentials in $DEV_CONTAINER_NAME"
         echo "  (this container no longer shares the host token; revert with: devcontainer fix-credentials)"
+        ;;
+    set-token)
+        # Install a raw setup-token bearer for this container, for a MOUNTLESS
+        # runtime (CI/Codespaces) where the read-only host profile store is not
+        # available (docs/adr/0002-devcontainer-setup-token-env-delivery.md). The
+        # bytes are streamed on stdin into a private 0600 file the token-env
+        # snippet reads at launch (CLAUDE_CODE_OAUTH_TOKEN). This is NOT
+        # set-credentials: a setup-token is a raw bearer, not a `.credentials.json`,
+        # so it uses install-claude-token.sh (bearer validation) and a different
+        # dest — the JSON installer would reject it. Host-mounted dev containers
+        # need no set-token: the snippet reads the token from the :ro store.
+        shift
+        src="${1:-}"
+        if [ -z "$src" ]; then
+            echo "usage: devcontainer set-token <file>|-" >&2
+            echo "  stream form (nothing touches the host disk):" >&2
+            echo "    claude-profile export-to <profile> --token - | devcontainer set-token -" >&2
+            echo "    devcontainer set-token <(claude-profile export-to <profile> --token -)" >&2
+            echo "  (an explicit set-token overrides the read-only host store for this container)" >&2
+            exit 1
+        fi
+        if ! is_running; then
+            echo "error: container is not running (start with 'devcontainer up' first)" >&2
+            exit 1
+        fi
+        # -e (not -f) so a process-substitution path (/dev/fd/N) or fifo is accepted.
+        if [ "$src" != "-" ] && [ ! -e "$src" ]; then
+            echo "error: no such source: $src" >&2
+            exit 1
+        fi
+        installer="$(cat "$DEV_BASE_DIR/lib/install-claude-token.sh")"
+        dest=/home/vscode/.claude/.oauth-token
+        if [ "$src" = "-" ]; then
+            dc exec -T -u root app sh -c "$installer" _ "$dest" vscode:vscode
+        else
+            dc exec -T -u root app sh -c "$installer" _ "$dest" vscode:vscode <"$src"
+        fi
+        echo "Installed a setup-token in $DEV_CONTAINER_NAME"
+        echo "  (injected as CLAUDE_CODE_OAUTH_TOKEN at launch; remove with: rm ~/.claude/.oauth-token)"
         ;;
     fix-network)
         container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true

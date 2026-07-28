@@ -13,6 +13,12 @@ the host credential file and refreshes its own token independently — see
 docs/adr/0001-devcontainer-private-token-isolation.md. `seed-credentials` is a
 standalone subcommand (used by `devcontainer fix-credentials`).
 
+Setup-token profiles (docs/adr/0002-devcontainer-setup-token-env-delivery.md)
+are the second credential type: a raw CLAUDE_CODE_OAUTH_TOKEN bearer stored as
+credentials/<profile>.token, consumed from the ENVIRONMENT rather than seeded to
+disk. `seed_credentials` therefore no-ops (cleanly) for a token-only profile,
+and the `token-path` subcommand resolves which token file a launch should read.
+
 Expected environment variables (set by dev/devcontainer):
     DEV_CONTAINER_WORKSPACE  — container workspace path (e.g. /workspaces/src)
     DEV_HOST_PROJECT_KEY     — mangled host workspace path (e.g. -home-dan-repos-github-xorq)
@@ -91,6 +97,43 @@ def resolve_profile():
     return ""
 
 
+def _set_onboarding_prefs():
+    """Set the onboarding flags in .claude.json without touching identity.
+
+    Used by the setup-token path, which seeds no credential file and no
+    oauthAccount (identity under env-token auth is thin and resolved
+    server-side) but still needs onboarding skipped so the session runs.
+    """
+    prefs = {}
+    if CONTAINER_PREFS.exists():
+        with open(CONTAINER_PREFS) as f:
+            prefs = json.load(f)
+    prefs.setdefault("hasCompletedOnboarding", True)
+    prefs.setdefault("installMethod", "native")
+    with open(CONTAINER_PREFS, "w") as f:
+        json.dump(prefs, f, indent=2)
+
+
+def token_path():
+    """Resolve the container-side setup-token file a launch should read, or None.
+
+    An explicit `set-token` override (a private file on the isolated volume) wins
+    over the read-only host store — it is also the only source in a mountless
+    runtime (CI/Codespaces), where there is no .claude-host mount. The store copy
+    is read live (never seeded), so a host-side delete takes effect immediately.
+    See docs/adr/0002-devcontainer-setup-token-env-delivery.md.
+    """
+    private = HOME / ".oauth-token"
+    if private.exists():
+        return private
+    profile = resolve_profile()
+    if profile:
+        store_token = HOST / "credentials" / f"{profile}.token"
+        if store_token.exists():
+            return store_token
+    return None
+
+
 def seed_credentials(profile):
     """Seed a PRIVATE token + identity into the container's isolated ~/.claude.
 
@@ -109,6 +152,18 @@ def seed_credentials(profile):
     store = HOST / "credentials"
     token_src = store / f"{profile}.json"
     if not token_src.exists():
+        # A setup-token profile (ADR-0002) has a <profile>.token but no
+        # <profile>.json. There is nothing to seed onto disk — the token is
+        # injected as CLAUDE_CODE_OAUTH_TOKEN at launch (see the token-env
+        # snippet, resolved via `token-path`). Skip the file seed cleanly, but
+        # still set the onboarding prefs so the session doesn't re-onboard.
+        if (store / f"{profile}.token").exists():
+            _set_onboarding_prefs()
+            print(
+                f"note: profile '{profile}' is a setup-token profile — no credential file "
+                "seeded; the token is injected as CLAUDE_CODE_OAUTH_TOKEN at launch"
+            )
+            return
         print(
             f"warning: profile '{profile}' not found in host store ({token_src}) — credentials not seeded",
             file=sys.stderr,
@@ -291,6 +346,18 @@ def main():
         seed_credentials(resolve_profile())
         return
 
+    # Standalone token resolver (used by the token-env snippet and the
+    # `devcontainer claude` wrapper). Prints the active setup-token file path and
+    # exits 0 when one exists, else stays silent and exits 1 — so a caller can do
+    # `t="$(setup-claude token-path)" && export ...`. Needs only the profile +
+    # store, not the project-key vars, so it runs before the REQUIRED_VARS check.
+    if sys.argv[1:] == ["token-path"]:
+        path = token_path()
+        if path is None:
+            return 1
+        print(path)
+        return 0
+
     missing = [v for v in REQUIRED_VARS if v not in os.environ]
     if missing:
         print(
@@ -330,4 +397,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
