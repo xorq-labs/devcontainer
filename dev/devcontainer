@@ -71,6 +71,9 @@ Commands:
                                         mountless runtime (CI/Codespaces): injected as
                                         CLAUDE_CODE_OAUTH_TOKEN at launch (ADR-0002)
                                         (e.g. claude-profile export-to <p> --token - | devcontainer set-token -)
+  token-doctor                        warn if a higher-precedence auth source (ANTHROPIC_API_KEY,
+                                        Bedrock/Vertex, base-URL, apiKeyHelper) would silently
+                                        outrank an active setup-token in this container (ADR-0002)
   fix-network                         disconnect stale networks from a stopped container
                                         (needed after ungraceful host shutdown)
   unlock                              remove stale lockfile (safe — refuses if lock is actively held)
@@ -1250,6 +1253,21 @@ case "${1:-up}" in
         fi
         echo "Installed a setup-token in $DEV_CONTAINER_NAME"
         echo "  (injected as CLAUDE_CODE_OAUTH_TOKEN at launch; remove with: rm ~/.claude/.oauth-token)"
+        ;;
+    token-doctor)
+        # Flag any higher-precedence auth source that would silently outrank an
+        # active setup-token (docs/adr/0002-devcontainer-setup-token-env-delivery.md).
+        # Run as a PLAIN `dc exec` — NOT dc_exec_claude — so it inspects the
+        # container's ambient env baseline (which sources neither /etc/profile.d
+        # nor the token-env snippet), the same env a non-wrapper launch (an MCP
+        # server, a background agent) would inherit. Exits non-zero if a
+        # shadowing source is present, so CI can gate on it.
+        if ! is_running; then
+            echo "error: container is not running (start with 'devcontainer up' first)" >&2
+            exit 1
+        fi
+        dc exec -e DEV_CLAUDE_PROFILE="${DEV_CLAUDE_PROFILE:-}" \
+            app python3 /usr/local/bin/setup-claude token-doctor
         ;;
     fix-network)
         container_id="$(dc ps -aq app 2>/dev/null | head -1)" || true

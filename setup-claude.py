@@ -46,6 +46,22 @@ CONTAINER_PREFS = Path(os.environ.get("CLAUDE_CONTAINER_PREFS", "/home/vscode/.c
 # resolver can be exercised off-container (see tests/test-claude-token.sh).
 RUN_SECRETS_TOKEN = Path(os.environ.get("CLAUDE_RUN_SECRETS_TOKEN", "/run/secrets/claude_code_oauth_token"))
 
+# Env sources that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's precedence order
+# (docs/adr/0002-devcontainer-setup-token-env-delivery.md). PAIRED with the
+# unset-list in lib/claude-code-token-env.sh — the snippet drops these for the
+# launches it wraps; `token-doctor` flags any that remain ambient under an active
+# token profile. Keep the two lists in sync. Only the
+# ANTHROPIC_API_KEY > ANTHROPIC_AUTH_TOKEN > CLAUDE_CODE_OAUTH_TOKEN order is
+# empirically pinned (claude v2.1.215); the cloud/base-url tiers are docs-only,
+# cleared/flagged defensively. RE-VERIFY on every claude upgrade.
+HIGHER_PRECEDENCE_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+)
+
 REQUIRED_VARS = (
     "DEV_CONTAINER_WORKSPACE",
     "DEV_HOST_PROJECT_KEY",
@@ -143,6 +159,65 @@ def token_path():
         if store_token.exists():
             return store_token
     return None
+
+
+def token_doctor():
+    """Flag higher-precedence auth sources that would silently outrank an active
+    setup-token (docs/adr/0002-devcontainer-setup-token-env-delivery.md).
+
+    Selection of a setup-token is by env precedence, so the container must stay
+    clean of the sources that sit above CLAUDE_CODE_OAUTH_TOKEN. The token-env
+    snippet drops them for the launches it wraps, but an ambient value (a baked
+    image env, a compose `environment:`, a CI secret) — or an `apiKeyHelper` a
+    user adds to settings.json by hand — would win with no error and route
+    traffic down an unintended, possibly API-billed path.
+
+    Prints a report and returns the number of shadowing sources found (0 =
+    clean). No-ops with 0 when no token profile is active — there is nothing the
+    precedence rule applies to (the OAuth file path or ambient auth is in use).
+
+    Intended to run at the container's ambient env baseline (a plain `dc exec`,
+    which sources neither /etc/profile.d nor the snippet), so it sees the same
+    env a non-wrapper launch — an MCP server, a background agent — would inherit.
+    """
+    path = token_path()
+    if path is None:
+        print("note: no setup-token profile active — precedence check skipped (OAuth file or ambient auth in use)")
+        return 0
+
+    conflicts = [name for name in HIGHER_PRECEDENCE_ENV if os.environ.get(name)]
+
+    # apiKeyHelper is a settings.json hook that also outranks the token. It is
+    # handled out of band — setup_settings rebuilds the container settings.json
+    # from scratch and never copies it — but a user could add one by hand, so
+    # flag it here too.
+    settings = HOME / "settings.json"
+    if settings.exists():
+        try:
+            with open(settings) as f:
+                if json.load(f).get("apiKeyHelper"):
+                    conflicts.append("apiKeyHelper (settings.json)")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if not conflicts:
+        print(f"ok: setup-token active ({path}); no higher-precedence source shadows it")
+        return 0
+
+    print(
+        f"warning: setup-token active ({path}) but these higher-precedence sources are set "
+        "and will SILENTLY outrank it:",
+        file=sys.stderr,
+    )
+    for name in conflicts:
+        print(f"  - {name}", file=sys.stderr)
+    print(
+        "  the token-env snippet drops the env ones for launches it wraps, but a value exported "
+        "after shell init (or an apiKeyHelper added by hand) still wins. Unset them for this "
+        "container, or clear the ambient source.",
+        file=sys.stderr,
+    )
+    return len(conflicts)
 
 
 def seed_credentials(profile):
@@ -368,6 +443,14 @@ def main():
             return 1
         print(path)
         return 0
+
+    # Standalone precedence doctor (invoked by `devcontainer token-doctor`).
+    # Warns when a source that outranks CLAUDE_CODE_OAUTH_TOKEN is present while a
+    # setup-token profile is active; exits non-zero if any is found so CI can gate
+    # on it. Like token-path, needs only the profile + store, so it runs before
+    # the REQUIRED_VARS check.
+    if sys.argv[1:] == ["token-doctor"]:
+        return 1 if token_doctor() else 0
 
     missing = [v for v in REQUIRED_VARS if v not in os.environ]
     if missing:

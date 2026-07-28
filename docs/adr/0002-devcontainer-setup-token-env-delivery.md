@@ -85,7 +85,8 @@ source and applied at every claude entry point.
         claude_code_oauth_token:
           environment: CLAUDE_CODE_OAUTH_TOKEN   # masked CI var on the host
 
-  The resolver reads it. `devcontainer set-token <file>|-` remains the fallback
+  The resolver reads it (`docker-compose.yml` carries this block commented out).
+  `devcontainer set-token <file>|-` remains the fallback
   for runtimes without Compose control: it validates a raw bearer
   (`lib/install-claude-token.sh` — non-empty, single line, no whitespace; a JSON
   blob is rejected) and writes it `0600` to `~/.claude/.oauth-token`, which as a
@@ -143,9 +144,11 @@ one-line carve-out in ADR-0003), not to loosen the rule.
 - Because selection is by env precedence, the container must be kept **clean of
   higher-precedence sources**. The snippet strips them for token launches, but an
   ambient one a user exports *after* shell init, or a future `apiKeyHelper` in
-  the rebuilt settings, would win. A `doctor`/status check that flags a present
-  higher-precedence source under an active token profile is the natural follow-up
-  (not in this slice).
+  the rebuilt settings, would win. `devcontainer token-doctor` flags a present
+  higher-precedence source (env, or a hand-added `apiKeyHelper` in settings.json)
+  under an active token profile — run it when a launch routes unexpectedly. It
+  inspects the container's ambient env baseline (a plain `dc exec`), so it sees
+  what a non-wrapper launch would inherit.
 - **No CLI revoke → deletion is the only revoke.** Reading the store token live
   (not seeding a copy) means a host-side `delete`/`rename` of the `.token` takes
   effect on the next launch. A lingering `set-token` file (`~/.claude/.oauth-token`)

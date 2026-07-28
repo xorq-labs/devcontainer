@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests for setup-claude's setup-token support
 # (docs/adr/0002-devcontainer-setup-token-env-delivery.md): the `token-path`
-# resolver and seed_credentials' tolerance of a token-only profile. Exercised
-# against a fake filesystem via the CLAUDE_* path overrides — no docker.
+# resolver, the `token-doctor` precedence check, and seed_credentials' tolerance
+# of a token-only profile. Exercised against a fake filesystem via the CLAUDE_*
+# path overrides — no docker.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -44,7 +45,23 @@ seed() {
         python3 "$SETUP" seed-credentials
 }
 
-echo "=== setup-claude token-path + seed tolerance tests ==="
+# token-doctor against a sandbox. Args: <root> <profile-or-empty> [VAR=VAL ...].
+# The five precedence vars are cleared first so the ambient test env can't leak
+# in; any extra VAR=VAL args simulate an ambient higher-precedence source.
+doctor() {
+    local root="$1" profile="$2"
+    shift 2
+    env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL \
+        -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX \
+        CLAUDE_HOST_DIR="$root/host" \
+        CLAUDE_HOME_DIR="$root/home" \
+        CLAUDE_RUN_SECRETS_TOKEN="$root/run-secret" \
+        DEV_CLAUDE_PROFILE="$profile" \
+        "$@" \
+        python3 "$SETUP" token-doctor
+}
+
+echo "=== setup-claude token-path + doctor + seed tolerance tests ==="
 
 # ---- token-path resolves the RO store token for the named profile ----
 root="$(make_sandbox)"
@@ -112,5 +129,41 @@ assert_eq "seeded file is the OAuth .json" \
 rc=0; out="$(tokenpath "$root" both)" || rc=$?
 assert_eq "token-path still resolves the token for a --token launch" \
     "$root/host/credentials/both.token" "$out"
+
+# ---- token-doctor: clean when a token is active and no source shadows it ----
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-store' >"$root/host/credentials/work.token"
+rc=0; out="$(doctor "$root" work 2>&1)" || rc=$?
+assert_eq "doctor exits 0 when nothing shadows the token" 0 "$rc"
+assert_contains "doctor reports the token is unshadowed" "no higher-precedence source" "$out"
+
+# ---- token-doctor: an ambient higher-precedence env var is flagged ----
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-store' >"$root/host/credentials/work.token"
+rc=0; out="$(doctor "$root" work ANTHROPIC_API_KEY=sk-ambient 2>&1)" || rc=$?
+assert_true "doctor exits non-zero when a source shadows the token" [ "$rc" -ne 0 ]
+assert_contains "doctor names the shadowing env var" "ANTHROPIC_API_KEY" "$out"
+assert_contains "doctor warns the source silently outranks the token" "SILENTLY outrank" "$out"
+
+# ---- token-doctor: a base-URL redirect is flagged too ----
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-store' >"$root/host/credentials/work.token"
+rc=0; out="$(doctor "$root" work ANTHROPIC_BASE_URL=https://proxy.example 2>&1)" || rc=$?
+assert_true "doctor flags an ambient ANTHROPIC_BASE_URL" [ "$rc" -ne 0 ]
+assert_contains "doctor names the base-URL redirect" "ANTHROPIC_BASE_URL" "$out"
+
+# ---- token-doctor: an apiKeyHelper in settings.json is flagged ----
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-store' >"$root/host/credentials/work.token"
+printf '%s' '{"apiKeyHelper":"/bin/echo key"}' >"$root/home/settings.json"
+rc=0; out="$(doctor "$root" work 2>&1)" || rc=$?
+assert_true "doctor flags an apiKeyHelper hook in settings.json" [ "$rc" -ne 0 ]
+assert_contains "doctor names the apiKeyHelper source" "apiKeyHelper" "$out"
+
+# ---- token-doctor: no-op (exit 0) when no token profile is active ----
+root="$(make_sandbox)"
+rc=0; out="$(doctor "$root" work ANTHROPIC_API_KEY=sk-ambient 2>&1)" || rc=$?
+assert_eq "doctor exits 0 with no active token (nothing to check)" 0 "$rc"
+assert_contains "doctor notes the precedence check was skipped" "precedence check skipped" "$out"
 
 finish
