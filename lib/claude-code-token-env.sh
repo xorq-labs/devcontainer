@@ -12,9 +12,19 @@
 # is active is a harmless no-op — the OAuth file path is used instead.
 #
 # `setup-claude token-path` resolves the active token file (an explicit
-# set-token override first, else the read-only host profile store); reading the
-# value here (rather than baking it) keeps the raw bearer out of image metadata
-# and lets a host-side delete take effect on the next shell.
+# set-token override first, then a Docker/Compose `/run/secrets` secret, then the
+# read-only host profile store); reading the value here (rather than baking it)
+# keeps the raw bearer out of image metadata and lets a host-side delete take
+# effect on the next shell.
+#
+# This ambient-shell path is CONSTRUCT-ONLY by design: it builds a clean env
+# (inject the token, drop higher-precedence sources) but does not verify the
+# resulting auth, because a shell-init snippet sets the env once for every
+# process and a per-launch preflight check has no natural home here. Where a
+# verify step is wanted (confirming the token actually authenticated before
+# running — e.g. to catch a precedence tier a future claude adds that this list
+# doesn't yet drop) it belongs in a wrapping launcher, alongside `devcontainer
+# claude`, not in this snippet. See claude-profile ADR-0003's consumer contract.
 #
 # When a token IS selected we also neutralize every source that outranks
 # CLAUDE_CODE_OAUTH_TOKEN in claude's precedence order — otherwise an ambient one

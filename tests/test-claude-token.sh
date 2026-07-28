@@ -22,11 +22,14 @@ make_sandbox() {
     printf '%s' "$root"
 }
 
-# token-path against a sandbox. Args: <root> <profile-or-empty>. Sets `out`/`rc`.
+# token-path against a sandbox. Args: <root> <profile-or-empty>. The Compose
+# secret path is pinned into the sandbox ($root/run-secret) so the real
+# /run/secrets never interferes; a test opts in by creating that file.
 tokenpath() {
     local root="$1" profile="$2"
     env CLAUDE_HOST_DIR="$root/host" \
         CLAUDE_HOME_DIR="$root/home" \
+        CLAUDE_RUN_SECRETS_TOKEN="$root/run-secret" \
         DEV_CLAUDE_PROFILE="$profile" \
         python3 "$SETUP" token-path
 }
@@ -64,6 +67,21 @@ printf '%s' 'sk-ant-oat01-store' >"$root/host/credentials/work.token"
 printf '%s' 'sk-ant-oat01-override' >"$root/home/.oauth-token"
 rc=0; out="$(tokenpath "$root" work)" || rc=$?
 assert_eq "the private set-token file wins over the store" "$root/home/.oauth-token" "$out"
+
+# ---- a Docker/Compose secret is used ahead of the store (mountless CI) ----
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-store' >"$root/host/credentials/work.token"
+printf '%s' 'sk-ant-oat01-secret' >"$root/run-secret"
+rc=0; out="$(tokenpath "$root" work)" || rc=$?
+assert_eq "the /run/secrets Compose secret wins over the store" "$root/run-secret" "$out"
+
+# ---- an explicit set-token override still wins over a Compose secret ----
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-secret' >"$root/run-secret"
+printf '%s' 'sk-ant-oat01-override' >"$root/home/.oauth-token"
+rc=0; out="$(tokenpath "$root" work)" || rc=$?
+assert_eq "a manual set-token still wins over a Compose secret (debug override)" \
+    "$root/home/.oauth-token" "$out"
 
 # ---- token-path exits non-zero and prints nothing when no token exists ----
 root="$(make_sandbox)"

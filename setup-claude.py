@@ -41,6 +41,10 @@ HOST = Path(os.environ.get("CLAUDE_HOST_DIR", "/home/vscode/.claude-host"))
 HOME = Path(os.environ.get("CLAUDE_HOME_DIR", "/home/vscode/.claude"))
 HOST_PREFS = Path(os.environ.get("CLAUDE_HOST_PREFS", "/home/vscode/.claude-host.json"))
 CONTAINER_PREFS = Path(os.environ.get("CLAUDE_CONTAINER_PREFS", "/home/vscode/.claude.json"))
+# A Docker/Compose file-based secret is the sanctioned mountless transport for a
+# setup-token (tmpfs, 0400, absent from `docker inspect`). Overridable so the
+# resolver can be exercised off-container (see tests/test-claude-token.sh).
+RUN_SECRETS_TOKEN = Path(os.environ.get("CLAUDE_RUN_SECRETS_TOKEN", "/run/secrets/claude_code_oauth_token"))
 
 REQUIRED_VARS = (
     "DEV_CONTAINER_WORKSPACE",
@@ -117,15 +121,22 @@ def _set_onboarding_prefs():
 def token_path():
     """Resolve the container-side setup-token file a launch should read, or None.
 
-    An explicit `set-token` override (a private file on the isolated volume) wins
-    over the read-only host store — it is also the only source in a mountless
-    runtime (CI/Codespaces), where there is no .claude-host mount. The store copy
-    is read live (never seeded), so a host-side delete takes effect immediately.
-    See docs/adr/0002-devcontainer-setup-token-env-delivery.md.
+    Resolution order (docs/adr/0002-devcontainer-setup-token-env-delivery.md):
+
+    1. An explicit `set-token` override (`~/.claude/.oauth-token`) — a manual
+       "override this container now" action, so it wins even over a configured
+       secret (matters when debugging a container that has one).
+    2. A Docker/Compose file-based secret (`/run/secrets/...`) — the sanctioned
+       mountless transport (tmpfs, 0400, absent from `docker inspect`).
+    3. The read-only host store (`.claude-host/credentials/<profile>.token`) —
+       read live, never seeded, so a host-side delete takes effect immediately
+       (a setup-token has no CLI revoke; deletion is the only revoke).
     """
     private = HOME / ".oauth-token"
     if private.exists():
         return private
+    if RUN_SECRETS_TOKEN.exists():
+        return RUN_SECRETS_TOKEN
     profile = resolve_profile()
     if profile:
         store_token = HOST / "credentials" / f"{profile}.token"

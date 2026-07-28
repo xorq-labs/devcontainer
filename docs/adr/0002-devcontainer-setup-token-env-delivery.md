@@ -73,26 +73,67 @@ source and applied at every claude entry point.
   A profile with both materials still seeds the OAuth `.json` (ADR-0001 default);
   the token is used only for a `--token`-style launch. This is the container face
   of ADR-0003 coexistence.
-- **Mountless runtimes (CI / Codespaces).** With no `.claude-host` mount, the
-  token is streamed in with `devcontainer set-token <file>|-`, which validates a
-  raw bearer (`lib/install-claude-token.sh` — non-empty, single line, no
-  whitespace; a JSON blob is rejected) and writes it `0600` to the private
-  `~/.claude/.oauth-token` the resolver prefers. Fed by
-  `claude-profile export-to <p> --token -`.
+- **Mountless runtimes (CI / Codespaces).** With no `.claude-host` mount, prefer
+  Docker's sanctioned secret transport: a **Compose file-based secret** mounted
+  at `/run/secrets/claude_code_oauth_token` (tmpfs, `0400`, absent from
+  `docker inspect`), sourced from a masked CI variable —
 
-## The no-persist relaxation (a deliberate, recorded exception)
+      services:
+        app:
+          secrets: [claude_code_oauth_token]
+      secrets:
+        claude_code_oauth_token:
+          environment: CLAUDE_CODE_OAUTH_TOKEN   # masked CI var on the host
+
+  The resolver reads it. `devcontainer set-token <file>|-` remains the fallback
+  for runtimes without Compose control: it validates a raw bearer
+  (`lib/install-claude-token.sh` — non-empty, single line, no whitespace; a JSON
+  blob is rejected) and writes it `0600` to `~/.claude/.oauth-token`, which as a
+  manual override wins even over a configured secret. Both are fed by
+  `claude-profile export-to <p> --token -`. In the simplest CI case neither is
+  needed: the runner sets `-e CLAUDE_CODE_OAUTH_TOKEN` directly on the
+  `docker run`/`exec` process (ADR-0003's blessed path) — see the relaxation
+  below.
+
+- **Delivery is construct-only in the shell; verify lives in launch wrappers.**
+  The token-env snippet builds a clean env (inject the token, drop the
+  higher-precedence sources) but does not verify the resulting auth: a shell-init
+  export sets the env once for every process, so a per-launch preflight has no
+  home there, and it leans instead on the from-scratch `settings.json` rebuild
+  (no `apiKeyHelper` to inherit). A verify step — confirming the token actually
+  authenticated, which catches a precedence tier a future claude adds that the
+  strip-list does not yet drop — belongs in a wrapping launcher (claude-profile's
+  `run`/`session`; optionally the `devcontainer claude` wrapper as a follow-up),
+  mirroring the claude-profile side's construct-then-verify delivery.
+
+## The no-persist relaxation (deliberate, recorded, and narrow)
 
 claude-profile ADR-0003 states the token is *"never written to a shell profile,
-`project.env`, or any persistent file."* Sourcing the token-env snippet from
-`/etc/profile.d` and `/etc/bash.bashrc` **is** persisting an export into the
-container's shell environment, so it is a deliberate, container-scoped exception
-to that rule — not a silent divergence. It is accepted because the container is
-single-user and disposable, already accepts `/proc/<pid>/environ` same-uid
-exposure as a documented boundary (ADR-0003 Consequences), and the raw token
-already sits in plaintext at `0600` on the read-only mount. The exception is
-scoped to the container: nothing here writes a token to the **host** shell
-profile or `project.env`. The claude-profile side should acknowledge this
-carve-out rather than treat it as a contradiction.
+`project.env`, or any persistent file."* This relaxation is narrower than it
+first looks, because it is only needed for **one** of the entry points:
+
+- **CI / non-interactive: no relaxation.** The runner sets
+  `-e CLAUDE_CODE_OAUTH_TOKEN` per process (or feeds a Compose secret) — no
+  persisted export. This is ADR-0003's own blessed CI path.
+- **The `devcontainer claude` wrapper: no persisted state.** It sources the
+  snippet for that one `dc exec` and execs — nothing is written to a profile.
+- **Interactive ad-hoc shells (a VS Code terminal, `dc exec bash`): the actual
+  exception.** These are the launches that inherit no injected env, so the
+  snippet is sourced from `/etc/profile.d` and `/etc/bash.bashrc` — which *is*
+  persisting an export into the container's shell environment.
+
+That one carve-out is deliberate and container-scoped, not a silent divergence.
+It is forced by claude reading `CLAUDE_CODE_OAUTH_TOKEN` **from the environment**
+(there is no `..._FILE` variant), so an interactive shell must export *something*;
+Docker's file-based secrets improve where the bytes rest but cannot remove the
+final file→env step. It is accepted because the container is single-user and
+disposable, already accepts `/proc/<pid>/environ` same-uid exposure as a
+documented boundary (ADR-0003 Consequences), and the raw token already sits in
+plaintext at `0600` on the read-only mount or on tmpfs. **Nothing here writes a
+token to the host shell profile or `project.env`** — the rule stays intact
+host-side. The claude-profile side is asked only to clarify that its no-persist
+rule is host-scoped and to acknowledge this container-scoped exception (a
+one-line carve-out in ADR-0003), not to loosen the rule.
 
 ## Consequences
 
