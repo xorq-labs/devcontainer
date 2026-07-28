@@ -5,3 +5,4 @@ dev/
 lib/
 !lib/git.sh
 !lib/nix-seed.sh
+!lib/claude-code-token-env.sh
