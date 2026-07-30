@@ -36,6 +36,15 @@ services:
       # see docs/adr/0001-devcontainer-private-token-isolation.md). No shared
       # credentials mount: each container refreshes its own token.
       - claude-home:/home/vscode/.claude
+      # Claude: session transcripts on the host, carved out of claude-home.
+      # `reset`/`clean` are `down --volumes`, and transcripts are the one thing
+      # in that volume that cannot be rebuilt. Mounted at the container's own
+      # project key so Claude finds them where it expects; the host side lives in
+      # ~/.claude/projects, so host tooling reads it as an ordinary project dir.
+      # (long syntax purely to stay inside the line limit)
+      - type: bind
+        source: ${DEV_CLAUDE_LOGS:?DEV_CLAUDE_LOGS is required}
+        target: /home/vscode/.claude/projects/${DEV_CONTAINER_PROJECT_KEY:?DEV_CONTAINER_PROJECT_KEY is required}
     tmpfs:
       - /home/vscode/.claude/shell-snapshots
       # SSH agent forwarding: socat bridges host agent over TCP via host.docker.internal

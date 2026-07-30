@@ -316,6 +316,22 @@ fi
 DEV_CONTAINER_NAME="$(sanitize_name "${DEV_PROJECT_NAME}-dev-$(basename "$DEV_WORKSPACE")")"
 DEV_LOCKFILE="/tmp/devcontainer-${DEV_CONTAINER_NAME}.lock"
 
+# Claude Code names a project directory after the cwd it was launched from, with
+# separators mangled. Both keys are needed: setup-claude seeds host transcripts
+# into the container's key, and the compose bind below mounts the host's session
+# log directory at that same key.
+DEV_HOST_PROJECT_KEY="$(echo "$DEV_WORKSPACE" | sed 's|/|-|g')"
+DEV_CONTAINER_PROJECT_KEY="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|/|-|g')"
+export DEV_HOST_PROJECT_KEY DEV_CONTAINER_PROJECT_KEY
+
+# Session transcripts live on the host rather than in the per-worktree
+# claude-home volume, so `reset`/`clean` (both `docker compose down --volumes`)
+# cannot take them with it — they are the only thing in that volume that cannot
+# be rebuilt. Sited under ~/.claude/projects so the host's own tooling sees it as
+# an ordinary project directory.
+DEV_CLAUDE_LOGS="${DEV_CLAUDE_LOGS:-$HOME/.claude/projects/-devcontainer-${DEV_CONTAINER_NAME}}"
+export DEV_CLAUDE_LOGS
+
 write_resolved_env() {
     local dest="$1"
     mkdir -p "$(dirname "$dest")"
@@ -757,6 +773,12 @@ ensure_external_volumes() {
     done < <(read_list "$DEV_PROJECT_DIR/external-volumes.txt")
 }
 
+# Compose creates a missing bind source itself, owned by root — which the
+# container user then cannot write to. Create it first so it belongs to us.
+ensure_claude_logs() {
+    mkdir -p "$DEV_CLAUDE_LOGS"
+}
+
 # Disconnect networks whose stored ID no longer matches the live network.
 # This happens when Docker recreates a network with the same name after an
 # ungraceful shutdown — the container still references the old (deleted) ID.
@@ -828,6 +850,7 @@ ensure_up() {
         setup_claude_credentials
         install_hooks
         ensure_external_volumes
+        ensure_claude_logs
         if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
             (cd "$DEV_WORKSPACE" && "$DEV_BASE_DIR/dev/setup-worktree")
             printf 'copy\t%s\n' ".envrcs/.resolved-env" >> "$DEV_WORKSPACE/.envrcs/.worktree-manifest"
@@ -914,7 +937,7 @@ case "${1:-up}" in
         ;;
     reset)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy the container and its per-worktree volumes (venv, build target). Shared project caches (external volumes) are kept — use 'devcontainer clean-caches' to remove those. Continue? [y/N] " answer
+            read -rp "This will destroy the container and its per-worktree volumes (venv, build target). Shared project caches (external volumes) are kept — use 'devcontainer clean-caches' to remove those. Claude session transcripts are kept: they live on the host in $DEV_CLAUDE_LOGS. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
@@ -926,7 +949,7 @@ case "${1:-up}" in
         ;;
     clean)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, audit log, and session captures). The project image and shared caches are kept (shared by ALL worktrees) — use 'devcontainer clean-images' / 'clean-caches' to remove those. Continue? [y/N] " answer
+            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, audit log, and session status stubs). The project image and shared caches are kept (shared by ALL worktrees) — use 'devcontainer clean-images' / 'clean-caches' to remove those. Claude session transcripts are kept: they live on the host in $DEV_CLAUDE_LOGS. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
