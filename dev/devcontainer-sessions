@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""Enumerate Claude Code sessions stored inside devcontainer per-container volumes.
+
+Each devcontainer gets its own `<compose-project>_claude-home` volume mounted at
+/home/vscode/.claude (docker-compose.yml), so session transcripts -- which live
+at ~/.claude/projects/<key>/<session-id>.jsonl -- never land on the host
+filesystem. Only ~/.claude/sessions is symlinked back out, into the worktree's
+.claude/container-sessions/ (setup-claude.py:setup_sessions), and that holds just
+per-pid status stubs, not transcripts.
+
+This walks every claude-home volume -- including those of stopped containers and
+of containers that have been removed -- and joins what it finds against `docker
+inspect` to recover the container name, state, and host worktree.
+
+Those volumes are root-owned on the host, so the scan itself runs inside a
+throwaway container that bind-mounts this same file as its reader (--reader).
+
+Usage:
+    devcontainer-sessions                    # every project, newest first
+    devcontainer-sessions -p xorq            # one project
+    devcontainer-sessions -p xorq -n 10      # the 10 most recent
+    devcontainer-sessions --all              # include host-seeded copies
+    devcontainer-sessions --json             # machine-readable
+"""
+
+import argparse
+import datetime
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+VOLUME_SUFFIX = "_claude-home"
+CLAUDE_HOME = "/home/vscode/.claude"
+READER_IMAGE = "mcr.microsoft.com/devcontainers/python:3.12-bookworm"
+READER_ROOT = Path("/vols")
+HOST_PROJECTS = Path.home() / ".claude" / "projects"
+
+
+# ---------------------------------------------------------------- reader mode
+
+
+def read_session(path):
+    """Pull identity, last activity and opening prompt out of one transcript.
+
+    Reads only the head and tail of the file: these grow to tens of MB and we
+    need the first user turn and the final record, nothing in between.
+    """
+    stat = path.stat()
+    session = {
+        "path": str(path),
+        "size": stat.st_size,
+        "mtime": stat.st_mtime,
+        "last_timestamp": None,
+        "session_id": None,
+        "cwd": None,
+        "git_branch": None,
+        "version": None,
+        "summary": None,
+        "sidechain": False,
+        "records": 0,
+    }
+    with path.open("rb") as fh:
+        head = fh.read(1 << 18)
+        fh.seek(max(0, stat.st_size - (1 << 20)))
+        tail = fh.read()
+
+    for line in head.split(b"\n"):
+        record = load_record(line)
+        if not record:
+            continue
+        session["session_id"] = session["session_id"] or record.get("sessionId")
+        session["cwd"] = session["cwd"] or record.get("cwd")
+        session["sidechain"] = session["sidechain"] or bool(record.get("isSidechain"))
+        session["summary"] = session["summary"] or first_prompt(record)
+
+    # Walk back to the last record that actually carries a timestamp: the final
+    # line is often a bare summary or file-history entry with no clock on it.
+    for line in reversed(tail.split(b"\n")):
+        record = load_record(line)
+        if not record:
+            continue
+        session["git_branch"] = session["git_branch"] or record.get("gitBranch")
+        session["version"] = session["version"] or record.get("version")
+        session["session_id"] = session["session_id"] or record.get("sessionId")
+        session["cwd"] = session["cwd"] or record.get("cwd")
+        if record.get("timestamp"):
+            session["last_timestamp"] = record["timestamp"]
+            break
+
+    session["records"] = tail.count(b"\n")
+    return session
+
+
+def load_record(line):
+    line = line.strip()
+    if not line.startswith(b"{"):
+        return None
+    try:
+        return json.loads(line)
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def first_prompt(record):
+    """The opening user turn, minus system-reminder and command-tag noise."""
+    if record.get("type") == "summary" and record.get("summary"):
+        return str(record["summary"])
+    if record.get("type") != "user":
+        return None
+    content = (record.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = " ".join(block.get("text", "") for block in content if isinstance(block, dict))
+    if not isinstance(content, str):
+        return None
+    text = re.sub(r"<[^>]+>.*?</[^>]+>", " ", content, flags=re.S)
+    return re.sub(r"\s+", " ", text).strip() or None
+
+
+def run_reader(root):
+    """Walk every volume mounted under `root` and emit one JSON blob."""
+    scanned = {}
+    for volume in sorted(p for p in root.iterdir() if p.is_dir()):
+        sessions = []
+        for path in sorted((volume / "projects").rglob("*.jsonl")):
+            try:
+                sessions.append(read_session(path))
+            except OSError:
+                continue
+        scanned[volume.name] = sessions
+    json.dump(scanned, sys.stdout)
+
+
+# ------------------------------------------------------------------ host mode
+
+
+def docker(*args):
+    return subprocess.run(["docker", *args], capture_output=True, text=True, check=True).stdout
+
+
+def sanitize(name):
+    """Mirror of lib/git.sh sanitize_name(), which names every compose project."""
+    name = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).lower()
+    return re.sub(r"^[^a-z0-9]*|[^a-z0-9]*$", "", name) or "project"
+
+
+def collect_containers():
+    """compose-project -> container facts, for running and stopped alike."""
+    ids = docker("ps", "-aq").split()
+    if not ids:
+        return {}
+    containers = {}
+    for entry in json.loads(docker("inspect", *ids)):
+        labels = (entry.get("Config") or {}).get("Labels") or {}
+        project = labels.get("com.docker.compose.project")
+        if not project:
+            continue
+        # DEV_WORKSPACE is bind-mounted at DEV_CONTAINER_WORKSPACE, which compose
+        # also sets as the working_dir -- so the working_dir's bind source is the
+        # host worktree, without having to re-read the project's env files.
+        workdir = (entry.get("Config") or {}).get("WorkingDir")
+        worktree = next(
+            (
+                mount["Source"]
+                for mount in entry.get("Mounts") or []
+                if mount.get("Type") == "bind" and mount.get("Destination") == workdir
+            ),
+            None,
+        )
+        containers[project] = {
+            "container": entry["Name"].lstrip("/"),
+            "state": entry["State"]["Status"],
+            "worktree": worktree,
+        }
+    return containers
+
+
+def guess_worktree(slug, containers):
+    """Recover the worktree of a volume whose container has been removed.
+
+    A compose project is `<project>-dev-<basename(worktree)>` after sanitizing,
+    and sanitizing is lossy (both `/` and `.` collapse to `-`), so match by
+    re-sanitizing the directories sitting alongside the worktrees we do know.
+    Returns None once the worktree itself is gone -- the volume outlives it.
+    """
+    if not slug:
+        return None
+    parents = {Path(facts["worktree"]).parent for facts in containers.values() if facts["worktree"]}
+    for parent in sorted(parents):
+        try:
+            candidates = sorted(p for p in parent.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for candidate in candidates:
+            if sanitize(candidate.name) == slug:
+                return str(candidate)
+    return None
+
+
+def scan_volumes(volumes, image):
+    """Run this file inside a container that can actually read the volumes."""
+    mounts = [arg for volume in volumes for arg in ("-v", f"{volume}:{READER_ROOT}/{volume}:ro")]
+    return json.loads(
+        docker(
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "0",
+            "-v",
+            f"{Path(__file__).resolve()}:/reader.py:ro",
+            *mounts,
+            image,
+            "python3",
+            "/reader.py",
+            "--reader",
+        )
+    )
+
+
+def parse_timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def host_activity(session_ids):
+    """Last-activity of each host transcript that a container volume also holds.
+
+    setup-claude seeds a fresh container by copying the host's transcripts in
+    (seed_transcripts), keeping the file name -- so a shared session id means the
+    container copy came from the host. Only if the container copy has advanced
+    past the host's last record was that session actually worked on in there.
+    """
+    activity = {}
+    for session_id in session_ids:
+        for path in HOST_PROJECTS.glob(f"*/{session_id}.jsonl"):
+            try:
+                stamp = parse_timestamp(read_session(path)["last_timestamp"])
+            except OSError:
+                continue
+            if stamp is not None:
+                activity[session_id] = max(stamp, activity.get(session_id, stamp))
+    return activity
+
+
+def build_rows(scanned, containers, include_seeded):
+    on_host = host_activity({s["session_id"] for v in scanned.values() for s in v if s["session_id"]})
+    rows = []
+    for volume, sessions in scanned.items():
+        compose_project = volume[: -len(VOLUME_SUFFIX)]
+        project, _, _ = compose_project.partition("-dev-")
+        _, _, slug = compose_project.rpartition("-dev-")
+        facts = containers.get(compose_project, {})
+        worktree = facts.get("worktree") or guess_worktree(slug, containers)
+        for session in sessions:
+            last = parse_timestamp(session["last_timestamp"])
+            host_last = on_host.get(session["session_id"])
+            seeded = host_last is not None and (last is None or last <= host_last)
+            if seeded and not include_seeded:
+                continue
+            rows.append(
+                {
+                    "session_id": session["session_id"],
+                    "project": project,
+                    "compose_project": compose_project,
+                    "volume": volume,
+                    "container": facts.get("container"),
+                    "state": facts.get("state", "removed"),
+                    "worktree": worktree,
+                    "worktree_slug": slug,
+                    "container_cwd": session["cwd"],
+                    "git_branch": session["git_branch"],
+                    "last_write": session["mtime"],
+                    "last_activity": last,
+                    "size": session["size"],
+                    "records": session["records"],
+                    "sidechain": session["sidechain"],
+                    "seeded": seeded,
+                    "version": session["version"],
+                    "summary": session["summary"],
+                    "transcript": session["path"].replace(f"{READER_ROOT}/{volume}", CLAUDE_HOME),
+                }
+            )
+    rows.sort(key=lambda row: row["last_activity"] or row["last_write"], reverse=True)
+    return rows
+
+
+def fmt_time(epoch):
+    if not epoch:
+        return "-"
+    return datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+
+
+def fmt_size(size):
+    for unit in ("B", "K", "M", "G"):
+        if size < 1024 or unit == "G":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+
+
+def shorten(path, home):
+    return f"~{path[len(home) :]}" if path.startswith(home) else path
+
+
+def fmt_worktree(row, home):
+    if row["worktree"]:
+        return shorten(row["worktree"], home)
+    return f"{row['worktree_slug']} (deleted)"
+
+
+COLUMNS = (
+    ("LAST WRITE", lambda row, home: fmt_time(row["last_activity"] or row["last_write"])),
+    ("SESSION", lambda row, home: (row["session_id"] or "?")[:8]),
+    ("WORKTREE", fmt_worktree),
+    ("CONTAINER", lambda row, home: row["container"] or f"({row['compose_project']})"),
+    ("STATE", lambda row, home: row["state"]),
+    ("BRANCH", lambda row, home: row["git_branch"] or "-"),
+    ("SIZE", lambda row, home: fmt_size(row["size"])),
+    ("SUMMARY", lambda row, home: (row["summary"] or "-")[:64]),
+)
+
+
+def print_table(rows, home):
+    table = [[header for header, _ in COLUMNS]]
+    table += [[render(row, home) for _, render in COLUMNS] for row in rows]
+    widths = [max(len(row[i]) for row in table) for i in range(len(COLUMNS))]
+    for row in table:
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--reader", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("-p", "--project", help="only this project, e.g. xorq")
+    parser.add_argument("-w", "--worktree", help="only worktrees matching this substring")
+    parser.add_argument("-n", "--limit", type=int, help="only the N most recent sessions")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="also show transcripts seeded in from the host at container create",
+    )
+    parser.add_argument("--sidechains", action="store_true", help="also show subagent sidechain sessions")
+    parser.add_argument("--json", action="store_true", help="emit JSON instead of a table")
+    parser.add_argument("--image", default=READER_IMAGE, help="image used to read volumes")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    if args.reader:
+        run_reader(READER_ROOT)
+        return 0
+
+    volumes = [
+        name
+        for name in docker("volume", "ls", "--format", "{{.Name}}").split()
+        if name.endswith(VOLUME_SUFFIX) and (not args.project or name.startswith(f"{args.project}-dev-"))
+    ]
+    if not volumes:
+        print("no devcontainer claude-home volumes matched", file=sys.stderr)
+        return 1
+
+    rows = build_rows(scan_volumes(volumes, args.image), collect_containers(), args.all)
+    if args.worktree:
+        rows = [row for row in rows if args.worktree in (row["worktree"] or row["worktree_slug"])]
+    if not args.sidechains:
+        rows = [row for row in rows if not row["sidechain"]]
+    if args.limit:
+        rows = rows[: args.limit]
+
+    if args.json:
+        json.dump(rows, sys.stdout, indent=2)
+        print()
+    else:
+        print_table(rows, str(Path.home()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
