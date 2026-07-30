@@ -21,21 +21,27 @@ Usage:
     devcontainer-sessions -p xorq -n 10      # the 10 most recent
     devcontainer-sessions --all              # include host-seeded copies
     devcontainer-sessions --json             # machine-readable
+    devcontainer-sessions --resume-on-host 5331ec2b   # copy one out to the host
 """
 
 import argparse
 import datetime
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 VOLUME_SUFFIX = "_claude-home"
 CLAUDE_HOME = "/home/vscode/.claude"
 READER_IMAGE = "mcr.microsoft.com/devcontainers/python:3.12-bookworm"
 READER_ROOT = Path("/vols")
-HOST_PROJECTS = Path.home() / ".claude" / "projects"
+EXPORT_ROOT = Path("/out")
+# Per-session state that sits beside the transcript, keyed by session id.
+SIDECARS = ("tasks", "file-history", "session-env")
 
 
 # ---------------------------------------------------------------- reader mode
@@ -132,6 +138,33 @@ def run_reader(root):
     json.dump(scanned, sys.stdout)
 
 
+def run_export(root, out, session_id, src_prefix, dst_prefix):
+    """Stage one session out of the single volume mounted under `root`.
+
+    The transcript is rewritten container-path -> host-path, the exact inverse of
+    the rewrite setup-claude does when it seeds transcripts in. Paths already
+    written as host paths (DEV_MAIN_TREE is mounted at its host path inside the
+    container, so they do occur) don't match the container prefix and pass
+    through untouched.
+
+    Sidecars are copied verbatim. file-history entries are named by an opaque
+    hash, so their keys are left alone -- they come along for the record, not
+    because a host-side lookup will find them.
+    """
+    staged = []
+    for volume in sorted(p for p in root.iterdir() if p.is_dir()):
+        for path in sorted((volume / "projects").rglob(f"{session_id}.jsonl")):
+            text = path.read_text()
+            (out / "transcript.jsonl").write_text(text.replace(src_prefix, dst_prefix))
+            staged.append(str(path))
+        for name in SIDECARS:
+            sidecar = volume / name / session_id
+            if sidecar.is_dir():
+                shutil.copytree(sidecar, out / name, dirs_exist_ok=True)
+                staged.append(str(sidecar))
+    json.dump(staged, sys.stdout)
+
+
 # ------------------------------------------------------------------ host mode
 
 
@@ -172,6 +205,7 @@ def collect_containers():
             "container": entry["Name"].lstrip("/"),
             "state": entry["State"]["Status"],
             "worktree": worktree,
+            "workspace": workdir,
         }
     return containers
 
@@ -229,7 +263,7 @@ def parse_timestamp(value):
         return None
 
 
-def host_activity(session_ids):
+def host_activity(session_ids, claude_home):
     """Last-activity of each host transcript that a container volume also holds.
 
     setup-claude seeds a fresh container by copying the host's transcripts in
@@ -239,7 +273,7 @@ def host_activity(session_ids):
     """
     activity = {}
     for session_id in session_ids:
-        for path in HOST_PROJECTS.glob(f"*/{session_id}.jsonl"):
+        for path in (claude_home / "projects").glob(f"*/{session_id}.jsonl"):
             try:
                 stamp = parse_timestamp(read_session(path)["last_timestamp"])
             except OSError:
@@ -249,8 +283,9 @@ def host_activity(session_ids):
     return activity
 
 
-def build_rows(scanned, containers, include_seeded):
-    on_host = host_activity({s["session_id"] for v in scanned.values() for s in v if s["session_id"]})
+def build_rows(scanned, containers, include_seeded, claude_home):
+    ids = {s["session_id"] for v in scanned.values() for s in v if s["session_id"]}
+    on_host = host_activity(ids, claude_home)
     rows = []
     for volume, sessions in scanned.items():
         compose_project = volume[: -len(VOLUME_SUFFIX)]
@@ -274,6 +309,7 @@ def build_rows(scanned, containers, include_seeded):
                     "state": facts.get("state", "removed"),
                     "worktree": worktree,
                     "worktree_slug": slug,
+                    "container_workspace": facts.get("workspace"),
                     "container_cwd": session["cwd"],
                     "git_branch": session["git_branch"],
                     "last_write": session["mtime"],
@@ -289,6 +325,153 @@ def build_rows(scanned, containers, include_seeded):
             )
     rows.sort(key=lambda row: row["last_activity"] or row["last_write"], reverse=True)
     return rows
+
+
+# ------------------------------------------------------------- resume on host
+
+
+def host_project_key(worktree):
+    """Claude Code keys a project directory by its cwd, non-alphanumerics -> '-'."""
+    return re.sub(r"[^a-zA-Z0-9]", "-", worktree)
+
+
+def is_live(row):
+    """True while a container Claude still holds this session open.
+
+    setup-claude symlinks ~/.claude/sessions into the worktree, so the host can
+    see a per-pid stub for every session a running container started.
+    """
+    if row["state"] != "running" or not row["worktree"]:
+        return False
+    stubs = Path(row["worktree"]) / ".claude" / "container-sessions"
+    for stub in stubs.glob("*.json"):
+        try:
+            with stub.open() as fh:
+                if json.load(fh).get("sessionId") == row["session_id"]:
+                    return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def stage_export(row, src_prefix, dst_prefix, out_dir, image):
+    """Run the export half inside a container that can read the volume."""
+    docker(
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        # As the invoking user, not root: the volume's files are already owned by
+        # DEV_UID (= the host uid), and whatever we stage has to be ours to move.
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "-v",
+        f"{Path(__file__).resolve()}:/reader.py:ro",
+        "-v",
+        f"{row['volume']}:{READER_ROOT}/{row['volume']}:ro",
+        "-v",
+        f"{out_dir}:{EXPORT_ROOT}",
+        image,
+        "python3",
+        "/reader.py",
+        "--export",
+        row["session_id"],
+        "--rewrite",
+        src_prefix,
+        dst_prefix,
+    )
+
+
+def resume_on_host(row, claude_home, image, force, dry_run, container_workspace):
+    """Copy a container session onto the host so `claude --resume` can find it.
+
+    Placement is a fast-forward, never a merge: a host twin only gets overwritten
+    when the container copy is strictly ahead of it, because a twin that is ahead
+    means the session was continued on the host after seeding and overwriting
+    would destroy that work.
+    """
+    if not row["worktree"]:
+        fail(f"worktree for {row['compose_project']} no longer exists on disk; nothing to resume against")
+    src_prefix = container_workspace or row["container_workspace"] or row["container_cwd"]
+    if not src_prefix:
+        fail("cannot tell which container path to rewrite; pass --container-workspace")
+    if is_live(row) and not force:
+        fail(f"session {row['session_id'][:8]} is open in {row['container']}; exit it first")
+
+    key = host_project_key(row["worktree"])
+    destination = claude_home / "projects" / key / f"{row['session_id']}.jsonl"
+    twin = destination.exists()
+    if twin and not force:
+        # Compare last records, not file size: rewriting the path prefix changes
+        # the byte count, so the two copies never match on length.
+        host_last = parse_timestamp(read_session(destination)["last_timestamp"])
+        container_last = row["last_activity"]
+        if host_last is not None and container_last is not None and host_last == container_last:
+            print(f"host copy of {row['session_id'][:8]} is already at {fmt_time(host_last)} -- nothing to do")
+            return 0
+        if host_last is not None and (container_last is None or host_last > container_last):
+            fail(
+                f"the host copy of {row['session_id'][:8]} is ahead of the container's "
+                f"({fmt_time(host_last)} vs {fmt_time(container_last)}), so it has records "
+                "the container copy doesn't. Overwriting would lose them -- pass --force "
+                "to do it anyway (the host copy is backed up either way)"
+            )
+
+    print(f"session   {row['session_id']}")
+    print(f"from      {row['volume']}")
+    print(f"rewrite   {src_prefix} -> {row['worktree']}")
+    print(f"into      {destination}")
+    if dry_run:
+        print("\n(dry run -- nothing written)")
+        return 0
+
+    with tempfile.TemporaryDirectory() as staging:
+        staging = Path(staging)
+        stage_export(row, src_prefix, row["worktree"], staging, image)
+        transcript = staging / "transcript.jsonl"
+        if not transcript.is_file():
+            fail(f"no transcript for {row['session_id']} in {row['volume']}")
+
+        if twin:
+            backups = claude_home / "backups"
+            backups.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup = backups / f"{row['session_id']}.jsonl.{stamp}"
+            shutil.copy2(destination, backup)
+            print(f"backed up host copy to {backup}")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(transcript), destination)
+        for name in SIDECARS:
+            staged = staging / name
+            if staged.is_dir():
+                shutil.copytree(staged, claude_home / name / row["session_id"], dirs_exist_ok=True)
+                print(f"copied {name}/")
+
+    print(f"\nresume it with:\n  cd {row['worktree']} && claude --resume {row['session_id']}")
+    return 0
+
+
+def select_session(rows, wanted):
+    matches = [row for row in rows if (row["session_id"] or "").startswith(wanted)]
+    if not matches:
+        fail(f"no session id starts with '{wanted}'")
+    ids = {row["session_id"] for row in matches}
+    if len(ids) > 1:
+        shown = ", ".join(sorted(session_id[:8] for session_id in ids)[:5])
+        fail(f"'{wanted}' matches {len(ids)} sessions ({shown}) -- be more specific")
+    # One session can sit in several volumes -- seeding copies a host transcript
+    # into every container of that worktree. The most advanced copy is the one
+    # worth taking; the others are its ancestors.
+    return max(matches, key=lambda row: row["last_activity"] or row["last_write"])
+
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+# ---------------------------------------------------------------- table output
 
 
 def fmt_time(epoch):
@@ -337,6 +520,8 @@ def print_table(rows, home):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--reader", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--export", metavar="SESSION", help=argparse.SUPPRESS)
+    parser.add_argument("--rewrite", nargs=2, metavar=("FROM", "TO"), help=argparse.SUPPRESS)
     parser.add_argument("-p", "--project", help="only this project, e.g. xorq")
     parser.add_argument("-w", "--worktree", help="only worktrees matching this substring")
     parser.add_argument("-n", "--limit", type=int, help="only the N most recent sessions")
@@ -348,6 +533,31 @@ def parse_args():
     parser.add_argument("--sidechains", action="store_true", help="also show subagent sidechain sessions")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     parser.add_argument("--image", default=READER_IMAGE, help="image used to read volumes")
+    parser.add_argument(
+        "--resume-on-host",
+        metavar="SESSION",
+        help="copy a session (id or prefix) onto the host so `claude --resume` finds it",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="with --resume-on-host: overwrite a host copy that is ahead, or a live session",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --resume-on-host: report what would be copied and stop",
+    )
+    parser.add_argument(
+        "--container-workspace",
+        help="container path to rewrite to the worktree (default: the container's working_dir)",
+    )
+    parser.add_argument(
+        "--claude-home",
+        type=Path,
+        default=Path.home() / ".claude",
+        help="host Claude directory to read and write (default: ~/.claude)",
+    )
     return parser.parse_args()
 
 
@@ -355,6 +565,9 @@ def main():
     args = parse_args()
     if args.reader:
         run_reader(READER_ROOT)
+        return 0
+    if args.export:
+        run_export(READER_ROOT, EXPORT_ROOT, args.export, *(args.rewrite or ("", "")))
         return 0
 
     volumes = [
@@ -366,7 +579,19 @@ def main():
         print("no devcontainer claude-home volumes matched", file=sys.stderr)
         return 1
 
-    rows = build_rows(scan_volumes(volumes, args.image), collect_containers(), args.all)
+    # A session being copied out may well be one that was seeded in and then
+    # continued, so --resume-on-host has to search the unfiltered set.
+    include_seeded = args.all or bool(args.resume_on_host)
+    rows = build_rows(scan_volumes(volumes, args.image), collect_containers(), include_seeded, args.claude_home)
+    if args.resume_on_host:
+        return resume_on_host(
+            select_session(rows, args.resume_on_host),
+            args.claude_home,
+            args.image,
+            args.force,
+            args.dry_run,
+            args.container_workspace,
+        )
     if args.worktree:
         rows = [row for row in rows if args.worktree in (row["worktree"] or row["worktree_slug"])]
     if not args.sidechains:
