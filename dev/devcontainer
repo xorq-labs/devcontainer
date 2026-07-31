@@ -482,6 +482,7 @@ image_config_files() {
         "$DEV_BASE_DIR/setup-claude.py" \
         "$DEV_BASE_DIR/audit-hook" \
         "$DEV_BASE_DIR/lib/git.sh" \
+        "$DEV_BASE_DIR/lib/claude-code-token-env.sh" \
         "$DEV_PROJECT_DIR/install-system.sh" \
         "$DEV_PROJECT_DIR/setup-env.sh"; do
         [ -r "$f" ] || { echo "error: build input not found (or unreadable): $f" >&2; return 1; }
