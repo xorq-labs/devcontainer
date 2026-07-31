@@ -729,25 +729,43 @@ for v in cfg.get("services", {}).get("app", {}).get("volumes") or []:
 '
 }
 
+# Chown the named-volume mount points to the container user. The logic lives in
+# lib/volume-perms.sh (unit-tested by tests/test-volume-chown-guard.sh) and is
+# injected into the container as the `sh -c` script with the mount points as
+# positional args — it runs in the container, but nothing COPYs it into the
+# image, so it is a runtime input only (no rebuild, no fingerprint entry).
+#
+# Note this is called on EVERY cold start, not just the first (setup() is gated
+# only on `is_running`), which is why the recursive chown is guarded inside the
+# lib rather than run unconditionally.
+chown_named_volume_targets() {
+    local targets_out
+    # Command substitution, not a pipe: named_volume_targets fails loudly when
+    # `dc config` does, and `|| return 1` propagates that instead of letting the
+    # downstream exit status mask it.
+    targets_out="$(named_volume_targets)" || return 1
+
+    local targets=() t
+    while IFS= read -r t; do
+        [ -n "$t" ] && targets+=("$t")
+    done <<<"$targets_out"
+    [ ${#targets[@]} -gt 0 ] || return 0
+
+    local script
+    script="$(cat "$DEV_BASE_DIR/lib/volume-perms.sh")" || return 1
+    script="$script"'
+dev_chown_volume_targets vscode /home/vscode "$@"'
+
+    # `sh -c <script> <argv0> <args...>`: the first operand after the script is
+    # $0, so the mount points land in "$@" for the driver line above.
+    dc exec -T -u root app sh -c "$script" volume-perms "${targets[@]}"
+}
+
 # First-run setup: chown root-owned named-volume mount points, set up the
 # host-path symlink for tools that persist absolute paths, then delegate
 # to the project's setup-env first-run.
 setup() {
-    named_volume_targets | dc exec -T -u root app sh -c '
-        while IFS= read -r d; do
-            [ -n "$d" ] || continue
-            chown -R vscode:vscode "$d" 2>/dev/null || true
-            p="$(dirname "$d")"
-            while [ "$p" != "/" ] && [ "$p" != "." ]; do
-                case "$p" in
-                    /home/vscode/*) ;;
-                    *) break ;;
-                esac
-                chown vscode:vscode "$p" 2>/dev/null || true
-                p="$(dirname "$p")"
-            done
-        done
-    '
+    chown_named_volume_targets
 
     if [ "$DEV_WORKSPACE" != "$DEV_CONTAINER_WORKSPACE" ] \
         && [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
