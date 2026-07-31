@@ -127,7 +127,7 @@ DEV_MODEL_VERSION=claude-haiku-4-5 devcontainer claude
 DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 devcontainer claude
 ```
 
-`project.env` wins over both when it sets a value. `devcontainer resolve` prints what ended up in effect.
+The `DEV_`-prefixed forms win over `project.env` — the usual flag > env > file precedence — so you can override a worktree's pinned value for a single run without editing the file. `devcontainer resolve` prints what ended up in effect.
 
 **Inspecting the resolved configuration:**
 

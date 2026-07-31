@@ -47,13 +47,23 @@ out="$(cd "$MAIN_TREE" && DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 "$DC" resolve 2>&1)
 assert_contains "DEV_DANGEROUSLY_SKIP_PERMISSIONS sets the flag" \
     "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
 
-# ---------- test: project.env wins over the DEV_-prefixed environment ----------
-echo "--- devcontainer resolve (project.env beats the environment) ---"
+# ---------- test: the DEV_-prefixed environment wins over project.env ----------
+# Standard flag > env > file precedence: project.env supplies the value when no
+# DEV_ override is set, and a DEV_ override wins so you can change a worktree's
+# pinned value for a single run without editing the file.
+echo "--- devcontainer resolve (environment beats project.env) ---"
 overlay="$TMPDIR_ROOT/overlay"
 mkdir -p "$overlay"
-printf 'MODEL_VERSION=from-file\n' >"$overlay/project.env"
+printf 'MODEL_VERSION=from-file\nDANGEROUSLY_SKIP_PERMISSIONS=1\n' >"$overlay/project.env"
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" "$DC" resolve 2>&1)"
+assert_contains "project.env supplies the model with no override" "MODEL_VERSION=from-file" "$out"
+assert_contains "project.env supplies the flag with no override" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
 out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_MODEL_VERSION=from-env "$DC" resolve 2>&1)"
-assert_contains "project.env takes precedence" "MODEL_VERSION=from-file" "$out"
+assert_contains "DEV_MODEL_VERSION overrides project.env" "MODEL_VERSION=from-env" "$out"
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 "$DC" resolve 2>&1)"
+assert_contains "DEV_DANGEROUSLY_SKIP_PERMISSIONS holds with project.env" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
 
 # ---------- test: devcontainer resolve with DEV_PROJECT_NAME override ----------
 echo "--- devcontainer resolve (DEV_PROJECT_NAME override) ---"
