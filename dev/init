@@ -170,15 +170,19 @@ if $nix_mode; then
                 suffix=" (overwrote)"
                 # A prior run (or a read-only store copy above) may have left
                 # this file unwritable; cp can't truncate it in place, so make
-                # it writable before overwriting.
-                chmod u+w "$target/$f"
+                # it writable before overwriting. Skip when already writable:
+                # chmod needs ownership, which a writable file may lack (e.g.
+                # group-writable, owned by another uid).
+                [ -w "$target/$f" ] || chmod u+w "$target/$f"
             else
                 suffix=""
             fi
             cp "$nix_frag/$f" "$target/$f"
             # A newly created file inherits nix_frag's (possibly read-only
-            # store) mode — restore owner-write.
-            chmod u+w "$target/$f"
+            # store) mode — restore owner-write. Guarded for the same
+            # ownership reason as above (an in-place truncate keeps the
+            # pre-existing file's owner).
+            [ -w "$target/$f" ] || chmod u+w "$target/$f"
             echo "  nix     $f$suffix"
         fi
     done
