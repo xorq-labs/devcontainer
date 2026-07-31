@@ -120,6 +120,15 @@ Copy `project.env.example` to `project.env` (gitignored) in the overlay director
 - `MODEL_VERSION` — passed as `--model` on each `dev/devcontainer claude` invocation. Per-worktree: each worktree's `project.env` can set a different model (e.g. use a cheaper model for routine tasks). Re-read from the host on every call, not baked into the container. Leave unset to use Claude Code's default.
 - `DANGEROUSLY_SKIP_PERMISSIONS=1` — makes `dev/devcontainer claude` pass `--dangerously-skip-permissions` automatically. The explicit `claude-dangerously-skip-permissions` subcommand still works as a one-off override regardless of this setting.
 
+These two names are read **only** from `project.env` — an ambient `MODEL_VERSION` or `DANGEROUSLY_SKIP_PERMISSIONS` in your shell is ignored, so a value some other tool exported can't silently change the model or switch off permission prompts. To set either from the environment, use the `DEV_`-prefixed form, which is unambiguous about being deliberate:
+
+```bash
+DEV_MODEL_VERSION=claude-haiku-4-5 devcontainer claude
+DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 devcontainer claude
+```
+
+The `DEV_`-prefixed forms win over `project.env` — the usual flag > env > file precedence — so you can override a worktree's pinned value for a single run without editing the file. For the boolean `DANGEROUSLY_SKIP_PERMISSIONS`, only a literal `1` enables it, and the `DEV_` form overrides in both directions: `DEV_DANGEROUSLY_SKIP_PERMISSIONS=0` turns it off even when `project.env` set it on. `devcontainer resolve` prints what ended up in effect.
+
 **Inspecting the resolved configuration:**
 
 `devcontainer resolve` shows what overlay and settings would be used for the current workspace without starting anything — useful for verifying that a checkout maps to the expected `projects/<name>/` entry:

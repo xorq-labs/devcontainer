@@ -30,6 +30,53 @@ assert_contains "shows PROJECT_NAME" "PROJECT_NAME=fakerepo" "$out"
 assert_contains "shows CONTAINER_NAME" "CONTAINER_NAME=fakerepo-dev-fakerepo" "$out"
 assert_not_contains "MODEL_VERSION unset" "MODEL_VERSION=claude" "$out"
 
+# ---------- test: ambient env does not pose as project.env config ----------
+# The unprefixed names are project.env's interface. A value that merely happens
+# to be exported in the caller's shell must not reach --model, and above all must
+# not turn on skip-permissions.
+echo "--- devcontainer resolve (ambient env is ignored) ---"
+out="$(cd "$MAIN_TREE" && MODEL_VERSION=claude-ambient DANGEROUSLY_SKIP_PERMISSIONS=1 "$DC" resolve 2>&1)"
+assert_contains "ambient MODEL_VERSION is ignored" "MODEL_VERSION=<unset>" "$out"
+assert_contains "ambient DANGEROUSLY_SKIP_PERMISSIONS is ignored" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=<unset>" "$out"
+# The DEV_-prefixed forms are the environment interface: deliberate by name, so
+# they cannot be set by accident the way the bare ones can.
+out="$(cd "$MAIN_TREE" && DEV_MODEL_VERSION=claude-explicit "$DC" resolve 2>&1)"
+assert_contains "DEV_MODEL_VERSION sets the model" "MODEL_VERSION=claude-explicit" "$out"
+out="$(cd "$MAIN_TREE" && DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 "$DC" resolve 2>&1)"
+assert_contains "DEV_DANGEROUSLY_SKIP_PERMISSIONS sets the flag" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
+
+# ---------- test: the DEV_-prefixed environment wins over project.env ----------
+# Standard flag > env > file precedence: project.env supplies the value when no
+# DEV_ override is set, and a DEV_ override wins so you can change a worktree's
+# pinned value for a single run without editing the file.
+echo "--- devcontainer resolve (environment beats project.env) ---"
+overlay="$TMPDIR_ROOT/overlay"
+mkdir -p "$overlay"
+printf 'MODEL_VERSION=from-file\nDANGEROUSLY_SKIP_PERMISSIONS=1\n' >"$overlay/project.env"
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" "$DC" resolve 2>&1)"
+assert_contains "project.env supplies the model with no override" "MODEL_VERSION=from-file" "$out"
+assert_contains "project.env supplies the flag with no override" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_MODEL_VERSION=from-env "$DC" resolve 2>&1)"
+assert_contains "DEV_MODEL_VERSION overrides project.env" "MODEL_VERSION=from-env" "$out"
+# The flag override works in the OFF direction too — the case that actually
+# distinguishes precedence: project.env pins it on, DEV_=0 turns it off for the
+# run, and resolve reports it off rather than echoing a misleading 0.
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_DANGEROUSLY_SKIP_PERMISSIONS=0 "$DC" resolve 2>&1)"
+assert_contains "DEV_ override turns the flag off over project.env" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=<unset>" "$out"
+
+# ---------- test: only a literal 1 enables the skip-permissions flag ----------
+# Regression: the old [ -n ] check enabled the flag for any non-empty value, so
+# a project.env (or env) value of 0 silently turned skip-permissions ON.
+echo "--- devcontainer resolve (only 1 enables skip-permissions) ---"
+printf 'DANGEROUSLY_SKIP_PERMISSIONS=0\n' >"$overlay/project.env"
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" "$DC" resolve 2>&1)"
+assert_contains "project.env=0 does not enable the flag" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=<unset>" "$out"
+
 # ---------- test: devcontainer resolve with DEV_PROJECT_NAME override ----------
 echo "--- devcontainer resolve (DEV_PROJECT_NAME override) ---"
 out="$(cd "$MAIN_TREE" && DEV_PROJECT_NAME=custom "$DC" resolve 2>&1)"
