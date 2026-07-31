@@ -26,8 +26,10 @@ services:
       # .git/worktrees/, .git/objects/, and .git/refs/
       - ${DEV_MAIN_GIT:?DEV_MAIN_GIT is required}:${DEV_MAIN_GIT}:cached
       - ${DEV_MAIN_TREE:?DEV_MAIN_TREE is required}:${DEV_MAIN_TREE}:cached
-      # sops age key (no-op when dir doesn't exist on host)
-      - ${DEV_SOPS_AGE_DIR:-/dev/null}:/home/vscode/.config/sops/age:ro
+      # sops age key. dev/devcontainer always exports DEV_SOPS_AGE_DIR — the
+      # host dir, or an empty one it creates so the container sees a keyless
+      # dir rather than a device file (a no-op mount either way).
+      - ${DEV_SOPS_AGE_DIR:?DEV_SOPS_AGE_DIR is required (exported by dev/devcontainer)}:/home/vscode/.config/sops/age:ro
       # Claude: host config read-only for baseline inheritance
       - ${HOME}/.claude:/home/vscode/.claude-host:ro
       - ${HOME}/.claude.json:/home/vscode/.claude-host.json:ro
