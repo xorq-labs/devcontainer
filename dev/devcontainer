@@ -238,8 +238,16 @@ unset MODEL_VERSION DANGEROUSLY_SKIP_PERMISSIONS
 [ -f "$_project_env" ] && . "$_project_env"
 [ -z "${DEV_MODEL_VERSION:-}" ] && [ -n "${MODEL_VERSION:-}" ] && export DEV_MODEL_VERSION="$MODEL_VERSION"
 unset MODEL_VERSION
-[ -z "${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-}" ] && [ -n "${DANGEROUSLY_SKIP_PERMISSIONS:-}" ] && DEV_DANGEROUSLY_SKIP_PERMISSIONS=1
+# DANGEROUSLY_SKIP_PERMISSIONS is a boolean, and the DEV_ form wins over
+# project.env in BOTH directions: fall back to the sourced value only when the
+# DEV_ form is entirely unset (a present-but-empty DEV_ value is a deliberate
+# override, so `DEV_DANGEROUSLY_SKIP_PERMISSIONS=0` can turn off a project.env
+# that set it on). Then collapse to on/off — only a literal 1 enables it, so 0,
+# false, and "" all read as off and never silently enable skip-permissions, and
+# resolve reports <unset> rather than a value that contradicts the consumers.
+[ -n "${DEV_DANGEROUSLY_SKIP_PERMISSIONS+x}" ] || DEV_DANGEROUSLY_SKIP_PERMISSIONS="${DANGEROUSLY_SKIP_PERMISSIONS:-}"
 unset DANGEROUSLY_SKIP_PERMISSIONS
+[ "${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-}" = 1 ] || unset DEV_DANGEROUSLY_SKIP_PERMISSIONS
 export DEV_UID="$(id -u)"
 export DEV_GID="$(id -g)"
 export DEV_MAIN_GIT="$DEV_MAIN_TREE/.git"

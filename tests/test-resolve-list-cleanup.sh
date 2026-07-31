@@ -61,9 +61,21 @@ assert_contains "project.env supplies the flag with no override" \
     "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
 out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_MODEL_VERSION=from-env "$DC" resolve 2>&1)"
 assert_contains "DEV_MODEL_VERSION overrides project.env" "MODEL_VERSION=from-env" "$out"
-out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 "$DC" resolve 2>&1)"
-assert_contains "DEV_DANGEROUSLY_SKIP_PERMISSIONS holds with project.env" \
-    "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
+# The flag override works in the OFF direction too — the case that actually
+# distinguishes precedence: project.env pins it on, DEV_=0 turns it off for the
+# run, and resolve reports it off rather than echoing a misleading 0.
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_DANGEROUSLY_SKIP_PERMISSIONS=0 "$DC" resolve 2>&1)"
+assert_contains "DEV_ override turns the flag off over project.env" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=<unset>" "$out"
+
+# ---------- test: only a literal 1 enables the skip-permissions flag ----------
+# Regression: the old [ -n ] check enabled the flag for any non-empty value, so
+# a project.env (or env) value of 0 silently turned skip-permissions ON.
+echo "--- devcontainer resolve (only 1 enables skip-permissions) ---"
+printf 'DANGEROUSLY_SKIP_PERMISSIONS=0\n' >"$overlay/project.env"
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" "$DC" resolve 2>&1)"
+assert_contains "project.env=0 does not enable the flag" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=<unset>" "$out"
 
 # ---------- test: devcontainer resolve with DEV_PROJECT_NAME override ----------
 echo "--- devcontainer resolve (DEV_PROJECT_NAME override) ---"

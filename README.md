@@ -127,7 +127,7 @@ DEV_MODEL_VERSION=claude-haiku-4-5 devcontainer claude
 DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 devcontainer claude
 ```
 
-The `DEV_`-prefixed forms win over `project.env` — the usual flag > env > file precedence — so you can override a worktree's pinned value for a single run without editing the file. `devcontainer resolve` prints what ended up in effect.
+The `DEV_`-prefixed forms win over `project.env` — the usual flag > env > file precedence — so you can override a worktree's pinned value for a single run without editing the file. For the boolean `DANGEROUSLY_SKIP_PERMISSIONS`, only a literal `1` enables it, and the `DEV_` form overrides in both directions: `DEV_DANGEROUSLY_SKIP_PERMISSIONS=0` turns it off even when `project.env` set it on. `devcontainer resolve` prints what ended up in effect.
 
 **Inspecting the resolved configuration:**
 
