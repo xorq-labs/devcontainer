@@ -14,3 +14,4 @@ select = [
 [lint.per-file-ignores]
 "tests/**" = ["S101"]
 "audit-report.py" = ["S603", "S607"]
+"dev/devcontainer-sessions" = ["S603", "S607"]
