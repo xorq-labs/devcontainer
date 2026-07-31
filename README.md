@@ -336,12 +336,28 @@ devcontainer audit --all
 devcontainer audit --clear
 ```
 
-Container session logs are written to `.claude/container-sessions/` in the workspace, visible from the host.
+Per-pid session status stubs are written to `.claude/container-sessions/` in the workspace, visible from the host.
+
+### Session transcripts live on the host
+
+Transcripts are the one thing in `~/.claude` that can't be rebuilt, so they don't live in the `claude-home` volume: `${HOME}/.claude/projects/-devcontainer-<container-name>` is bind-mounted over the container's own project key. `reset` and `clean` are both `docker compose down --volumes`, and a bind is not a volume — the history survives them, and survives `cleanup-worktree` too. Because the host side sits under `~/.claude/projects`, host tooling that walks that directory reads each container's history as an ordinary project.
+
+`dev/devcontainer-sessions` reports what's there — session id, last activity, branch, and opening prompt, joined against `docker inspect` for the container and worktree:
+
+```bash
+devcontainer-sessions                  # every project, newest first
+devcontainer-sessions -p xorq -n 10    # one project, 10 most recent
+devcontainer-sessions --host-only      # skip docker entirely
+```
+
+Transcripts written before this bind existed are still inside the volumes; `devcontainer-sessions --migrate` copies them out (the volume copies stay put as a fallback).
+
+To continue a container session on the host, `--resume-on-host <session-id>` reverses the seeding rewrite — container workspace back to host worktree — and files the result under the host's own project key, where `claude --resume` looks. It is a fast-forward: an existing host copy that is *ahead* of the container's is refused rather than overwritten, and backed up when `--force` overrides that. Once copied out, that session reads as a host-seeded copy on subsequent listings, so the container-side original is hidden unless you pass `--all`.
 
 > [!NOTE]
 > **Private credentials:** Each container seeds its own token from the read-only host profile store; the host credential file is never bind-mounted read-write. A container compromise can *read* the host profile store (via the `:ro` `.claude-host` mount) but cannot write host credentials, and cannot invalidate other containers' or the host's tokens. This also removes the concurrent-refresh auth loss the old read-write shared mount was built to tolerate (see [docs/adr/0001-devcontainer-private-token-isolation.md](docs/adr/0001-devcontainer-private-token-isolation.md)).
 >
-> **Volume persistence:** `down` stops the container but leaves Docker volumes intact. The seeded token now lives in the `claude-home` volume, so `reset` scrubs it (re-seeded on the next `up`) — revoke tokens via your OAuth provider if a container is compromised.
+> **Volume persistence:** `down` stops the container but leaves Docker volumes intact. The seeded token now lives in the `claude-home` volume, so `reset` scrubs it (re-seeded on the next `up`) — revoke tokens via your OAuth provider if a container is compromised. Session transcripts are exempt: they are bind-mounted from the host, so `reset`/`clean` leave them alone.
 >
 > **Host git access:** The host's `.git` directory is mounted read-write inside the container (required for git operations in worktrees). A container compromise could modify host git history, hooks, and refs.
 >

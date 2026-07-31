@@ -384,9 +384,10 @@ setup_claude_credentials() {
 }
 
 setup_claude() {
-    local host_project_key container_project_key
-    host_project_key="$(echo "$DEV_WORKSPACE" | sed 's|/|-|g')"
-    container_project_key="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|/|-|g')"
+    # Keys are resolved once in dev/devcontainer, which also hands the container
+    # key to compose so the host log directory mounts at the right project.
+    local host_project_key="$DEV_HOST_PROJECT_KEY"
+    local container_project_key="$DEV_CONTAINER_PROJECT_KEY"
 
     # Named volume root comes up root-owned; fix so vscode can write. Top-level
     # is enough — setup-claude creates the contents as vscode. (There is no
@@ -408,9 +409,8 @@ setup_claude() {
 # next entry — this pulls it in without a full re-setup. Host -> container
 # only; transcripts already present container-side are left untouched.
 copy_host_transcripts() {
-    local host_project_key container_project_key
-    host_project_key="$(echo "$DEV_WORKSPACE" | sed 's|/|-|g')"
-    container_project_key="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|/|-|g')"
+    local host_project_key="$DEV_HOST_PROJECT_KEY"
+    local container_project_key="$DEV_CONTAINER_PROJECT_KEY"
 
     dc exec \
         -e DEV_WORKSPACE="$DEV_WORKSPACE" \
