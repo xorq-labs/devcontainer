@@ -754,7 +754,7 @@ chown_named_volume_targets() {
     local script
     script="$(cat "$DEV_BASE_DIR/lib/volume-perms.sh")" || return 1
     script="$script"'
-dev_chown_volume_targets vscode /home/vscode "$@"'
+dev_chown_volume_targets vscode vscode /home/vscode "$@"'
 
     # `sh -c <script> <argv0> <args...>`: the first operand after the script is
     # $0, so the mount points land in "$@" for the driver line above.

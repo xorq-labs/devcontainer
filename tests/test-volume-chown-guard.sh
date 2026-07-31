@@ -6,10 +6,11 @@
 # performed. `stat` is NOT stubbed: the ownership probe runs for real against
 # temp dirs the suite owns.
 #
-# Modelling the two states without root: the guard compares owner NAMES, so a
-# name that cannot match any real owner ("$MISMATCH_OWNER") models a fresh
-# root-owned volume, and "$(id -un)" models one a previous cold start already
-# chowned. That holds whether or not the suite itself runs as root (CI may).
+# Modelling the two states without root: the guard compares owner/group NAMES,
+# so a name that cannot match any real owner ("$MISMATCH_OWNER") models a fresh
+# root-owned volume, and "$(id -un)"/"$(id -gn)" models one a previous cold
+# start already chowned. That holds whether or not the suite itself runs as
+# root (CI may).
 #
 # What is asserted:
 #   1. the guard decision (needs / does not need the recursive chown)
@@ -47,7 +48,7 @@ MISMATCH_OWNER="no-such-owner-$$"
 # shellcheck source=/dev/null
 . "$DEV_BASE/lib/volume-perms.sh"
 
-# run <owner> <home-prefix> <target>... — clear the log, then drive the lib.
+# run <owner> <group> <home-prefix> <target>... — clear the log, then drive the lib.
 run() {
     : >"$CHOWN_LOG"
     dev_chown_volume_targets "$@"
@@ -61,61 +62,66 @@ echo "=== named-volume chown guard tests ==="
 home="$tmp/home/vscode"
 mount="$home/.cache/uv"
 mkdir -p "$mount"
+# The group the suite's dirs actually get — usually $(id -gn), but a setgid
+# parent can override it, so read it back rather than assume.
+MYGRP="$(stat -c %G "$mount")"
 
 assert_true "mount point not owned by target -> needs the recursive chown" \
-    dev_volume_chown_needed "$mount" "$MISMATCH_OWNER"
+    dev_volume_chown_needed "$mount" "$MISMATCH_OWNER" "$MISMATCH_OWNER"
 assert_false "mount point already owned by target -> recursion not needed" \
-    dev_volume_chown_needed "$mount" "$ME"
+    dev_volume_chown_needed "$mount" "$ME" "$MYGRP"
+assert_true "owner matches but group does not -> still needed" \
+    dev_volume_chown_needed "$mount" "$ME" "$MISMATCH_OWNER"
 assert_false "missing mount point -> nothing needed" \
-    dev_volume_chown_needed "$tmp/absent" "$MISMATCH_OWNER"
+    dev_volume_chown_needed "$tmp/absent" "$MISMATCH_OWNER" "$MISMATCH_OWNER"
 assert_false "a FILE at the mount path -> nothing needed (dirs only)" \
-    dev_volume_chown_needed "$DEV_BASE/lib/volume-perms.sh" "$MISMATCH_OWNER"
+    dev_volume_chown_needed "$DEV_BASE/lib/volume-perms.sh" "$MISMATCH_OWNER" "$MISMATCH_OWNER"
 
 # ---- 2. fresh volume: the recursion still runs ----
-run "$MISMATCH_OWNER" "$home" "$mount"
+run "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$home" "$mount"
 assert_contains "fresh volume -> chown -R on the mount point" \
     "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mount" "$(log)"
 
 # ---- 3. already-chowned volume: the recursion is SKIPPED ----
 # The whole point of the guard: setup() re-runs on every cold start, and this is
 # where the multi-minute walk over a large cache volume used to be spent.
-run "$ME" "$home" "$mount"
+run "$ME" "$MYGRP" "$home" "$mount"
 assert_not_contains "already-owned volume -> no chown -R (walk skipped)" \
     "-R" "$(log)"
 assert_contains "ancestor chown still runs (unguarded, O(depth))" \
-    "$ME:$ME $home/.cache" "$(log)"
+    "$ME:$MYGRP $home/.cache" "$(log)"
 
 # ---- 4. ancestor walk is scoped to the home prefix ----
 # Only $home/.cache is strictly under $home; the walk must stop before $home
 # itself and never reach its parents.
 assert_eq "ancestors: exactly the dirs strictly under the home prefix" \
-    "$ME:$ME $home/.cache" "$(log)"
+    "$ME:$MYGRP $home/.cache" "$(log)"
 # Line-anchored: "$home" is a prefix of "$home/.cache", so a substring check
 # would match the legitimate ancestor chown.
 assert_false "the home prefix itself is never chowned" \
-    grep -qxF "$ME:$ME $home" "$CHOWN_LOG"
+    grep -qxF "$ME:$MYGRP $home" "$CHOWN_LOG"
 assert_false "nothing above the home prefix is chowned" \
-    grep -qxF "$ME:$ME $tmp/home" "$CHOWN_LOG"
+    grep -qxF "$ME:$MYGRP $tmp/home" "$CHOWN_LOG"
 
 # A workspace-style target (parent outside the home prefix, e.g. a venv volume
 # mounted inside the bind-mounted host workspace): no ancestor may be touched.
 ws="$tmp/workspaces/proj/.venv"
 mkdir -p "$ws"
-run "$ME" "$home" "$ws"
+run "$ME" "$MYGRP" "$home" "$ws"
 assert_eq "target outside the home prefix -> no ancestor chowns at all" "" "$(log)"
 
 # A missing target: no recursion (guard says no) and no ancestors under home.
-run "$ME" "$home" "$tmp/absent-volume"
+run "$ME" "$MYGRP" "$home" "$tmp/absent-volume"
 assert_eq "missing target outside home prefix -> no chowns at all" "" "$(log)"
 
 # Empty entries are skipped rather than chowning the process's cwd.
-run "$ME" "$home" "" ""
+run "$ME" "$MYGRP" "$home" "" ""
 assert_eq "empty target entries are skipped" "" "$(log)"
 
 # Multiple targets in one call: each is judged on its own mount point.
 other="$home/.cache/other"
 mkdir -p "$other"
-run "$MISMATCH_OWNER" "$home" "$mount" "$other"
+run "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$home" "$mount" "$other"
 assert_contains "multiple targets: first still recursed" \
     "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mount" "$(log)"
 assert_contains "multiple targets: second still recursed" \
@@ -150,8 +156,8 @@ fi
 # ---- 6. the dev/devcontainer driver line matches the lib ----
 # chown_named_volume_targets injects the lib into the container and appends this
 # exact line; a rename on either side would otherwise fail only at runtime.
-driver='dev_chown_volume_targets vscode /home/vscode "$@"'
-assert_true "dev/devcontainer drives the lib's function with (vscode, /home/vscode, \$@)" \
+driver='dev_chown_volume_targets vscode vscode /home/vscode "$@"'
+assert_true "dev/devcontainer drives the lib's function with (vscode, vscode, /home/vscode, \$@)" \
     grep -qF "$driver" "$DEV_BASE/dev/devcontainer"
 
 # The injected script must be valid POSIX sh and must pick the mount points out
@@ -163,7 +169,11 @@ assert_true "injected script parses as POSIX sh" sh -n -c "$script"
 
 : >"$CHOWN_LOG"
 sh -c "$script" volume-perms "/home/vscode/.cache/uv"
-assert_eq "injected script: mount points arrive in \"\$@\" and resolve under /home/vscode" \
+# assert_contains, not assert_eq: the guard probes the REAL /home/vscode/.cache/uv,
+# so on a machine where that path exists with a non-vscode owner a chown -R line
+# is also (correctly) logged. Only the unconditional ancestor chown is
+# environment-independent.
+assert_contains "injected script: mount points arrive in \"\$@\" and resolve under /home/vscode" \
     "vscode:vscode /home/vscode/.cache" "$(log)"
 
 finish
