@@ -27,9 +27,13 @@ services:
       # baked by install-system.sh.
       - nix:/nix
       # Host nix config (nix.conf, registry.json) read-only. dev/devcontainer
-      # points DEV_NIX_HOST_CONF at ~/.config/nix, or an empty dir when it's
-      # absent, so a missing host config never creates a root-owned dir on the host.
-      - ${DEV_NIX_HOST_CONF:-/dev/null}:/home/vscode/.config/nix-host:ro
+      # always exports DEV_NIX_HOST_CONF — ~/.config/nix, or an empty dir it
+      # creates when that's absent, so a missing host config never creates a
+      # root-owned dir on the host. Required, not defaulted: the empty-dir
+      # fallback exists precisely so the container never sees a device file
+      # here, and it's unset only when compose is driven outside
+      # dev/devcontainer, where a clear error beats a silent placeholder.
+      - ${DEV_NIX_HOST_CONF:?DEV_NIX_HOST_CONF is required (exported by dev/devcontainer)}:/home/vscode/.config/nix-host:ro
     group_add:
       - "${DEV_DOCKER_GID:-1000}"
 
