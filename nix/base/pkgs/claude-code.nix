@@ -29,11 +29,11 @@ let
     {
       x86_64-linux = {
         npmArch = "x64";
-        hash = "sha256-0WDTriyQy1Sn68mh1cKA5to37mzSYk5XAdxeTav70ok=";
+        hash = "sha256-JdLiyubT0dXO6vDaAug8RcFkVeRe+hqzBTldwFInrQ0=";
       };
       aarch64-linux = {
         npmArch = "arm64";
-        hash = "sha256-DItaVPMLCMSh+8P4hnnBXQuhCvDnUWhiq69MsUFPt6s=";
+        hash = "sha256-44RU1zV2oIoucH8mU51z/J7zPokCKMpcWKK76BCsiE0=";
       };
     }.${stdenvNoCC.hostPlatform.system}
       or (throw "claude-code: unsupported system ${stdenvNoCC.hostPlatform.system}");
@@ -42,7 +42,7 @@ stdenvNoCC.mkDerivation rec {
   pname = "claude-code";
   # Keep in sync with CLAUDE_CODE_VERSION in ../../../Dockerfile.
   # `dev/bump-claude-code` updates both pins together (and resets the hashes).
-  version = "2.1.215";
+  version = "2.1.220";
 
   # The platform package: a single prebuilt `claude` binary (~78 MB).
   src = fetchurl {
