@@ -15,6 +15,9 @@
 # the tests set up. Suites drive these explicitly, so start from a clean slate.
 unset DEV_WORKSPACE DEV_MAIN_TREE DEV_MAIN_GIT DEV_WORKTREE \
     DEV_PROJECT_DIR DEV_PROJECT_NAME DEV_CONTAINER_WORKSPACE
+# The unprefixed project.env names too — dev/devcontainer now ignores ambient
+# values, and suites that assert on that must not start from a polluted slate.
+unset MODEL_VERSION DANGEROUSLY_SKIP_PERMISSIONS
 
 PASS=0 FAIL=0
 _cleanup_dirs=()

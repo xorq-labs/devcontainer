@@ -226,6 +226,12 @@ fi
 
 # MODEL_VERSION and DANGEROUSLY_SKIP_PERMISSIONS from the project overlay's project.env.
 _project_env="$DEV_PROJECT_DIR/project.env"
+# Clear them first: unprefixed names are project.env's interface, not an ambient
+# one. Read after sourcing without this, there is no telling a value the overlay
+# set from one that merely happened to be exported in the caller's shell — and
+# MODEL_VERSION in particular is a name other tooling sets. The DEV_-prefixed
+# forms remain the supported environment override.
+unset MODEL_VERSION DANGEROUSLY_SKIP_PERMISSIONS
 # shellcheck disable=SC1090
 [ -f "$_project_env" ] && . "$_project_env"
 [ -n "${MODEL_VERSION:-}" ] && export DEV_MODEL_VERSION="$MODEL_VERSION"

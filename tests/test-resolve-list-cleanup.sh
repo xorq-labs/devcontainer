@@ -30,6 +30,31 @@ assert_contains "shows PROJECT_NAME" "PROJECT_NAME=fakerepo" "$out"
 assert_contains "shows CONTAINER_NAME" "CONTAINER_NAME=fakerepo-dev-fakerepo" "$out"
 assert_not_contains "MODEL_VERSION unset" "MODEL_VERSION=claude" "$out"
 
+# ---------- test: ambient env does not pose as project.env config ----------
+# The unprefixed names are project.env's interface. A value that merely happens
+# to be exported in the caller's shell must not reach --model, and above all must
+# not turn on skip-permissions.
+echo "--- devcontainer resolve (ambient env is ignored) ---"
+out="$(cd "$MAIN_TREE" && MODEL_VERSION=claude-ambient DANGEROUSLY_SKIP_PERMISSIONS=1 "$DC" resolve 2>&1)"
+assert_contains "ambient MODEL_VERSION is ignored" "MODEL_VERSION=<unset>" "$out"
+assert_contains "ambient DANGEROUSLY_SKIP_PERMISSIONS is ignored" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=<unset>" "$out"
+# The DEV_-prefixed forms are the environment interface: deliberate by name, so
+# they cannot be set by accident the way the bare ones can.
+out="$(cd "$MAIN_TREE" && DEV_MODEL_VERSION=claude-explicit "$DC" resolve 2>&1)"
+assert_contains "DEV_MODEL_VERSION sets the model" "MODEL_VERSION=claude-explicit" "$out"
+out="$(cd "$MAIN_TREE" && DEV_DANGEROUSLY_SKIP_PERMISSIONS=1 "$DC" resolve 2>&1)"
+assert_contains "DEV_DANGEROUSLY_SKIP_PERMISSIONS sets the flag" \
+    "DANGEROUSLY_SKIP_PERMISSIONS=1" "$out"
+
+# ---------- test: project.env wins over the DEV_-prefixed environment ----------
+echo "--- devcontainer resolve (project.env beats the environment) ---"
+overlay="$TMPDIR_ROOT/overlay"
+mkdir -p "$overlay"
+printf 'MODEL_VERSION=from-file\n' >"$overlay/project.env"
+out="$(cd "$MAIN_TREE" && DEV_PROJECT_DIR="$overlay" DEV_MODEL_VERSION=from-env "$DC" resolve 2>&1)"
+assert_contains "project.env takes precedence" "MODEL_VERSION=from-file" "$out"
+
 # ---------- test: devcontainer resolve with DEV_PROJECT_NAME override ----------
 echo "--- devcontainer resolve (DEV_PROJECT_NAME override) ---"
 out="$(cd "$MAIN_TREE" && DEV_PROJECT_NAME=custom "$DC" resolve 2>&1)"
