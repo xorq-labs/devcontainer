@@ -163,5 +163,12 @@ if $nix_needs_sync; then
 fi
 
 if [ "$current" != "$new" ]; then
-    echo "Rebuild to apply: 'devcontainer up' will detect the config change and prompt for a rebuild."
+    echo "Rebuild to apply the Dockerfile pin: 'devcontainer up' will detect the config change and prompt for a rebuild."
+fi
+
+# 'up' never builds the Nix base (it pulls the published image), so a rebuild
+# will not refresh the sentinel hashes — nor fail on them. Say so, or the
+# rebuild line above reads as if it covers the Nix pin too.
+if $nix_needs_sync; then
+    echo "The sentinel hashes are not refreshed by 'devcontainer up' — it pulls the Nix base rather than building it. CI (Nix Base workflow) is what fails on a committed sentinel."
 fi
