@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Guard: every lib/ file the Dockerfile COPYs from the default build context
-# must be re-included in .dockerignore.
+# Guard: every lib/ file a Dockerfile COPYs from the default build context
+# must be re-included in .dockerignore. BOTH Dockerfiles are checked — the nix
+# route (nix/base/Dockerfile.nix-default) builds from the same repo-root
+# context under the same .dockerignore.
 #
 # .dockerignore denies the whole lib/ tree and then re-includes an allowlist:
 #
@@ -21,30 +23,33 @@ set -euo pipefail
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
-dockerfile="$DEV_BASE/Dockerfile"
 dockerignore="$DEV_BASE/.dockerignore"
 
 echo "--- .dockerignore lib/ allowlist covers Dockerfile COPYs ---"
 
-[ -f "$dockerfile" ] || { echo "  FAIL: Dockerfile not found at $dockerfile"; exit 1; }
 [ -f "$dockerignore" ] || { echo "  FAIL: .dockerignore not found at $dockerignore"; exit 1; }
 
-# Source paths of lib/ files COPYd from the default context (skip `--from=`).
-mapfile -t copied < <(grep -oP '^COPY (?!--from=)\Klib/\S+' "$dockerfile" || true)
+for dockerfile in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
+    df_name="${dockerfile#"$DEV_BASE/"}"
+    [ -f "$dockerfile" ] || { echo "  FAIL: Dockerfile not found at $dockerfile"; exit 1; }
 
-if [ "${#copied[@]}" -eq 0 ]; then
-    _fail "found lib/ COPYs in Dockerfile" "none matched — anchor missed? file moved?"
-    finish
-fi
+    # Source paths of lib/ files COPYd from the default context (skip `--from=`).
+    mapfile -t copied < <(grep -oP '^COPY (?!--from=)\Klib/\S+' "$dockerfile" || true)
 
-for src in "${copied[@]}"; do
-    if grep -qxF "!$src" "$dockerignore"; then
-        _pass "$src allowlisted in .dockerignore"
-    else
-        _fail "$src allowlisted in .dockerignore" \
-            "Dockerfile COPYs $src but .dockerignore has no '!$src' line;" \
-            "the file is excluded from the build context and COPY will fail."
+    if [ "${#copied[@]}" -eq 0 ]; then
+        _fail "found lib/ COPYs in $df_name" "none matched — anchor missed? file moved?"
+        continue
     fi
+
+    for src in "${copied[@]}"; do
+        if grep -qxF "!$src" "$dockerignore"; then
+            _pass "$df_name: $src allowlisted in .dockerignore"
+        else
+            _fail "$df_name: $src allowlisted in .dockerignore" \
+                "$df_name COPYs $src but .dockerignore has no '!$src' line;" \
+                "the file is excluded from the build context and COPY will fail."
+        fi
+    done
 done
 
 echo ""

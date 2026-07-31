@@ -387,9 +387,16 @@ dc_exec() {
 # selects the token and neutralizes higher-precedence sources — is sourced
 # explicitly here. It is a no-op for OAuth profiles (the seeded .credentials.json
 # is used instead). Args after the function name are passed through to claude.
+# The source is guarded on readability: a still-running container built from a
+# pre-snippet image has no /usr/local/lib/devcontainer/claude-code-token-env.sh,
+# and an unguarded `.` of a missing file is fatal in non-interactive sh — the
+# launch would die until the next `up` rebuilds. Degrade to the OAuth path
+# instead (which is all a pre-snippet image supported anyway).
 dc_exec_claude() {
     dc_exec sh -c \
-        '. /usr/local/lib/devcontainer/claude-code-token-env.sh; exec claude "$@"' \
+        '[ -r /usr/local/lib/devcontainer/claude-code-token-env.sh ] \
+            && . /usr/local/lib/devcontainer/claude-code-token-env.sh
+        exec claude "$@"' \
         claude "$@"
 }
 

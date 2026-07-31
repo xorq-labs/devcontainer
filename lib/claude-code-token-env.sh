@@ -39,8 +39,11 @@
 # out of band: setup-claude rebuilds the container settings.json from scratch and
 # never copies it over, so there is nothing to strip here.
 
+# -s as well as -r: an empty token file must be a no-op — exporting an empty
+# CLAUDE_CODE_OAUTH_TOKEN while stripping ANTHROPIC_API_KEY would break ambient
+# auth that was working.
 __cc_tok="$(setup-claude token-path 2>/dev/null)" || __cc_tok=""
-if [ -n "$__cc_tok" ] && [ -r "$__cc_tok" ]; then
+if [ -n "$__cc_tok" ] && [ -r "$__cc_tok" ] && [ -s "$__cc_tok" ]; then
   CLAUDE_CODE_OAUTH_TOKEN="$(cat "$__cc_tok")"
   export CLAUDE_CODE_OAUTH_TOKEN
   unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL \

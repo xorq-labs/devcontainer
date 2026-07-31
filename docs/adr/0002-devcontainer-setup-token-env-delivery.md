@@ -49,9 +49,11 @@ source and applied at every claude entry point.
 
 - **Resolver (one source of truth).** `setup-claude token-path` prints the
   container-side token file a launch should read, or exits non-zero. Order: an
-  explicit `set-token` override (`~/.claude/.oauth-token`) first, else the
-  read-only host store (`~/.claude-host/credentials/<profile>.token`, profile
-  from `DEV_CLAUDE_PROFILE` or the host `active-profile` marker). The store copy
+  explicit `set-token` override (`~/.claude/.oauth-token`) first, then a
+  Docker/Compose file-based secret (`/run/secrets/claude_code_oauth_token`, the
+  sanctioned mountless transport), else the read-only host store
+  (`~/.claude-host/credentials/<profile>.token`, profile from
+  `DEV_CLAUDE_PROFILE` or the host `active-profile` marker). The store copy
   is read **live, never seeded** — a host-side delete takes effect on the next
   launch (this matters: a setup-token has **no CLI revoke**, so deletion is the
   only revoke; see Consequences).

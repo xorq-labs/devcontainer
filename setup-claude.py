@@ -149,16 +149,31 @@ def token_path():
        (a setup-token has no CLI revoke; deletion is the only revoke).
     """
     private = HOME / ".oauth-token"
-    if private.exists():
+    if _usable_token(private):
         return private
-    if RUN_SECRETS_TOKEN.exists():
+    if _usable_token(RUN_SECRETS_TOKEN):
         return RUN_SECRETS_TOKEN
     profile = resolve_profile()
     if profile:
         store_token = HOST / "credentials" / f"{profile}.token"
-        if store_token.exists():
+        if _usable_token(store_token):
             return store_token
     return None
+
+
+def _usable_token(path):
+    """A token file a launch can actually consume: present, readable, non-empty.
+
+    Skipping unusable tiers (instead of returning the first that exists) lets
+    resolution fall through — an unreadable override or an empty hand-created
+    file must not shadow a working lower tier, and returning a path the
+    snippet's own -r/-s guards then reject would report a token as active
+    without one ever being injected.
+    """
+    try:
+        return path.is_file() and os.access(path, os.R_OK) and path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def token_doctor():
