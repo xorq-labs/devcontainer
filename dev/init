@@ -83,6 +83,11 @@ for f in install-system.sh setup-env.sh compose.override.yml devcontainer.json \
             echo "  would create $f"
         else
             cp "$source_dir/$f" "$target/$f"
+            # The source may live in a read-only Nix store (0444/0555); cp
+            # preserves that mode, which would leave the overlay read-only and
+            # block the --nix overwrite below. Restore owner-write, keeping any
+            # execute bit from the source.
+            chmod u+w "$target/$f"
             echo "  created $f"
         fi
         copied=$((copied + 1))
@@ -161,8 +166,23 @@ if $nix_mode; then
             [ -f "$target/$f" ] && suffix=" (would overwrite)" || suffix=""
             echo "  would apply $f$suffix"
         else
-            [ -f "$target/$f" ] && suffix=" (overwrote)" || suffix=""
+            if [ -f "$target/$f" ]; then
+                suffix=" (overwrote)"
+                # A prior run (or a read-only store copy above) may have left
+                # this file unwritable; cp can't truncate it in place, so make
+                # it writable before overwriting. Skip when already writable:
+                # chmod needs ownership, which a writable file may lack (e.g.
+                # group-writable, owned by another uid).
+                [ -w "$target/$f" ] || chmod u+w "$target/$f"
+            else
+                suffix=""
+            fi
             cp "$nix_frag/$f" "$target/$f"
+            # A newly created file inherits nix_frag's (possibly read-only
+            # store) mode — restore owner-write. Guarded for the same
+            # ownership reason as above (an in-place truncate keeps the
+            # pre-existing file's owner).
+            [ -w "$target/$f" ] || chmod u+w "$target/$f"
             echo "  nix     $f$suffix"
         fi
     done

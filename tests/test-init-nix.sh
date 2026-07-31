@@ -64,6 +64,56 @@ overlay2="$REPO2/.devcontainer"
 assert_eq "no nix fragment applied" "false" "$([[ "$out2" == *"Applying --nix fragment:"* ]] && echo true || echo false)"
 assert_files_eq "install-system.sh stays defaults" "$overlay2/install-system.sh" "$DEFAULTS/install-system.sh"
 
+# ---------- test: read-only sources (Nix store install) ----------
+# Regression: cp preserves the store's 0444/0555 modes, so stage 1 used to
+# scaffold a read-only overlay and stage 2's cp could not truncate it —
+# init --nix aborted with "Permission denied". init now restores owner-write
+# on every file it writes.
+echo "--- init --local --nix (read-only source, simulated Nix store) ---"
+ROBASE="$TMPDIR_ROOT/robase"
+mkdir -p "$ROBASE/dev" "$ROBASE/lib"
+cp "$INIT" "$ROBASE/dev/init"
+cp "$DEV_BASE/lib/git.sh" "$ROBASE/lib/git.sh"
+cp -R "$DEFAULTS" "$ROBASE/defaults"
+cp -R "$DEV_BASE/templates" "$ROBASE/templates"
+# Strip write from the source FILES only (dirs stay writable so the harness
+# cleanup can rm -rf the tree).
+find "$ROBASE/defaults" "$ROBASE/templates" -type f -exec chmod a-w {} +
+
+REPO3="$(new_repo "$TMPDIR_ROOT/rorepo")"
+if (cd "$REPO3" && "$ROBASE/dev/init" --local --nix >/dev/null 2>&1); then ok3=true; else ok3=false; fi
+assert_eq "init --nix succeeds from a read-only source" "true" "$ok3"
+overlay3="$REPO3/.devcontainer"
+for f in install-system.sh setup-env.sh compose.override.yml external-volumes.txt; do
+    assert_files_eq "nix overwrote $f (read-only source)" "$overlay3/$f" "$NIX_FRAG/$f"
+done
+for f in install-system.sh setup-env.sh compose.override.yml devcontainer.json \
+         external-volumes.txt worktree-symlinks.txt worktree-copies.txt \
+         audit-prefixes.txt host-mounts.txt project.env.example; do
+    assert_true "scaffolded $f is owner-writable" test -w "$overlay3/$f"
+done
+
+# ---------- test: recovery from a pre-fix half-broken overlay ----------
+# A pre-fix run left the overlay as read-only defaults copies (stage 2 never
+# landed). A re-run must make the nix-touched files writable before
+# overwriting instead of failing the cp. Files init skips as pre-existing are
+# deliberately left alone (mode included).
+echo "--- init --local --nix (recovery over read-only defaults overlay) ---"
+REPO4="$(new_repo "$TMPDIR_ROOT/rorepo2")"
+mkdir -p "$REPO4/.devcontainer"
+for f in install-system.sh setup-env.sh compose.override.yml devcontainer.json \
+         external-volumes.txt worktree-symlinks.txt worktree-copies.txt \
+         audit-prefixes.txt host-mounts.txt project.env.example; do
+    cp "$DEFAULTS/$f" "$REPO4/.devcontainer/$f"
+    chmod a-w "$REPO4/.devcontainer/$f"
+done
+if (cd "$REPO4" && "$INIT" --local --nix >/dev/null 2>&1); then ok4=true; else ok4=false; fi
+assert_eq "re-run over a read-only overlay succeeds" "true" "$ok4"
+for f in install-system.sh setup-env.sh compose.override.yml external-volumes.txt; do
+    assert_files_eq "nix applied over read-only $f" "$REPO4/.devcontainer/$f" "$NIX_FRAG/$f"
+    assert_true "$f writable after recovery" test -w "$REPO4/.devcontainer/$f"
+done
+
 # ============================================================
 # lib/nix-seed.sh :: nix_write_conf (host nix.conf merge)
 # ============================================================
