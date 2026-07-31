@@ -65,7 +65,7 @@ def read_session(path):
         "version": None,
         "summary": None,
         "sidechain": False,
-        "records": 0,
+        "records_tail": 0,
     }
     with path.open("rb") as fh:
         head = fh.read(1 << 18)
@@ -95,7 +95,10 @@ def read_session(path):
             session["last_timestamp"] = record["timestamp"]
             break
 
-    session["records"] = tail.count(b"\n")
+    # Lines in the tail window only -- an exact count would mean reading the whole
+    # file, which is the read this head/tail split exists to avoid. Exact for any
+    # transcript that fits in the window, a floor for the ones that don't.
+    session["records_tail"] = tail.count(b"\n")
     return session
 
 
@@ -169,7 +172,13 @@ def run_export(root, out, session_id, src_prefix, dst_prefix):
 
 
 def docker(*args):
-    return subprocess.run(["docker", *args], capture_output=True, text=True, check=True).stdout
+    try:
+        return subprocess.run(["docker", *args], capture_output=True, text=True, check=True).stdout
+    except FileNotFoundError:
+        fail("docker not found on PATH")
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        fail(f"`docker {' '.join(args[:2])}` failed: {detail or exc}")
 
 
 def sanitize(name):
@@ -315,7 +324,7 @@ def build_rows(scanned, containers, include_seeded, claude_home):
                     "last_write": session["mtime"],
                     "last_activity": last,
                     "size": session["size"],
-                    "records": session["records"],
+                    "records_tail": session["records_tail"],
                     "sidechain": session["sidechain"],
                     "seeded": seeded,
                     "version": session["version"],
@@ -403,7 +412,11 @@ def resume_on_host(row, claude_home, image, force, dry_run, container_workspace)
     twin = destination.exists()
     if twin and not force:
         # Compare last records, not file size: rewriting the path prefix changes
-        # the byte count, so the two copies never match on length.
+        # the byte count, so the two copies never match on length. "Ahead" here
+        # is a timestamp comparison, not an ancestry check -- if host and
+        # container both advanced independently after seeding, a container that
+        # merely has the newer last record still wins. The pre-write backup below
+        # is what makes that safe.
         host_last = parse_timestamp(read_session(destination)["last_timestamp"])
         container_last = row["last_activity"]
         if host_last is not None and container_last is not None and host_last == container_last:
