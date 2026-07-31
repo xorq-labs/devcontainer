@@ -214,9 +214,17 @@ VM, with caveats) is preserved in the spike, PR #38.
 updates the Dockerfile `ARG` and this flake's `version` together, and resets
 both per-arch tarball hashes to the fakeHash sentinel; `nix build` per arch
 prints the real hash to paste back (`nix store prefetch-file <tarball url>`
-works too, without a build). The two pins stay deliberately duplicated — the
-version-coupled hashes must live next to the version — and
-`tests/test-claude-code-pin-sync.sh` fails CI if the committed files drift.
+works too, without a build — and it's the only way to get the *other* arch's
+hash without access to that arch). Nothing in `dev/devcontainer` refreshes
+them: the default route npm-installs claude-code, and the Nix base route
+*pulls* the published image rather than evaluating this flake, so
+`devcontainer up` neither needs the hashes nor complains about a sentinel.
+
+The two pins stay deliberately duplicated — the version-coupled hashes must
+live next to the version — and `tests/test-claude-code-pin-sync.sh` fails CI if
+the two **versions** drift. It does not inspect the hashes; a sentinel that
+reaches a commit is caught by this base's build in the Nix Base workflow, per
+arch.
 
 **MS base digest** — pinned, so an MS repush of `3.12-bookworm` changes
 nothing here. To deliberately adopt a newer base, re-derive per arch:
