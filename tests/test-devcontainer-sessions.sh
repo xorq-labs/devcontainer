@@ -96,4 +96,44 @@ assert_eq "bytes" "500B" "$(run_dcs "print(m.fmt_size(500), end='')")"
 assert_eq "kilobytes" "2.0K" "$(run_dcs "print(m.fmt_size(2048), end='')")"
 assert_eq "megabytes" "5.0M" "$(run_dcs "print(m.fmt_size(5 * 1024 * 1024), end='')")"
 
+# ---------- test: dedupe (host wins, else most-advanced) ----------
+# One row per session id: the host-resident copy beats a volume copy even when
+# the volume copy is newer; between two volume copies the later one wins; rows
+# with no id are all kept (keyed by transcript).
+echo "--- dedupe ---"
+dd="$(run_dcs '
+rows = [
+    {"session_id": "A", "host_path": None, "last_activity": 100, "last_write": 1, "transcript": "volA"},
+    {"session_id": "A", "host_path": "/h/A.jsonl", "last_activity": 50, "last_write": 1, "transcript": "hostA"},
+    {"session_id": "B", "host_path": None, "last_activity": 10, "last_write": 1, "transcript": "volB_old"},
+    {"session_id": "B", "host_path": None, "last_activity": 30, "last_write": 1, "transcript": "volB_new"},
+    {"session_id": None, "host_path": None, "last_activity": 5, "last_write": 1, "transcript": "noid1"},
+    {"session_id": None, "host_path": None, "last_activity": 5, "last_write": 1, "transcript": "noid2"},
+]
+import json
+by = {}
+for r in m.dedupe(rows):
+    by.setdefault(r["session_id"], []).append(r["transcript"])
+print(json.dumps({"A": by.get("A"), "B": by.get("B"), "none": len(by.get(None, [])), "total": len(by)}), end="")
+')"
+dd_get() { python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$dd" "$1"; }
+assert_eq "host copy wins even when older than the volume copy" "['hostA']" "$(dd_get A)"
+assert_eq "between volume copies the most recent wins" "['volB_new']" "$(dd_get B)"
+assert_eq "rows without a session id are all kept" "2" "$(dd_get none)"
+assert_eq "one survivor per id, plus the id-less ones" "3" "$(dd_get total)"
+
+# ---------- test: run_dump (flatten, skip already-staged) ----------
+echo "--- run_dump ---"
+vroot="$TMPDIR_ROOT/vols"
+dout="$TMPDIR_ROOT/dump-out"
+mkdir -p "$vroot/projA_claude-home/projects/-key1" \
+    "$vroot/projA_claude-home/projects/-nested/deeper" "$dout"
+printf '{}\n' >"$vroot/projA_claude-home/projects/-key1/sess-1.jsonl"
+printf '{}\n' >"$vroot/projA_claude-home/projects/-nested/deeper/sess-2.jsonl"
+printf 'PRE-EXISTING\n' >"$dout/sess-1.jsonl"
+copied="$(run_dcs "m.run_dump(Path(r'''$vroot'''), Path(r'''$dout'''))")"
+assert_eq "run_dump copies only the not-yet-staged transcript" '["sess-2.jsonl"]' "$copied"
+assert_true "the nested transcript is flattened into the out dir" test -f "$dout/sess-2.jsonl"
+assert_eq "a pre-existing transcript is left untouched" "PRE-EXISTING" "$(cat "$dout/sess-1.jsonl")"
+
 finish

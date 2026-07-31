@@ -352,7 +352,7 @@ devcontainer-sessions --host-only      # skip docker entirely
 
 Transcripts written before this bind existed are still inside the volumes; `devcontainer-sessions --migrate` copies them out (the volume copies stay put as a fallback).
 
-To continue a container session on the host, `--resume-on-host <session-id>` reverses the seeding rewrite — container workspace back to host worktree — and files the result under the host's own project key, where `claude --resume` looks. It is a fast-forward: an existing host copy that is *ahead* of the container's is refused rather than overwritten, and backed up when `--force` overrides that.
+To continue a container session on the host, `--resume-on-host <session-id>` reverses the seeding rewrite — container workspace back to host worktree — and files the result under the host's own project key, where `claude --resume` looks. It is a fast-forward: an existing host copy that is *ahead* of the container's is refused rather than overwritten, and backed up when `--force` overrides that. Once copied out, that session reads as a host-seeded copy on subsequent listings, so the container-side original is hidden unless you pass `--all`.
 
 > [!NOTE]
 > **Private credentials:** Each container seeds its own token from the read-only host profile store; the host credential file is never bind-mounted read-write. A container compromise can *read* the host profile store (via the `:ro` `.claude-host` mount) but cannot write host credentials, and cannot invalidate other containers' or the host's tokens. This also removes the concurrent-refresh auth loss the old read-write shared mount was built to tolerate (see [docs/adr/0001-devcontainer-private-token-isolation.md](docs/adr/0001-devcontainer-private-token-isolation.md)).

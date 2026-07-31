@@ -317,11 +317,13 @@ DEV_CONTAINER_NAME="$(sanitize_name "${DEV_PROJECT_NAME}-dev-$(basename "$DEV_WO
 DEV_LOCKFILE="/tmp/devcontainer-${DEV_CONTAINER_NAME}.lock"
 
 # Claude Code names a project directory after the cwd it was launched from, with
-# separators mangled. Both keys are needed: setup-claude seeds host transcripts
-# into the container's key, and the compose bind below mounts the host's session
-# log directory at that same key.
-DEV_HOST_PROJECT_KEY="$(echo "$DEV_WORKSPACE" | sed 's|/|-|g')"
-DEV_CONTAINER_PROJECT_KEY="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|/|-|g')"
+# every non-alphanumeric mangled to '-' (matching host_project_key() in
+# dev/devcontainer-sessions) -- not just slashes, so a path like /home/u/my.repo
+# keys as -home-u-my-repo. Both keys are needed: setup-claude seeds host
+# transcripts into the container's key, and the compose bind below mounts the
+# host's session log directory at that same key.
+DEV_HOST_PROJECT_KEY="$(echo "$DEV_WORKSPACE" | sed 's|[^a-zA-Z0-9]|-|g')"
+DEV_CONTAINER_PROJECT_KEY="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|[^a-zA-Z0-9]|-|g')"
 export DEV_HOST_PROJECT_KEY DEV_CONTAINER_PROJECT_KEY
 
 # Session transcripts live on the host rather than in the per-worktree

@@ -317,11 +317,10 @@ def merge_scans(*scans):
 
 
 def volume_exists(name):
-    try:
-        docker("volume", "inspect", name)
-    except subprocess.CalledProcessError:
-        return False
-    return True
+    # List and match rather than `inspect`: a missing volume makes `inspect`
+    # exit non-zero, which docker() turns into a hard failure -- so a plain
+    # "does it exist" check has to avoid provoking that.
+    return name in docker("volume", "ls", "--format", "{{.Name}}").split()
 
 
 def parse_timestamp(value):
@@ -399,17 +398,27 @@ def build_rows(scanned, containers, include_seeded, claude_home):
                     "transcript": session["path"].replace(f"{READER_ROOT}/{volume}", CLAUDE_HOME),
                 }
             )
+    rows = dedupe(rows)
+    # Sort after dedupe: which copy of a session wins is decided by host-residency
+    # (below), not recency, so ordering the survivors is the last step.
     rows.sort(key=lambda row: row["last_activity"] or row["last_write"], reverse=True)
-    return dedupe(rows)
+    return rows
 
 
 def dedupe(rows):
-    """One row per session id, preferring the host-resident copy.
+    """One row per session id: the host-resident copy, else the most advanced.
 
     While a worktree is part-migrated its transcripts exist both in the volume
     (frozen at migration) and in the bound-out directory (live). Same session,
-    two files; the host one is the one still being written.
+    two files; the host one is the one still being written, so it wins. Failing a
+    host copy (e.g. the same id seeded into two volumes), the copy with the later
+    last activity wins -- keeping select_session's "take the most advanced"
+    contract true even though dedupe now collapses each id before it runs.
     """
+
+    def rank(row):
+        return (bool(row["host_path"]), row["last_activity"] or row["last_write"] or 0)
+
     best = {}
     for row in rows:
         key = row["session_id"]
@@ -417,7 +426,7 @@ def dedupe(rows):
             best[row["transcript"]] = row
             continue
         rival = best.get(key)
-        if rival is None or (row["host_path"] and not rival["host_path"]):
+        if rival is None or rank(row) > rank(rival):
             best[key] = row
     return list(best.values())
 
@@ -477,7 +486,7 @@ def stage_export(row, src_prefix, dst_prefix, out_dir, image):
     )
 
 
-def resume_on_host(row, claude_home, image, force, dry_run, container_workspace, worktree_path):
+def resume_on_host(row, claude_home, image, force, dry_run, container_workspace, worktree_path, host_only):
     """Copy a container session onto the host so `claude --resume` can find it.
 
     Placement is a fast-forward, never a merge: a host twin only gets overwritten
@@ -488,6 +497,8 @@ def resume_on_host(row, claude_home, image, force, dry_run, container_workspace,
     worktree = worktree_path or row["worktree"]
     if not worktree:
         fail(f"worktree for {row['compose_project']} is not on disk; say where to resume it with --worktree-path")
+    # Resolve symlinks so the project key matches what `claude --resume` derives
+    # from getcwd() (which is already canonical) once you cd into the worktree.
     worktree = str(Path(worktree).resolve())
     src_prefix = container_workspace or row["container_workspace"] or row["container_cwd"]
     if not src_prefix:
@@ -531,13 +542,15 @@ def resume_on_host(row, claude_home, image, force, dry_run, container_workspace,
         transcript = staging / "transcript.jsonl"
         # Sidecars stay inside claude-home even once transcripts are bound out,
         # so the volume is still where they come from -- when it still exists.
-        if volume_exists(row["volume"]):
+        # --host-only forgoes them rather than touch docker; a host_path copy is
+        # enough for a resume, sidecars are the extra.
+        if not host_only and volume_exists(row["volume"]):
             stage_export(row, src_prefix, worktree, staging, image)
         if row["host_path"]:
             text = Path(row["host_path"]).read_text()
             transcript.write_text(text.replace(src_prefix, worktree))
         if not transcript.is_file():
-            fail(f"no transcript for {row['session_id']} in {row['volume']}")
+            fail(f"no transcript staged for {row['session_id']} (neither a host copy nor a readable volume)")
 
         if twin:
             backups = claude_home / "backups"
@@ -609,10 +622,9 @@ def select_session(rows, wanted):
     if len(ids) > 1:
         shown = ", ".join(sorted(session_id[:8] for session_id in ids)[:5])
         fail(f"'{wanted}' matches {len(ids)} sessions ({shown}) -- be more specific")
-    # One session can sit in several volumes -- seeding copies a host transcript
-    # into every container of that worktree. The most advanced copy is the one
-    # worth taking; the others are its ancestors.
-    return max(matches, key=lambda row: row["last_activity"] or row["last_write"])
+    # dedupe already collapsed each id to its best copy (host, else most
+    # advanced), and the guard above leaves exactly one id -- so one row remains.
+    return matches[0]
 
 
 def fail(message):
@@ -739,6 +751,9 @@ def main():
         run_dump(READER_ROOT, EXPORT_ROOT)
         return 0
 
+    if args.migrate and args.host_only:
+        fail("--migrate reads the volumes, so it cannot run with --host-only")
+
     volumes = []
     containers = {}
     if not args.host_only:
@@ -774,6 +789,7 @@ def main():
             args.dry_run,
             args.container_workspace,
             args.worktree_path,
+            args.host_only,
         )
     if args.worktree:
         rows = [row for row in rows if args.worktree in (row["worktree"] or row["worktree_slug"])]

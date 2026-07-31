@@ -55,12 +55,16 @@ assert_contains "reset tells the user transcripts are kept" \
     'transcripts are kept' "$(grep -F 'This will destroy the container' "$DEV_BASE/dev/devcontainer")"
 
 # ---- --host-only reads the bound-out directory, no docker -----------------
-root="$(make_sandbox xorq-dev-xorq "$SESSION")"
+# A sentinel compose-project name: --host-only never resolves it against a real
+# `<name>_claude-home` volume, but should someone drop that guard, the name must
+# not collide with an actual devcontainer volume on the machine running the suite.
+PROJECT=zz-claudelogs-test-dev-repo
+root="$(make_sandbox "$PROJECT" "$SESSION")"
 out="$(sessions --host-only --claude-home "$root/claude" --json)"
 assert_eq "the bound-out session is found" 1 "$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$out")"
 assert_eq "it is reported as host-resident" 'True' \
     "$(python3 -c 'import json,sys; print(bool(json.loads(sys.argv[1])[0]["host_path"]))' "$out")"
-assert_eq "the compose project comes back from the directory name" 'xorq-dev-xorq' \
+assert_eq "the compose project comes back from the directory name" "$PROJECT" \
     "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])[0]["compose_project"])' "$out")"
 # A live transcript sitting in ~/.claude/projects must not be mistaken for a host
 # twin of itself, or every session would be filtered out as already-seeded.
@@ -70,7 +74,7 @@ assert_contains "an unresolved worktree reads as unchecked, not deleted" '(?)' \
     "$(sessions --host-only --claude-home "$root/claude")"
 
 # ---- --resume-on-host rewrites and files under the host's own key ---------
-root="$(make_sandbox xorq-dev-xorq "$SESSION")"
+root="$(make_sandbox "$PROJECT" "$SESSION")"
 worktree="$root/repo"
 mkdir -p "$worktree"
 key="$(echo "$worktree" | sed 's|[^a-zA-Z0-9]|-|g')"
