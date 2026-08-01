@@ -1072,17 +1072,19 @@ case "${1:-up}" in
         # Legacy layout: <worktree>/.claude is a whole-dir symlink and the
         # subdir path resolves through it. ADR-0003 layout: the subdir ITSELF
         # is the symlink, and a plain `rm -rf` would remove just the link and
-        # leave the shared state. Resolve first, blast the target, and keep a
-        # still-linked subdir pointing at a recreated (empty) shared dir so
-        # in-container mkdir/appends don't hit a dangling link.
+        # leave the shared state. Resolve first, blast the target, then ALWAYS
+        # recreate the (empty) target directory: the caller's own subdir may be
+        # a symlink into it, and so may any sibling worktree's — recreating
+        # unconditionally is what keeps those links from dangling (a dangling
+        # link makes setup-claude.py's Path.mkdir raise FileExistsError and the
+        # audit hook append into nothing). Free on every layout: on a main
+        # checkout the target IS the real directory we just deleted.
         for _sub in container-audit container-sessions; do
             _sub_path="$DEV_WORKSPACE/.claude/$_sub"
             _sub_target="$(readlink -f "$_sub_path" 2>/dev/null || true)"
             if [ -n "$_sub_target" ]; then
                 rm -rf "$_sub_target"
-                if [ -L "$_sub_path" ]; then
-                    mkdir -p "$_sub_target"
-                fi
+                mkdir -p "$_sub_target"
             fi
         done
         echo "Cleaned: $DEV_CONTAINER_NAME"

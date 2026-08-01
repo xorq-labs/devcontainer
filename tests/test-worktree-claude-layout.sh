@@ -108,6 +108,83 @@ assert_not_contains "no per-subdir entries in legacy mode" \
 assert_false "no nested symlink was created through the link" \
     test -L "$MAIN_TREE/.claude/container-audit/container-audit"
 
+# ---------- test: `devcontainer clean`'s shared-state block ----------
+# The block is pure shell over paths ($DEV_WORKSPACE in, filesystem out), so we
+# lift it out of dev/devcontainer and run it directly rather than standing up
+# docker. Anchors: it is everything between the file-hashes `rm -f` and the
+# "Cleaned:" echo inside the `clean` case.
+CLEAN_BLOCK="$(awk '
+    index($0, "rm -f \"/tmp/devcontainer-${DEV_CONTAINER_NAME}.file-hashes\"") { f = 1; next }
+    index($0, "echo \"Cleaned: ") { f = 0 }
+    f' "$DEV_BASE/dev/devcontainer")"
+
+# shellcheck disable=SC2034  # DEV_WORKSPACE is consumed by the eval'd block
+run_clean_block() {
+    (
+        set -euo pipefail
+        DEV_WORKSPACE="$1"
+        eval "$CLEAN_BLOCK"
+    )
+}
+
+# Seed shared state in main and report whether the block wiped it while leaving
+# a real (non-dangling) directory behind for every layout that points at it.
+seed_shared_state() {
+    mkdir -p "$MAIN_TREE/.claude/container-audit" "$MAIN_TREE/.claude/container-sessions"
+    echo '{"tool":"Bash"}' > "$MAIN_TREE/.claude/container-audit/audit.jsonl"
+    echo '{}' > "$MAIN_TREE/.claude/container-sessions/123.json"
+}
+
+echo "--- devcontainer clean: block extraction ---"
+assert_true "the clean shared-state block was extracted" test -n "$CLEAN_BLOCK"
+
+echo "--- devcontainer clean: from a new-layout worktree ---"
+seed_shared_state
+assert_true "clean block succeeds from a new-layout worktree" run_clean_block "$WT1"
+assert_false "shared audit log deleted (blast radius reaches main)" \
+    test -e "$MAIN_TREE/.claude/container-audit/audit.jsonl"
+assert_false "shared session stub deleted" \
+    test -e "$MAIN_TREE/.claude/container-sessions/123.json"
+assert_true "shared audit dir recreated in main" test -d "$MAIN_TREE/.claude/container-audit"
+assert_true "shared sessions dir recreated in main" test -d "$MAIN_TREE/.claude/container-sessions"
+assert_true "the worktree's own audit link is not dangling" test -d "$WT1/.claude/container-audit"
+assert_true "the worktree's own sessions link is not dangling" test -d "$WT1/.claude/container-sessions"
+
+echo "--- devcontainer clean: from the MAIN checkout ---"
+# The regression this pins: main's .claude/container-* are real directories, so
+# nothing here is a symlink — but sibling new-layout worktrees point AT them.
+# Deleting without recreating leaves every sibling with a dangling link.
+seed_shared_state
+assert_true "clean block succeeds from the main checkout" run_clean_block "$MAIN_TREE"
+assert_false "shared audit log deleted from main" \
+    test -e "$MAIN_TREE/.claude/container-audit/audit.jsonl"
+assert_true "main's audit dir recreated" test -d "$MAIN_TREE/.claude/container-audit"
+assert_true "main's sessions dir recreated" test -d "$MAIN_TREE/.claude/container-sessions"
+assert_true "sibling worktree's audit link still resolves" test -d "$WT1/.claude/container-audit"
+assert_true "sibling worktree's sessions link still resolves" test -d "$WT1/.claude/container-sessions"
+
+echo "--- devcontainer clean: from a LEGACY whole-dir-symlink worktree ---"
+# Here $WT3/.claude/container-audit resolves THROUGH the whole-dir link, so the
+# subdir path is a real directory, not a symlink — same trap as the main
+# checkout, and the same sibling worktrees to keep unbroken.
+seed_shared_state
+assert_true "clean block succeeds from a legacy worktree" run_clean_block "$WT3"
+assert_false "shared audit log deleted via the legacy link" \
+    test -e "$MAIN_TREE/.claude/container-audit/audit.jsonl"
+assert_true "shared audit dir recreated behind the legacy link" \
+    test -d "$WT3/.claude/container-audit"
+assert_true "shared sessions dir recreated behind the legacy link" \
+    test -d "$WT3/.claude/container-sessions"
+assert_true "sibling new-layout audit link still resolves" test -d "$WT1/.claude/container-audit"
+assert_true "sibling new-layout sessions link still resolves" \
+    test -d "$WT1/.claude/container-sessions"
+
+echo "--- devcontainer clean: workspace with no .claude at all ---"
+NO_CLAUDE="$TMPDIR_ROOT/no-claude-workspace"
+mkdir -p "$NO_CLAUDE"
+assert_true "clean block succeeds with no .claude present" run_clean_block "$NO_CLAUDE"
+assert_false "no .claude conjured into existence" test -e "$NO_CLAUDE/.claude"
+
 # ---------- test: cleanup-worktree undoes both layouts ----------
 run_cleanup() { (cd "$MAIN_TREE" && "$CLEANUP" "$1") >/dev/null 2>&1; }
 
@@ -127,5 +204,43 @@ echo "--- cleanup-worktree: legacy layout ---"
 assert_true "cleanup exits 0 on the legacy layout" run_cleanup "$WT3"
 assert_false "legacy worktree removed" test -d "$WT3"
 assert_true "main's .claude survives legacy cleanup" test -d "$MAIN_TREE/.claude"
+
+# ---------- test: cleanup in a repo whose .gitignore does NOT ignore .claude ----------
+# setup-worktree is shared infrastructure and the live .gitignore is untracked
+# per checkout, so a consumer repo can easily lack a .claude entry. There,
+# `git status --porcelain` collapses the wholly-untracked directory to a single
+# `?? .claude/` that matches no manifest path — which used to make the
+# cleanup-worktree pre-flight refuse to remove ANY worktree in that repo.
+echo "--- cleanup-worktree: repo whose .gitignore does not ignore .claude ---"
+OPEN_MAIN="$(new_repo "$TMPDIR_ROOT/openrepo")"
+# Self-ignoring live .gitignore (this repo's convention), minus any .claude
+# entry — so `?? .claude/` is the ONLY thing the pre-flight has to reason about.
+printf '# deliberately no .claude entry\n.gitignore\n*.log\n' > "$OPEN_MAIN/.gitignore"
+WT4="$TMPDIR_ROOT/wt-open"
+git -C "$OPEN_MAIN" worktree add -q "$WT4" -b wt-open main
+(cd "$WT4" && "$SETUP") >/dev/null
+assert_contains "the collapsed untracked .claude entry is really there" \
+    "?? .claude/" "$(git -C "$WT4" status --porcelain)"$'\n'
+
+# The pre-flight must still block on a genuinely undominated file inside that
+# same untracked directory, and block it in the pre-flight — "before we touch
+# anything". Dominating the whole `.claude/` parent instead would sail past the
+# pre-flight, tear the symlinks and the manifest down, and only then hit git's
+# own refusal, leaving the worktree half-undone with no manifest to replay.
+printf 'stray\n' > "$WT4/.claude/stray.txt"
+assert_false "cleanup still refuses when an undominated file sits in .claude" \
+    bash -c '(cd "$1" && "$2" "$3") >/dev/null 2>&1' _ "$OPEN_MAIN" "$CLEANUP" "$WT4"
+assert_true "the refusal did not remove the worktree" test -d "$WT4"
+assert_true "the refusal happened before any teardown (manifest intact)" \
+    test -f "$WT4/.envrcs/.worktree-manifest"
+assert_true "the refusal left the state symlinks in place" \
+    test -L "$WT4/.claude/container-audit"
+rm "$WT4/.claude/stray.txt"
+
+assert_true "cleanup exits 0 with only manifest-recorded .claude state" \
+    bash -c '(cd "$1" && "$2" "$3") >/dev/null 2>&1' _ "$OPEN_MAIN" "$CLEANUP" "$WT4"
+assert_false "worktree removed despite the un-ignored .claude" test -d "$WT4"
+assert_true "the open repo's shared audit dir survives" \
+    test -d "$OPEN_MAIN/.claude/container-audit"
 
 finish

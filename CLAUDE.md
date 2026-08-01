@@ -137,6 +137,16 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   session stubs are shared, so `clean` affects all worktrees; pre-ADR-0003
   worktrees still carry a whole-directory symlink that every consumer must
   keep tolerating (`tests/test-worktree-claude-layout.sh`).
+- `devcontainer clean` must delete the shared state through the link AND
+  always recreate the emptied directory: run from the main checkout or a
+  legacy worktree it deletes the very directory sibling new-layout worktrees
+  link to, and skipping the recreate leaves them dangling
+  (`tests/test-worktree-claude-layout.sh` lifts the block out and runs it on
+  all three layouts).
+- `cleanup-worktree`'s pre-flight compares `git status` paths against manifest
+  entries, so it must ask for `--untracked-files=all`: git's default collapses
+  a wholly-untracked `.claude/` to one entry that matches no manifest path
+  (`tests/test-worktree-claude-layout.sh`).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).
