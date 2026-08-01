@@ -52,7 +52,8 @@ Commands:
   resolve                             show resolved overlay and configuration (dry run)
   logs [args...]                      show container logs
   exec [cmd...]                       run a command (default: bash)
-  claude [args...]                    run claude
+  claude [args...]                    run claude (DEV_CLAUDE_VERIFY=1 adds a per-launch
+                                        setup-token auth probe; see ADR-0002)
   claude-dangerously-skip-permissions run claude with --dangerously-skip-permissions
   refresh-ssh                         re-forward SSH agent (runs automatically on up/exec/claude;
                                         use standalone when agent changes mid-session)
@@ -392,12 +393,47 @@ dc_exec() {
 # and an unguarded `.` of a missing file is fatal in non-interactive sh — the
 # launch would die until the next `up` rebuilds. Degrade to the OAuth path
 # instead (which is all a pre-snippet image supported anyway).
+#
+# This wrapper is also where an OPTIONAL construct-then-verify step lives: the
+# snippet is construct-only (ADR-0002), so a per-launch preflight that the token
+# actually authenticated belongs in a launcher, not shell-init. It is OFF by
+# default (a verify is a network round-trip on every launch — a real cost) and
+# enabled with DEV_CLAUDE_VERIFY=1 (the repo's usual =1 toggle convention); it
+# runs only when the snippet actually injected a token — gating on the
+# injection OUTCOME, not on `setup-claude token-path`, so an unusable token
+# file that the snippet skipped can't have the probe "pass" against ambient
+# API-key auth and launch mis-authenticated with verify claiming clean.
+# Skipped for OAuth profiles (nothing injected). The probe defaults to
+# `claude -p ok` and is overridable via DEV_CLAUDE_VERIFY_CMD, run through
+# `sh -c` so quoted arguments work — the exact cheapest auth probe is
+# claude-version dependent and unpinned here (like the strip-list; re-check on
+# upgrade). On a failed probe it refuses to launch rather than silently run
+# mis-authenticated, and it PRINTS the probe output: a refusal that swallows
+# the reason cannot distinguish a bad token from a network blip.
 dc_exec_claude() {
-    dc_exec sh -c \
-        '[ -r /usr/local/lib/devcontainer/claude-code-token-env.sh ] \
-            && . /usr/local/lib/devcontainer/claude-code-token-env.sh
-        exec claude "$@"' \
-        claude "$@"
+    dc exec \
+        -e DEV_WORKTREE="$DEV_WORKTREE" \
+        -e DEV_CLAUDE_VERIFY="${DEV_CLAUDE_VERIFY:-}" \
+        -e DEV_CLAUDE_VERIFY_CMD="${DEV_CLAUDE_VERIFY_CMD:-}" \
+        app sh -c '
+            [ -r /usr/local/lib/devcontainer/claude-code-token-env.sh ] \
+                && . /usr/local/lib/devcontainer/claude-code-token-env.sh
+            if [ "${DEV_CLAUDE_VERIFY:-}" = "1" ] && [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+                verify_rc=0
+                verify_out="$(sh -c "${DEV_CLAUDE_VERIFY_CMD:-claude -p ok}" 2>&1)" || verify_rc=$?
+                if [ "$verify_rc" -ne 0 ]; then
+                    {
+                        echo "devcontainer claude: setup-token verify probe failed (DEV_CLAUDE_VERIFY=1); refusing to launch."
+                        echo "probe output (exit $verify_rc):"
+                        printf "%s\n" "$verify_out"
+                        echo "The cause may be transient (network, rate limit) or auth — check with"
+                        echo "devcontainer token-doctor, or unset DEV_CLAUDE_VERIFY to launch without the probe."
+                    } >&2
+                    exit 1
+                fi
+            fi
+            exec claude "$@"
+        ' claude "$@"
 }
 
 # Runs whenever routing selects the Nix base (the default for non-seed
@@ -1399,6 +1435,7 @@ case "${1:-up}" in
         echo "  PROJECT_NAME=$DEV_PROJECT_NAME"
         echo "  MODEL_VERSION=${DEV_MODEL_VERSION:-<unset>}"
         echo "  DANGEROUSLY_SKIP_PERMISSIONS=${DEV_DANGEROUSLY_SKIP_PERMISSIONS:-<unset>}"
+        echo "  CLAUDE_VERIFY=${DEV_CLAUDE_VERIFY:-<unset>}"
         echo "  CONTAINER_NAME=$DEV_CONTAINER_NAME"
         echo "  IMAGE=$DEV_IMAGE_REF"
         # Staleness hash (image inputs + runtime inputs) drives the recreate

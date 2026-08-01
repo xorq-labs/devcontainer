@@ -111,8 +111,11 @@ source and applied at every claude entry point.
   (no `apiKeyHelper` to inherit). A verify step — confirming the token actually
   authenticated, which catches a precedence tier a future claude adds that the
   strip-list does not yet drop — belongs in a wrapping launcher (claude-profile's
-  `run`/`session`; optionally the `devcontainer claude` wrapper as a follow-up),
-  mirroring the claude-profile side's construct-then-verify delivery.
+  `run`/`session`; and the `devcontainer claude` wrapper, where it is now
+  available OFF by default and gated behind `DEV_CLAUDE_VERIFY=1` — a per-launch
+  network round-trip is a real cost — with the probe overridable via
+  `DEV_CLAUDE_VERIFY_CMD` since the cheapest auth probe is claude-version
+  dependent), mirroring the claude-profile side's construct-then-verify delivery.
 
 ## The no-persist relaxation (deliberate, recorded, and narrow)
 
