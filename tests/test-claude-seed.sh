@@ -88,4 +88,54 @@ out="$(seed "$root" "ghost" 2>&1)"
 assert_false "no token file when the profile is absent" is_regular_file "$root/home/.credentials.json"
 assert_contains "warns that the profile was not found" "not found" "$out"
 
+# ---- main setup path pins the resolved profile (ADR-0002 §Resolver) ----
+# Regression: a container that has only ever been `up`'d (main setup, never
+# `fix-credentials`) must record the seed-time profile in .active-profile, or
+# launches — which never inherit the per-exec DEV_CLAUDE_PROFILE — fall through
+# to the HOST marker and can inject a different profile's token than seeding
+# installed.
+
+# Run the full main setup against a sandbox. Args: <root> <profile-or-empty>
+setup_main() {
+    local root="$1" profile="$2"
+    mkdir -p "$root/workspace"
+    env CLAUDE_HOST_DIR="$root/host" \
+        CLAUDE_HOME_DIR="$root/home" \
+        CLAUDE_HOST_PREFS="$root/host-dot-claude.json" \
+        CLAUDE_CONTAINER_PREFS="$root/dot-claude.json" \
+        DEV_CLAUDE_PROFILE="$profile" \
+        DEV_CONTAINER_WORKSPACE="$root/workspace" \
+        DEV_HOST_PROJECT_KEY="-host-proj" \
+        DEV_CONTAINER_PROJECT_KEY="-container-proj" \
+        python3 "$SETUP"
+}
+
+root="$(make_sandbox)"
+printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-work"}}' >"$root/host/credentials/work.json"
+printf 'other' >"$root/host/credentials/active-profile"
+setup_main "$root" "work" >/dev/null
+
+assert_true "main setup writes the .active-profile record" is_regular_file "$root/home/.active-profile"
+assert_eq "record pins the resolved profile, not the host marker" \
+    "work" "$(cat "$root/home/.active-profile")"
+
+# no DEV_CLAUDE_PROFILE: the host marker is resolved and pinned; a stale record
+# must not feed the resolution that rewrites it (env > marker, record excluded).
+root="$(make_sandbox)"
+printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-active"}}' >"$root/host/credentials/prod.json"
+printf 'prod' >"$root/host/credentials/active-profile"
+printf 'stale\n' >"$root/home/.active-profile"
+setup_main "$root" "" >/dev/null
+
+assert_eq "main setup re-pins from the host marker, not the stale record" \
+    "prod" "$(cat "$root/home/.active-profile")"
+
+# recording happens even when seeding finds no credential material — same
+# semantics as the seed-credentials subcommand (pin BEFORE seeding).
+root="$(make_sandbox)"
+setup_main "$root" "ghost" >/dev/null 2>&1
+
+assert_eq "record pinned even when the profile has no credential material" \
+    "ghost" "$(cat "$root/home/.active-profile")"
+
 finish

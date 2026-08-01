@@ -47,7 +47,8 @@ CONTAINER_PREFS = Path(os.environ.get("CLAUDE_CONTAINER_PREFS", "/home/vscode/.c
 RUN_SECRETS_TOKEN = Path(os.environ.get("CLAUDE_RUN_SECRETS_TOKEN", "/run/secrets/claude_code_oauth_token"))
 # The profile this container's seed resolved, pinned for launches — which never
 # inherit DEV_CLAUDE_PROFILE (it is forwarded per-exec, not baked into the
-# container env). Written by `seed-credentials`, read by resolve_profile.
+# container env). Written whenever seeding runs (main setup and the
+# `seed-credentials` subcommand), read by resolve_profile.
 ACTIVE_PROFILE_RECORD = HOME / ".active-profile"
 
 # Env sources that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's precedence order
@@ -121,8 +122,9 @@ def resolve_profile(use_record=True):
     falls through to the HOST marker and can inject a different profile's
     token than seeding installed — silently authenticating as the wrong
     identity (ADR-0002's "no silent routing" goal). Seeding writes the record
-    (see `seed-credentials` in main), so every later launch resolves the same
-    profile the seed used, and a re-seed with a different profile re-pins it.
+    (main setup and the `seed-credentials` subcommand alike), so every later
+    launch resolves the same profile the seed used, and a re-seed with a
+    different profile re-pins it.
 
     Seeding itself resolves with use_record=False: the record must not feed
     the resolution that writes it, or a stale pin would re-seed itself forever
@@ -541,7 +543,16 @@ def main():
     copy_global_instructions()
     copy_global_memory()
     copy_user_prefs(workspace)
-    seed_credentials(resolve_profile())
+    # Same semantics as the `seed-credentials` subcommand: fresh resolution
+    # (env > host marker, record excluded — the record must not feed the
+    # resolution that writes it), pinned for launches BEFORE seeding so
+    # token-path in every later shell agrees with what this seed installed
+    # (see resolve_profile). Without the pin, a container that has only ever
+    # been `up`'d would fall through to the HOST marker at launch and could
+    # inject a different profile's token than seeding installed.
+    profile = resolve_profile(use_record=False)
+    record_active_profile(profile)
+    seed_credentials(profile)
     setup_settings(workspace, host_project_key)
     setup_project_settings(host_project_key, container_project_key)
     copy_sessions(workspace, host_project_key, container_project_key)
