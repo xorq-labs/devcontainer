@@ -32,65 +32,50 @@ if [ "${1:-}" = "bump-nix" ]; then
     exec "$(dirname "$(readlink -f "$0")")/bump-nix" "$@"
 fi
 
+# Resolve through symlinks and PATH to find the base repo. Done here (rather
+# than after option parsing) because show_usage below needs the command table.
+_SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+DEV_BASE_DIR="$(cd "$_SCRIPT_DIR/.." && pwd)"
+export DEV_BASE_DIR
+
+# shellcheck source=../lib/command-table.sh
+. "$DEV_BASE_DIR/lib/command-table.sh"
+
+# The Commands block is GENERATED from lib/command-table.tsv — see that file's
+# header for the column contract and the "adding a subcommand" workflow.
+#
+# Layout: `  <name> <arg-syntax>` padded so the description column starts at
+# column 39 (a head too long to pad gets the description on the next line),
+# and each further `\n`-separated description line is indented two columns
+# past that.
+usage_commands() {
+    local rows name syntax desc head cont
+    local -a lines
+    rows="$(command_table_rows)" || return 1
+    while IFS=$'\t' read -r name syntax _ _ _ _ desc; do
+        [ -n "$name" ] || continue
+        [ "$syntax" != "-" ] || syntax=""
+        head="$name${syntax:+ $syntax}"
+        mapfile -t lines <<<"${desc//\\n/$'\n'}"
+        if [ "${#head}" -le 35 ]; then
+            printf '  %-36s%s\n' "$head" "${lines[0]}"
+        else
+            printf '  %s\n' "$head"
+            printf '%38s%s\n' "" "${lines[0]}"
+        fi
+        for cont in "${lines[@]:1}"; do
+            printf '%40s%s\n' "" "$cont"
+        done
+    done <<<"$rows"
+}
+
 show_usage() {
     cat <<'USAGE'
 Usage: devcontainer [-w dir] <command>
 
 Commands:
-  init [name]                         create a project overlay (default: workspace basename)
-  up                                  start the dev container (default)
-  down [--yes]                        stop the dev container
-  reset [--yes]                       destroy container and all volumes
-  clean [--yes]                       reset + remove host-side artifacts and legacy
-                                        per-worktree images (the shared project image is kept)
-  clean-caches [--yes]                remove the project's shared caches (external volumes:
-                                        nix store, package caches) — affects ALL worktrees
-  clean-images [--yes]                remove the project's shared images (all fingerprint
-                                        tags) — affects ALL worktrees
-  status                              show whether the container is running
-  list                                list all worktrees with container status and overlay
-  resolve                             show resolved overlay and configuration (dry run)
-  logs [args...]                      show container logs
-  exec [cmd...]                       run a command (default: bash)
-  claude [args...]                    run claude (DEV_CLAUDE_VERIFY=1 adds a per-launch
-                                        setup-token auth probe; see ADR-0002)
-  claude-dangerously-skip-permissions run claude with --dangerously-skip-permissions
-  refresh-ssh                         re-forward SSH agent (runs automatically on up/exec/claude;
-                                        use standalone when agent changes mid-session)
-  refresh-gpg                         re-forward GPG agent (runs automatically on up/exec/claude;
-                                        use standalone when host gpg-agent restarts)
-  refresh-x11                         re-forward X11 display (runs automatically on up/exec/claude;
-                                        use standalone when the host X server or DISPLAY changes)
-  copy-host-transcripts               mirror host Claude session transcripts into the
-                                        container so `claude --resume` finds them (runs
-                                        automatically on up/exec/claude; use standalone to
-                                        pull a host session started after the container was up)
-  fix-credentials                     re-seed this container's private token from
-                                        its profile (DEV_CLAUDE_PROFILE, else host active)
-  set-credentials <file>|-            override with a private token from <file> or stdin
-                                        (e.g. claude-profile export-to <p> - | devcontainer set-credentials -);
-                                        revert to the profile seed with fix-credentials
-  set-token <file>|-                  install a raw setup-token bearer from <file> or stdin for a
-                                        mountless runtime (CI/Codespaces): injected as
-                                        CLAUDE_CODE_OAUTH_TOKEN at launch (ADR-0002)
-                                        (e.g. claude-profile export-to <p> --token - | devcontainer set-token -)
-  token-doctor                        warn if a higher-precedence auth source (ANTHROPIC_API_KEY,
-                                        Bedrock/Vertex, base-URL, apiKeyHelper) would silently
-                                        outrank an active setup-token in this container (ADR-0002)
-  fix-network                         disconnect stale networks from a stopped container
-                                        (needed after ungraceful host shutdown)
-  unlock                              remove stale lockfile (safe — refuses if lock is actively held)
-  ps [--all]                          list running containers for this project (--all: all containers with claude sessions)
-  audit [--summary|--new|--all|--clear]
-                                      show permission audit log (default: --summary)
-  bump-claude-code [version|--check]  update pinned Claude Code version in the Dockerfile
-                                        (default: latest from npm; --check reports without editing)
-  bump-nix [version|--check]          update pinned Nix version + installer sha in lib/nix-seed.sh
-                                        (default: latest release; --check reports without editing)
-  completions [bash|zsh|fish]         emit shell completions
-  install-completions [bash|zsh|fish] install completions to each shell's autoload dir
-                                        (default: every shell present; --print-paths to preview)
 USAGE
+    usage_commands
 }
 
 if [[ "${1:-}" =~ ^(-h|--help|help)$ ]]; then
@@ -116,11 +101,8 @@ while [[ "${1:-}" == -* ]]; do
     esac
 done
 
-# Resolve through symlinks and PATH to find the base repo
-_SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-DEV_BASE_DIR="$(cd "$_SCRIPT_DIR/.." && pwd)"
-export DEV_BASE_DIR
-
+# _SCRIPT_DIR / DEV_BASE_DIR are resolved above show_usage (which reads the
+# command table); neither depends on the option parsing between.
 . "$DEV_BASE_DIR/lib/git.sh"
 DEV_MAIN_TREE="$(dev_main_tree)" || exit 1
 export DEV_MAIN_TREE

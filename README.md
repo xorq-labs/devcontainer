@@ -224,6 +224,10 @@ Two worktree paths are hardcoded in `dev/setup-worktree` rather than living in `
 
 ## Tab completion
 
+Completion scripts are generated from `lib/command-table.tsv` — the same table
+that generates `devcontainer help` — so the command names, descriptions and
+argument wiring are identical across bash, zsh, fish and the usage text.
+
 To load completions for the current session, `eval` the emitted script:
 
 ```bash
