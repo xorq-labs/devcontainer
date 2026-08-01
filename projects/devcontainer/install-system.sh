@@ -28,8 +28,12 @@ rm -rf /var/lib/apt/lists/*
 nix_build_install
 
 # hadolint, ruff, and yamllint versions below must be kept in sync with the
-# matching hook pins in .pre-commit-config.yaml at the repo root. pre-commit
-# itself is the runner (not a pinned hook there), so it has no counterpart.
+# matching hook pins in .pre-commit-config.yaml at the repo root — those two
+# files are the only places these linters are pinned (CI gets its versions
+# from .pre-commit-config.yaml, via the single pre-commit job). These copies
+# exist so the bare binaries are on PATH in the container for editor
+# integrations and ad-hoc runs. pre-commit itself is the runner (not a pinned
+# hook there), so it has no counterpart.
 # hadolint (Dockerfile linter)
 HADOLINT_VERSION=2.14.0
 HADOLINT_SHA256_AMD64=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47

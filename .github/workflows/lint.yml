@@ -1,77 +1,24 @@
 name: Lint
 
+# pre-commit is the SINGLE CI lint gate: `pre-commit run --all-files` runs
+# shellcheck, ruff, ruff-format, yamllint, and hadolint over the whole tree.
+# Standalone per-linter jobs used to duplicate that at a second, hand-kept set
+# of versions (and installed shellcheck unpinned from apt, so the two jobs
+# could disagree on identical code) — they were deleted.
+#
+# Consequence: linter versions are pinned in .pre-commit-config.yaml alone,
+# plus the container copy in projects/devcontainer/install-system.sh (bare
+# binaries on PATH for in-container/editor use). Bump those two together;
+# tests/test-lint-config-sync.sh guards the pair.
+
 on:
   push:
     branches: [main]
   pull_request:
 
 jobs:
-  shellcheck:
-    name: ShellCheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install ShellCheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
-      - name: Run ShellCheck on .sh files
-        run: |
-          find . -name '*.sh' -not -path './.git/*' -print0 \
-            | xargs -0 shellcheck --severity=warning
-      - name: Run ShellCheck on extensionless bash scripts
-        # keep in sync with .pre-commit-config.yaml shellcheck (extensionless)
-        run: |
-          shellcheck --severity=warning \
-            dev/devcontainer \
-            dev/devcontainer-completions \
-            dev/init \
-            dev/new-worktree \
-            dev/setup-worktree \
-            dev/cleanup-worktree \
-            dev/hooks/post-checkout
-
-  # ruff/yamllint/hadolint pins below are a three-way sync with
-  # .pre-commit-config.yaml and projects/devcontainer/install-system.sh
-  # (guarded by tests/test-lint-config-sync.sh); bump all three together.
-  ruff:
-    name: Ruff (Python)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v3
-        with:
-          version: "0.15.14"
-      - uses: astral-sh/ruff-action@v3
-        with:
-          version: "0.15.14"
-          args: "format --check"
-
-  hadolint:
-    name: Hadolint (Dockerfile)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # direct pinned install (hadolint-action bundles its own older hadolint
-      # and has no version input); sha256 matches install-system.sh (amd64)
-      - name: Install hadolint
-        run: |
-          curl -fsSL \
-            "https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-x86_64" \
-            -o /usr/local/bin/hadolint
-          echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  /usr/local/bin/hadolint" \
-            | sha256sum -c -
-          chmod +x /usr/local/bin/hadolint
-      - run: hadolint --config .hadolint.yaml Dockerfile
-
-  yamllint:
-    name: yamllint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: pip install yamllint==1.38.0
-      - run: yamllint -c .yamllint.yml .
-
   pre-commit:
-    name: pre-commit (end-to-end setup)
+    name: pre-commit (all linters, end-to-end setup)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

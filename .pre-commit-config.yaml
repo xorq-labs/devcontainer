@@ -6,14 +6,20 @@ repos:
         args: [--severity=warning]
         types: [shell]
         exclude: ^\.envrc$
-      # keep in sync with .github/workflows/lint.yml extensionless step
+      # Belt-and-braces for the extensionless dev/ scripts: the hook above
+      # already picks them up via identify's shebang detection, which only
+      # applies to executable files — this one catches them by path even if
+      # the exec bit is lost.
       - id: shellcheck
         name: shellcheck (extensionless)
         args: [--severity=warning]
         types: [file]
         files: ^dev/(devcontainer|devcontainer-completions|init|new-worktree|setup-worktree|cleanup-worktree|hooks/post-checkout)$
 
-  # keep ruff/yamllint/hadolint pins in sync with projects/devcontainer/install-system.sh
+  # These pins are the source of truth for CI (the pre-commit job is the only
+  # CI lint gate). Keep ruff/yamllint/hadolint in sync with the in-container
+  # copies in projects/devcontainer/install-system.sh — the only other place
+  # they are pinned. Guarded by tests/test-lint-config-sync.sh.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.14
     hooks:
@@ -27,6 +33,9 @@ repos:
       - id: yamllint
         args: [-c, .yamllint.yml]
 
+  # types: [dockerfile] matches BOTH `Dockerfile` and
+  # `nix/base/Dockerfile.nix-default` (identify tags the `.Dockerfile`-style
+  # suffix too) — no `files:` pattern needed.
   - repo: https://github.com/AleksaC/hadolint-py
     rev: v2.14.0
     hooks:

@@ -102,6 +102,14 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
 - `NIX_VERSION` and `NIX_INSTALLER_SHA256` in `lib/nix-seed.sh` are a coupled
   pair; bump via `dev/bump-nix` (`tests/test-bump-nix.sh`).
+- Linter pins (ruff, yamllint, hadolint) live in exactly two places —
+  `.pre-commit-config.yaml` (which CI also consumes, via the single
+  `pre-commit` job in `.github/workflows/lint.yml`) and
+  `projects/devcontainer/install-system.sh`; bump both together
+  (`tests/test-lint-config-sync.sh`).
+- `.github/workflows/lint.yml` must stay a single `pre-commit run --all-files`
+  gate: a per-linter job re-introduces a third, hand-kept version set and can
+  disagree with the hooks on identical code (—).
 - Container-side root logic lives in `lib/*.sh` and is INJECTED per run via
   `dc exec ... sh -c "$script" <argv0> <args...>` — a runtime input: no
   rebuild, no fingerprint entry unless it is also COPYed
@@ -176,5 +184,5 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003).
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
-- Linter versions live in three paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks), `projects/devcontainer/install-system.sh` (in-container linters), and `.github/workflows/lint.yml` (CI). Bump ruff, yamllint, and hadolint in all three together; `tests/test-lint-config-sync.sh` guards against drift.
+- Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift.
 - Any convention that spans two files gets a drift-guard test when it is introduced (existing examples: `tests/test-claude-code-pin-sync.sh`, `tests/test-lint-config-sync.sh`, `tests/test-classic-args-sync.sh`, `tests/test-completions-sync.sh`, `tests/test-dockerignore-lib-allowlist.sh`). A convention only its author knows about will drift.
