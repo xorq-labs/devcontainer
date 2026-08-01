@@ -31,6 +31,7 @@ Expected environment variables (set by dev/devcontainer):
 
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -89,10 +90,81 @@ def copy_global_instructions():
         shutil.copy2(src, HOME / "CLAUDE.md")
 
 
+def _index_key(line):
+    """Dedup key for a MEMORY.md line: its markdown link target, else the line."""
+    m = re.search(r"\]\([^)]*\)", line)
+    return m.group(0) if m else line
+
+
+def _index_union(winner, loser):
+    """Union two MEMORY.md line lists, winner's line kept on a key collision."""
+    seen = set()
+    out = []
+    for line in winner + loser:
+        key = _index_key(line)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(line)
+    return out
+
+
+def _read_lines(path):
+    return path.read_text().splitlines() if path.is_file() else []
+
+
+def _frontmatter_field(path, field):
+    m = re.search(rf"^{field}:\s*(.+)$", path.read_text(), re.MULTILINE)
+    return m.group(1).strip() if m else ""
+
+
+def _synthesize_index_lines(dst):
+    """Hold the invariant that every memory file has a MEMORY.md index line:
+    append one (title from frontmatter name:, summary from description:) for
+    any file the index does not reference — an unindexed memory is invisible
+    to every session."""
+    index = dst / "MEMORY.md"
+    lines = _read_lines(index) or ["# Memory"]
+    body = "\n".join(lines)
+    added = False
+    for f in sorted(dst.glob("*.md")):
+        if f.name == "MEMORY.md" or f"]({f.name})" in body:
+            continue
+        title = _frontmatter_field(f, "name") or f.stem
+        desc = _frontmatter_field(f, "description")
+        lines.append(f"- [{title}]({f.name}) — {desc}" if desc else f"- [{title}]({f.name})")
+        added = True
+    if added:
+        index.write_text("\n".join(lines) + "\n")
+
+
+def merge_memory(src, dst):
+    """Fallback memory sync for setups without the ADR-0004 host binds
+    (e.g. compose run directly, not via dev/devcontainer). With a bind
+    present src and dst are the same host directory, so this no-ops. The
+    merge never clobbers: MEMORY.md is unioned by link target with the
+    CONTAINER line winning (a plain copy destroyed container-side index
+    entries on every entry, orphaning the memories they pointed at), and
+    other files copy only when the destination is missing or older."""
+    if not src.is_dir():
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    if os.path.samefile(src, dst):
+        return
+    for f in src.iterdir():
+        if not f.is_file():
+            continue
+        target = dst / f.name
+        if f.name == "MEMORY.md":
+            union = _index_union(_read_lines(target), _read_lines(f))
+            target.write_text("\n".join(union) + "\n")
+        elif not target.exists() or f.stat().st_mtime > target.stat().st_mtime:
+            shutil.copy2(f, target)
+    _synthesize_index_lines(dst)
+
+
 def copy_global_memory():
-    src = HOST / "memory"
-    if src.is_dir():
-        shutil.copytree(src, HOME / "memory", dirs_exist_ok=True)
+    merge_memory(HOST / "memory", HOME / "memory")
 
 
 def copy_user_prefs(workspace):
@@ -430,10 +502,7 @@ def setup_project_settings(host_project_key, container_project_key):
         with open(container_project_dir / name, "w") as f:
             json.dump(container_proj, f, indent=2)
 
-    host_memory = host_project_dir / "memory"
-    container_memory = container_project_dir / "memory"
-    if host_memory.is_dir():
-        shutil.copytree(host_memory, container_memory, dirs_exist_ok=True)
+    merge_memory(host_project_dir / "memory", container_project_dir / "memory")
 
 
 def copy_sessions(workspace, host_project_key, container_project_key):
