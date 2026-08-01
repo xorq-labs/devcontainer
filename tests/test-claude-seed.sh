@@ -119,16 +119,56 @@ assert_true "main setup writes the .active-profile record" is_regular_file "$roo
 assert_eq "record pins the resolved profile, not the host marker" \
     "work" "$(cat "$root/home/.active-profile")"
 
-# no DEV_CLAUDE_PROFILE: the host marker is resolved and pinned; a stale record
-# must not feed the resolution that rewrites it (env > marker, record excluded).
+# no DEV_CLAUDE_PROFILE, no record yet: the host marker is resolved and pinned.
+root="$(make_sandbox)"
+printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-active"}}' >"$root/host/credentials/prod.json"
+printf 'prod' >"$root/host/credentials/active-profile"
+setup_main "$root" "" >/dev/null
+
+assert_eq "main setup pins the host marker on a container with no record" \
+    "prod" "$(cat "$root/home/.active-profile")"
+
+# THE DURABILITY GUARD. This path runs on every up/exec/claude, so it must
+# HONOR an existing pin: a profile pinned by an explicit re-seed cannot be
+# undone by the next plain `exec` just because the host marker moved on.
+root="$(make_sandbox)"
+printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-work"}}' >"$root/host/credentials/work.json"
+printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-personal"}}' >"$root/host/credentials/personal.json"
+printf 'personal' >"$root/host/credentials/active-profile"
+printf 'work\n' >"$root/home/.active-profile"
+setup_main "$root" "" >/dev/null
+
+assert_eq "a plain entry honors the pinned profile over the host marker" \
+    "work" "$(cat "$root/home/.active-profile")"
+assert_contains "and re-seeds that profile's credential, not the marker's" \
+    "sk-ant-work" "$(cat "$root/home/.credentials.json")"
+
+# ...but an explicit DEV_CLAUDE_PROFILE still outranks the pin and re-pins.
+setup_main "$root" "personal" >/dev/null
+
+assert_eq "DEV_CLAUDE_PROFILE overrides the pin and re-pins" \
+    "personal" "$(cat "$root/home/.active-profile")"
+
+# The deliberate re-point path keeps excluding the record, so a host profile
+# switch + fix-credentials takes effect (a stale pin must not re-seed itself).
 root="$(make_sandbox)"
 printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-active"}}' >"$root/host/credentials/prod.json"
 printf 'prod' >"$root/host/credentials/active-profile"
 printf 'stale\n' >"$root/home/.active-profile"
+seed "$root" "" >/dev/null
+
+assert_eq "seed-credentials re-points from the host marker, ignoring the record" \
+    "prod" "$(cat "$root/home/.active-profile")"
+
+# An empty resolution must not silently strip an existing pin on a plain entry:
+# clearing the record would drop a token-profile container to ambient auth.
+root="$(make_sandbox)"
+printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-work"}}' >"$root/host/credentials/work.json"
+printf 'work\n' >"$root/home/.active-profile"
 setup_main "$root" "" >/dev/null
 
-assert_eq "main setup re-pins from the host marker, not the stale record" \
-    "prod" "$(cat "$root/home/.active-profile")"
+assert_eq "a plain entry with no host marker keeps the existing pin" \
+    "work" "$(cat "$root/home/.active-profile")"
 
 # recording happens even when seeding finds no credential material — same
 # semantics as the seed-credentials subcommand (pin BEFORE seeding).

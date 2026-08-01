@@ -57,8 +57,8 @@ source and applied at every claude entry point.
   `~/.claude/.active-profile`, else the host `active-profile` marker — the
   record exists because launches never inherit the per-exec
   `DEV_CLAUDE_PROFILE`, and without it a launch could inject a different
-  profile's token than seeding installed; seeding re-resolves fresh, env >
-  marker, and re-pins). The store copy
+  profile's token than seeding installed; both seeding paths write the record,
+  and they differ in whether they READ it — see the amendment below). The store copy
   is read **live, never seeded** — a host-side delete takes effect on the next
   launch (this matters: a setup-token has **no CLI revoke**, so deletion is the
   only revoke; see Consequences).
@@ -169,6 +169,38 @@ one-line carve-out in ADR-0003), not to loosen the rule.
 - The ADR-0001 OAuth path is untouched and remains the default; this ADR adds a
   credential type, it does not retire one. Remote Control / connectors, which a
   setup-token cannot establish, stay on the OAuth material.
+
+## Amendment (2026-08-01): which seeding path reads the record
+
+**Status: Accepted.** Clarifies §Resolver; no behavior recorded elsewhere changes.
+
+The original text — "seeding re-resolves fresh, env > marker, and re-pins" —
+was written when only `fix-credentials` seeded-and-pinned, so "seeding" meant
+the deliberate re-seed. It is ambiguous now that the per-entry setup path also
+records, and the two paths cannot share one rule: the per-entry path runs on
+**every** `up`/`exec`/`claude` (via `ensure_up`), where launches forward an
+empty `DEV_CLAUDE_PROFILE`.
+
+The record is therefore **written by both paths but read by only one**:
+
+- **Per-entry setup** (`setup-claude` with no subcommand) resolves with the
+  record tier ACTIVE. A pin survives ordinary commands; `DEV_CLAUDE_PROFILE`
+  still outranks it and re-pins.
+- **Explicit re-seed** (`seed-credentials`, i.e. `devcontainer fix-credentials`)
+  resolves with the record tier EXCLUDED — the record must not feed the
+  resolution that rewrites it, or a stale pin would re-seed itself forever and
+  a host profile switch would never take.
+
+Rejected: excluding the record on both paths (a plain `exec` would silently
+re-point the container to the host marker, undoing an explicit pin and, for a
+token-only profile whose marker is absent, clearing the pin and dropping the
+launch to ambient auth — the API-billed fallthrough §Context warns about);
+honoring it on both (a container could never be re-pointed without deleting
+the record by hand, making `fix-credentials --profile` inert).
+
+Guarded by `tests/test-claude-seed.sh` (durability of a pin across a plain
+entry, env override, and empty-resolution retention) and
+`tests/test-claude-token.sh` (re-seed re-points from the marker).
 
 ## Options considered
 
