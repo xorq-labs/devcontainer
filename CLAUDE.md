@@ -111,6 +111,12 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   binaries and rewrites everything in one run, or writes nothing. The arm64
   sha in particular had no guard at all, and a half-bump breaks the arm64
   container build at `sha256sum -c` while the tree stays green.
+  Its two read-only flags are not interchangeable: `--check` is a report
+  (current vs latest, no download, always exits 0 — the shape `bump-nix` and
+  `bump-claude-code` use), `--verify` is the gate (fetches the committed
+  version's release, checks both per-arch checksums, non-zero on a mismatch
+  OR on a failed fetch). Use `--verify` when you want an answer you can gate
+  on; `--check` never fails.
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and
@@ -216,5 +222,5 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - Adding a `devcontainer` subcommand: add the dispatch arm in `dev/devcontainer`, add a row to `lib/command-table.tsv`. That is the whole workflow — the usage text, the bash/zsh/fish word lists, their descriptions, and the per-command argument wiring are all generated from the row. Never hand-edit a command list in `dev/devcontainer-completions` or the Commands block of `show_usage`.
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
-- Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift. hadolint additionally carries two per-arch checksums in `install-system.sh` that no test can verify — bump it with `devcontainer bump-hadolint` rather than by hand.
+- Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift. hadolint additionally carries two per-arch checksums in `install-system.sh` that no test can verify — bump it with `devcontainer bump-hadolint` rather than by hand, and use `devcontainer bump-hadolint --verify` to confirm the committed checksums really are the release's.
 - Any convention that spans two files gets a drift-guard test when it is introduced (existing examples: `tests/test-claude-code-pin-sync.sh`, `tests/test-lint-config-sync.sh`, `tests/test-classic-args-sync.sh`, `tests/test-completions-sync.sh`, `tests/test-dockerignore-lib-allowlist.sh`). A convention only its author knows about will drift.

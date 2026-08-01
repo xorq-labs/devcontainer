@@ -6,7 +6,23 @@ set -euo pipefail
 # Usage:
 #   devcontainer bump-hadolint            # bump to the latest hadolint release
 #   devcontainer bump-hadolint 2.14.0     # pin an explicit version
-#   devcontainer bump-hadolint --check    # report drift, don't edit (exit 1 on drift)
+#   devcontainer bump-hadolint --check    # report current vs latest, don't edit
+#   devcontainer bump-hadolint --verify   # validate the committed checksums
+#
+# --check and --verify answer different questions and are mutually exclusive:
+#
+#   --check  is a REPORT, exactly like bump-nix --check and bump-claude-code
+#            --check: it prints current vs latest (or vs an explicitly
+#            requested version) and ALWAYS exits 0. "A newer hadolint exists"
+#            is news, not a failure. It performs no download.
+#
+#   --verify is a GATE: it fetches the release for the CURRENTLY COMMITTED
+#            version (or an explicit one) and checks BOTH committed per-arch
+#            checksums against it, exiting non-zero on any mismatch — and also
+#            non-zero if the release could not be fetched, because a gate that
+#            passes when it could not check is worse than no gate. This is the
+#            check no test can perform (see below), and the only one that
+#            catches a stale arm64 sha on an amd64 machine.
 #
 # The pin is a coupled TRIPLE in projects/devcontainer/install-system.sh —
 # HADOLINT_VERSION, HADOLINT_SHA256_AMD64 and HADOLINT_SHA256_ARM64 — plus the
@@ -33,10 +49,12 @@ install_sys="$base/projects/devcontainer/install-system.sh"
 precommit="$base/.pre-commit-config.yaml"
 
 check_only=false
+verify_only=false
 target=""
 for arg in "$@"; do
     case "$arg" in
         --check) check_only=true ;;
+        --verify) verify_only=true ;;
         -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
         *)
             if [ -n "$target" ]; then
@@ -47,6 +65,13 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# They disagree on what the default target is (latest vs committed) and on what
+# a non-zero exit means, so there is no coherent combined behavior to define.
+if $check_only && $verify_only; then
+    echo "error: --check and --verify are mutually exclusive — --check reports current vs latest, --verify validates the committed checksums against the release" >&2
+    exit 1
+fi
 
 [ -f "$install_sys" ] || { echo "error: install-system.sh not found at $install_sys" >&2; exit 1; }
 
@@ -102,6 +127,10 @@ except Exception:
 
 if [ -n "$target" ]; then
     new="$target"
+elif $verify_only; then
+    # --verify asks "are the committed checksums right for what is committed?"
+    # so its default target is the committed version, not the latest release.
+    new="$current"
 else
     new="$(latest_version)" || true
     if [ -z "$new" ]; then
@@ -119,6 +148,48 @@ new="${new#v}"
 if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
     echo "error: invalid version: $new" >&2
     exit 1
+fi
+
+# Two different questions about the hook rev. The rewrite path cares whether it
+# equals the TARGET (that is what it will be set to); the --check report cares
+# whether it equals the COMMITTED version, because that — and only that — is an
+# inconsistency in the tree rather than "everything is a release behind".
+pc_drift=false
+if $pc_present && [ "$pc_current" != "$new" ]; then pc_drift=true; fi
+pc_inconsistent=false
+if $pc_present && [ "$pc_current" != "$current" ]; then pc_inconsistent=true; fi
+
+# --- --check: report the current/target versions, never edit, always exit 0 --
+#
+# Byte-for-byte the shape of `bump-nix --check` and `bump-claude-code --check`,
+# down to the %-11s label column: this is a family of three commands and they
+# must read alike. Like them it exits 0 whether or not the versions match, and
+# like bump-claude-code it surfaces the second pinned copy of the version (here
+# the pre-commit hook rev) only when that copy needs repair.
+#
+# It deliberately does NOT download anything, and says nothing about the
+# checksums — that is --verify's job. A report that needed the release artifact
+# could not run offline, and "a newer hadolint is out" is not something a
+# report should fail on. Keep the emitted lines identical in shape to the
+# siblings': the three commands are read side by side.
+if $check_only; then
+    printf '%-11s%s\n' "current:" "$current"
+    if [ -n "$target" ]; then
+        printf '%-11s%s\n' "requested:" "$new"
+    else
+        printf '%-11s%s\n' "latest:" "$new"
+    fi
+    if $pc_inconsistent; then
+        printf '%-11s%s\n' "hook rev:" "$pc_current"
+    fi
+    if [ "$current" = "$new" ] && ! $pc_inconsistent; then
+        echo "already up to date"
+    elif [ "$current" = "$new" ]; then
+        echo "run 'devcontainer bump-hadolint' to repair the pre-commit hook rev"
+    else
+        echo "run 'devcontainer bump-hadolint' to update projects/devcontainer/install-system.sh"
+    fi
+    exit 0
 fi
 
 # --- resolve both checksums (before anything is written) ---------------------
@@ -145,46 +216,50 @@ fetch_sha() {
     sha256sum "$dest" | cut -d' ' -f1
 }
 
-new_amd64="$(fetch_sha x86_64)"
-new_arm64="$(fetch_sha arm64)"
+# A failed fetch must not fall through to a comparison against an empty string
+# — under --verify that is the "gate passed because it could not check" case.
+if ! new_amd64="$(fetch_sha x86_64)" || ! new_arm64="$(fetch_sha arm64)"; then
+    if $verify_only; then
+        echo "error: cannot verify the hadolint v${new} checksums — the release could not be fetched (treating an unverifiable pin as a failure)" >&2
+    fi
+    exit 1
+fi
 
 version_drift=false
 [ "$current" = "$new" ] || version_drift=true
 sha_drift=false
 { [ "$cur_amd64" = "$new_amd64" ] && [ "$cur_arm64" = "$new_arm64" ]; } || sha_drift=true
-pc_drift=false
-if $pc_present && [ "$pc_current" != "$new" ]; then pc_drift=true; fi
 
-# --- --check: report, never edit, exit non-zero on any drift -----------------
-
-if $check_only; then
-    printf '%-14s%s\n' "current:" "$current"
-    if [ -n "$target" ]; then
-        printf '%-14s%s\n' "requested:" "$new"
-    else
-        printf '%-14s%s\n' "latest:" "$new"
-    fi
-    if $pc_present; then
-        printf '%-14s%s\n' "pre-commit:" "$pc_current"
-    fi
-    if ! $version_drift && ! $sha_drift && ! $pc_drift; then
-        echo "already up to date (both arch checksums verified)"
-        exit 0
+# --- --verify: gate the committed checksums against the real release --------
+#
+# The one check no test in this repo can perform, and the one that catches the
+# failure this tool exists for: a committed arm64 sha that is not the sha of
+# the arm64 binary. Never edits; exits non-zero on any mismatch.
+if $verify_only; then
+    echo "verifying the committed hadolint checksums against release v${new}"
+    verify_failed=false
+    report_arch() {
+        local label="$1" committed="$2" release="$3"
+        if [ "$committed" = "$release" ]; then
+            printf '  %-6s OK        %s\n' "$label" "$committed"
+        else
+            printf '  %-6s MISMATCH  committed %s\n' "$label" "$committed"
+            printf '  %-6s           release  %s\n' "" "$release"
+            verify_failed=true
+        fi
+    }
+    report_arch "amd64" "$cur_amd64" "$new_amd64"
+    report_arch "arm64" "$cur_arm64" "$new_arm64"
+    if $verify_failed; then
+        echo "error: committed hadolint checksums do not match release v${new} — run 'devcontainer bump-hadolint ${new}' to repair them" >&2
+        exit 1
     fi
     if $version_drift; then
-        echo "drift: HADOLINT_VERSION is $current, target is $new"
+        echo "both committed checksums match release v${new} (note: HADOLINT_VERSION is $current)"
+    else
+        echo "both committed checksums match release v${new}"
     fi
-    if [ "$cur_amd64" != "$new_amd64" ]; then
-        echo "drift: HADOLINT_SHA256_AMD64 is $cur_amd64, v$new is $new_amd64"
-    fi
-    if [ "$cur_arm64" != "$new_arm64" ]; then
-        echo "drift: HADOLINT_SHA256_ARM64 is $cur_arm64, v$new is $new_arm64"
-    fi
-    if $pc_drift; then
-        echo "drift: .pre-commit-config.yaml hadolint rev is v$pc_current, target is v$new"
-    fi
-    echo "run 'devcontainer bump-hadolint' to update the pins"
-    exit 1
+    exit 0
 fi
 
 if ! $version_drift && ! $sha_drift && ! $pc_drift; then

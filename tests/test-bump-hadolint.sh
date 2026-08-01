@@ -355,59 +355,136 @@ assert_eq "exit 0" "0" "$rc"
 assert_contains "reports already pinned" "already pinned to 2.5.0" "$out"
 assert_eq "install-system.sh unchanged" "$before" "$(cat "$INSTALL_SYS")"
 
-# ---------- test: --check reports drift and exits non-zero ----------
-echo "--- bump-hadolint (--check drift) ---"
+# ---------- test: --check is a REPORT — always exit 0, sibling shape ----------
+# `--check` matches bump-nix/bump-claude-code exactly: current, latest-or-
+# requested, and a next-step line, at the %-11s label column, exiting 0 whether
+# or not anything drifted. "A newer hadolint exists" is news, not a failure.
+echo "--- bump-hadolint (--check reports drift, exit 0) ---"
 reset_files
 run_bump --check
-assert_eq "exit nonzero on drift" "1" "$rc"
-assert_contains "shows current" "$(printf '%-14s%s' 'current:' '1.0.0')" "$out"
-assert_contains "shows latest" "$(printf '%-14s%s' 'latest:' '9.9.9')" "$out"
-assert_contains "names the version drift" "drift: HADOLINT_VERSION" "$out"
-assert_contains "names the amd64 sha drift" "drift: HADOLINT_SHA256_AMD64" "$out"
-assert_contains "names the arm64 sha drift" "drift: HADOLINT_SHA256_ARM64" "$out"
+assert_eq "exit 0 even with drift" "0" "$rc"
+assert_contains "shows current" "$(printf '%-11s%s' 'current:' '1.0.0')" "$out"
+assert_contains "shows latest" "$(printf '%-11s%s' 'latest:' '9.9.9')" "$out"
+assert_contains "points at the fix" \
+    "run 'devcontainer bump-hadolint' to update projects/devcontainer/install-system.sh" "$out"
 assert_eq "version not edited" "1.0.0" "$(pin_version)"
 assert_eq "amd64 sha not edited" "$OLD_AMD64" "$(pin_amd64)"
 assert_eq "arm64 sha not edited" "$OLD_ARM64" "$(pin_arm64)"
 assert_eq "pre-commit rev not edited" "1.0.0" "$(pc_rev)"
 
-# ---------- test: --check catches an arm64-only drift ----------
-# The case with no guard anywhere before this tool existed.
-echo "--- bump-hadolint (--check arm64-only drift) ---"
-write_install_sys "9.9.9" "$(expected_sha 9.9.9 x86_64)" "$OLD_ARM64"
+# ---------- test: --check does not look at (or fetch) the checksums ----------
+# Its whole contract is version reporting. Proven twice: stale shas do not stop
+# it saying "already up to date", and it still exits 0 with every download
+# broken — i.e. it never reached the network at all.
+echo "--- bump-hadolint (--check ignores checksums) ---"
+write_install_sys "9.9.9" "$OLD_AMD64" "$OLD_ARM64"
 write_precommit "9.9.9"
 run_bump --check
-assert_eq "exit nonzero" "1" "$rc"
-assert_contains "names the arm64 sha drift" "drift: HADOLINT_SHA256_ARM64" "$out"
-assert_not_contains "does not claim version drift" "drift: HADOLINT_VERSION" "$out"
-assert_eq "arm64 sha not edited" "$OLD_ARM64" "$(pin_arm64)"
+assert_eq "exit 0" "0" "$rc"
+assert_contains "notes up to date despite stale shas" "already up to date" "$out"
+# Sibling shape exactly: two label lines plus one status line, nothing about
+# checksums. bump-nix and bump-claude-code print the same three.
+assert_eq "emits the siblings' three lines and no more" "3" "$(wc -l <<<"$out")"
+assert_not_contains "says nothing about checksums" "sha" "$out"
+run_with bin-badnet --check
+assert_eq "exit 0 with every download broken" "0" "$rc"
+assert_not_contains "never attempted a download" "could not download" "$out"
 
-# ---------- test: --check catches a pre-commit rev drift ----------
+# ---------- test: --check surfaces a pre-commit rev drift, still exit 0 ------
+# The hook-rev line appears only for a real inconsistency (hook rev != the
+# COMMITTED version), mirroring how bump-claude-code surfaces its Nix pin. A
+# tree that is merely a release behind is not inconsistent, so the line must
+# stay out of the way there — otherwise it just repeats `current:`.
 echo "--- bump-hadolint (--check pre-commit drift) ---"
 write_install_sys "9.9.9" "$(expected_sha 9.9.9 x86_64)" "$(expected_sha 9.9.9 arm64)"
 write_precommit "1.0.0"
 run_bump --check
-assert_eq "exit nonzero" "1" "$rc"
-assert_contains "names the pre-commit drift" "drift: .pre-commit-config.yaml hadolint rev" "$out"
+assert_eq "exit 0" "0" "$rc"
+assert_contains "shows the inconsistent hook rev" "$(printf '%-11s%s' 'hook rev:' '1.0.0')" "$out"
+assert_contains "points at the repair" "to repair the pre-commit hook rev" "$out"
 assert_eq "pre-commit rev not edited" "1.0.0" "$(pc_rev)"
 
-# ---------- test: --check is quiet and zero when fully in sync ----------
-echo "--- bump-hadolint (--check in sync) ---"
-write_install_sys "9.9.9" "$(expected_sha 9.9.9 x86_64)" "$(expected_sha 9.9.9 arm64)"
-write_precommit "9.9.9"
-before="$(cat "$INSTALL_SYS")"
+# Consistent tree, just behind the latest release: no hook-rev line.
+write_install_sys "1.0.0" "$OLD_AMD64" "$OLD_ARM64"
+write_precommit "1.0.0"
 run_bump --check
 assert_eq "exit 0" "0" "$rc"
-assert_contains "notes up to date" "already up to date" "$out"
-assert_not_contains "reports no drift" "drift:" "$out"
-assert_eq "install-system.sh unchanged" "$before" "$(cat "$INSTALL_SYS")"
+assert_not_contains "no hook-rev line when merely behind latest" "hook rev:" "$out"
+assert_eq "still the siblings' three lines" "3" "$(wc -l <<<"$out")"
 
 # ---------- test: --check with explicit target labels it 'requested' ----------
 echo "--- bump-hadolint (--check explicit) ---"
 reset_files
 run_bump "3.0.0" --check
-assert_eq "exit nonzero on drift" "1" "$rc"
-assert_contains "labels the target as requested" "$(printf '%-14s%s' 'requested:' '3.0.0')" "$out"
+assert_eq "exit 0" "0" "$rc"
+assert_contains "labels the target as requested" "$(printf '%-11s%s' 'requested:' '3.0.0')" "$out"
 assert_eq "version not edited" "1.0.0" "$(pin_version)"
+
+# ---------- test: --verify is the GATE on the committed checksums ------------
+# The check no hermetic test can make, and the only thing that catches a stale
+# arm64 sha on an amd64 machine.
+echo "--- bump-hadolint (--verify passes when the committed shas match) ---"
+write_install_sys "2.5.0" "$(expected_sha 2.5.0 x86_64)" "$(expected_sha 2.5.0 arm64)"
+write_precommit "2.5.0"
+before="$(cat "$INSTALL_SYS")"
+run_bump --verify
+assert_eq "exit 0" "0" "$rc"
+assert_contains "confirms both checksums" "both committed checksums match release v2.5.0" "$out"
+assert_contains "reports amd64 OK" "amd64  OK" "$out"
+assert_contains "reports arm64 OK" "arm64  OK" "$out"
+assert_eq "install-system.sh unchanged" "$before" "$(cat "$INSTALL_SYS")"
+# The default target is the COMMITTED version, not the stub's "latest" 9.9.9 —
+# --verify asks whether what is committed is internally correct.
+assert_not_contains "did not target the latest release" "9.9.9" "$out"
+
+echo "--- bump-hadolint (--verify fails on a corrupted amd64 sha) ---"
+write_install_sys "2.5.0" "$OLD_AMD64" "$(expected_sha 2.5.0 arm64)"
+before="$(cat "$INSTALL_SYS")"
+run_bump --verify
+assert_eq "exit nonzero" "1" "$rc"
+assert_contains "names the amd64 mismatch" "amd64  MISMATCH" "$out"
+assert_contains "reports arm64 as OK" "arm64  OK" "$out"
+assert_contains "explains the failure" "do not match release v2.5.0" "$out"
+assert_eq "install-system.sh unchanged" "$before" "$(cat "$INSTALL_SYS")"
+
+echo "--- bump-hadolint (--verify fails on a corrupted arm64 sha) ---"
+write_install_sys "2.5.0" "$(expected_sha 2.5.0 x86_64)" "$OLD_ARM64"
+before="$(cat "$INSTALL_SYS")"
+run_bump --verify
+assert_eq "exit nonzero" "1" "$rc"
+assert_contains "names the arm64 mismatch" "arm64  MISMATCH" "$out"
+assert_contains "reports amd64 as OK" "amd64  OK" "$out"
+assert_contains "shows the release value" "$(expected_sha 2.5.0 arm64)" "$out"
+assert_eq "install-system.sh unchanged" "$before" "$(cat "$INSTALL_SYS")"
+
+echo "--- bump-hadolint (--verify fails when the release cannot be fetched) ---"
+# A gate that passes because it could not check is worse than no gate.
+write_install_sys "2.5.0" "$(expected_sha 2.5.0 x86_64)" "$(expected_sha 2.5.0 arm64)"
+run_with bin-badnet --verify
+assert_eq "exit nonzero" "1" "$rc"
+assert_contains "says it could not verify" "cannot verify" "$out"
+assert_not_contains "never claims a match" "both committed checksums match" "$out"
+run_with bin-empty --verify
+assert_eq "exit nonzero on an empty artifact" "1" "$rc"
+assert_not_contains "never claims a match on an empty artifact" "both committed checksums match" "$out"
+
+echo "--- bump-hadolint (--verify against an explicit version) ---"
+write_install_sys "2.5.0" "$(expected_sha 2.5.0 x86_64)" "$(expected_sha 2.5.0 arm64)"
+run_bump "2.5.0" --verify
+assert_eq "exit 0 for the matching version" "0" "$rc"
+# The committed shas are 2.5.0's, so verifying them against 3.0.0 must fail.
+run_bump "3.0.0" --verify
+assert_eq "exit nonzero for a different version" "1" "$rc"
+assert_contains "names the release it checked against" "release v3.0.0" "$out"
+
+# ---------- test: --check and --verify are mutually exclusive ----------
+echo "--- bump-hadolint (--check --verify) ---"
+reset_files
+run_bump --check --verify
+assert_eq "exit nonzero" "1" "$rc"
+assert_contains "explains the exclusion" "mutually exclusive" "$out"
+assert_eq "version not edited" "1.0.0" "$(pin_version)"
+
 
 # ---------- test: invalid explicit version rejected ----------
 echo "--- bump-hadolint (invalid version) ---"
