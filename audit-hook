@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""PreToolUse audit hook — appends one JSONL line per tool invocation."""
+"""Claude Code PreToolUse audit hook.
+
+setup-claude.py installs this into the container's Claude settings as a
+PreToolUse hook with an empty matcher (every tool), invoked as
+`python3 /usr/local/bin/audit-hook <log>`. Each tool invocation appends one
+JSON line ({ts, tool, input}) to .claude/container-audit/audit.jsonl in the
+workspace. Review the log with `devcontainer audit`, which runs
+audit-report.py.
+
+Failures never block the tool call: any exception is appended to the
+sibling .errors file and the hook exits 0.
+"""
 
 import json
 import sys

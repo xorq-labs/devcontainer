@@ -1,4 +1,26 @@
 #!/usr/bin/env bash
+# Propagate files from the main checkout into a new worktree, per the project
+# overlay's worktree-symlinks.txt / worktree-copies.txt (plus per-developer
+# extras in the main checkout's .envrcs/.worktree-symlinks).
+#
+# Everything created is recorded in a manifest, .envrcs/.worktree-manifest,
+# one "<action>\t<path>" line per entry (action = copy|symlink), which
+# dev/cleanup-worktree replays to undo the setup. cleanup-worktree also still
+# parses a LEGACY bare-path format (a line with no tab is treated as a path
+# with an empty action) — so the manifest format cannot change without
+# updating that reader in lockstep.
+#
+# Lifecycle: the manifest is truncated at the start of every run, then
+# appended to as entries are (re)recorded. Callers that add their own entries
+# must therefore re-append after this script returns — dev/devcontainer does
+# exactly that for its .envrcs/.resolved-env entry in ensure_up().
+#
+# Two paths are handled outside the overlay lists:
+#   .gitignore — always a copy: git opens it with O_NOFOLLOW, so a symlink
+#                would ELOOP (falls back to .gitignore.template when the main
+#                checkout has no live, per-checkout .gitignore).
+#   .claude    — always a symlink, so audit logs and session captures
+#                aggregate in the main checkout.
 set -euo pipefail
 
 _base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -53,9 +75,19 @@ while IFS= read -r pattern; do
 done < <(read_list "$_project_dir/worktree-copies.txt")
 
 # .gitignore: git opens it with O_NOFOLLOW (a symlink would ELOOP) — must be a copy.
+# The live .gitignore is untracked (per-checkout); .gitignore.template is its
+# tracked source, so fall back to the template when the main checkout has no
+# live file. Either way the worktree gets a plain `.gitignore` copy, recorded
+# in the manifest identically.
+_gitignore_src=""
 if [ -e "$main/.gitignore" ]; then
+    _gitignore_src="$main/.gitignore"
+elif [ -e "$main/.gitignore.template" ]; then
+    _gitignore_src="$main/.gitignore.template"
+fi
+if [ -n "$_gitignore_src" ]; then
     if ! is_present "$here/.gitignore"; then
-        cp -v "$main/.gitignore" "$here/.gitignore"
+        cp -v "$_gitignore_src" "$here/.gitignore"
         changes=$((changes + 1))
     fi
     printf 'copy\t%s\n' ".gitignore" >> "$manifest"

@@ -58,6 +58,9 @@ devcontainer reset
 # reset + remove host-side artifacts (keeps the shared project image)
 devcontainer clean
 
+# remove the project's shared caches (nix store, package caches) — affects ALL worktrees
+devcontainer clean-caches
+
 # remove the project's shared images — affects ALL worktrees
 devcontainer clean-images
 
@@ -79,6 +82,7 @@ devcontainer logs
 - The container rebuilds automatically when the `Dockerfile` or compose config changes.
 - `down` prompts before stopping a running container; `reset` prompts before destroying volumes.
 - `exec` with no arguments opens a bash shell and requires an interactive TTY. With an explicit command (e.g. `exec uv run pytest -m core`), no TTY is needed.
+- This is the day-to-day subset — `devcontainer help` lists everything, including `refresh-ssh`/`refresh-gpg`/`refresh-x11` (re-forward the SSH/GPG agent or X11 bridge mid-session; all three run automatically on `up`/`exec`/`claude`), `fix-network` and `unlock` (recovery after an ungraceful host shutdown), `ps`, and the credential and audit subcommands covered below.
 
 ## Worktrees
 
@@ -149,8 +153,14 @@ Resolved values:
   PROJECT_NAME=xorq-dasher
   MODEL_VERSION=<unset>
   DANGEROUSLY_SKIP_PERMISSIONS=<unset>
+  CLAUDE_VERIFY=<unset>
   CONTAINER_NAME=xorq-dasher-dev-xorq-dasher
+  IMAGE=xorq-dasher-devimg:0f8d5db23e0128b228d7ad548c47b3a86161d71dd2fd4d643ad8e0b9fa18f98d
+  STALENESS=1f6f727d11713ed45b0377d9972def2022394e2a823d57bdde579be80f1b9284
+  BASE=nix-base (default; DEV_NIX_BASE=0 for the classic Dockerfile)
 ```
+
+`IMAGE` is the fingerprint tag the workspace would use; `STALENESS` hashes build *and* runtime inputs (host mounts) and drives the recreate prompt. A `Sources:` block listing the `project.env` path is appended when one exists.
 
 If the overlay name doesn't match the checkout directory name (e.g. you cloned `dasher` as `xorq-dasher`), set `DEV_PROJECT_NAME` before invoking: `DEV_PROJECT_NAME=dasher devcontainer resolve`.
 
@@ -206,11 +216,11 @@ From your project directory, create a project overlay with `devcontainer init --
     With `external: true`, add `uv-cache` to `external-volumes.txt` so the volume is pre-created as `${DEV_PROJECT_NAME}-uv-cache`.
 4. **`worktree-symlinks.txt`** / **`worktree-copies.txt`** — what `setup-worktree` propagates from the main worktree.
 5. **`devcontainer.json`** — only used when attaching VS Code to an already-running container (started via `dev/devcontainer up`). Edit `forwardPorts` and `customizations.vscode.extensions` for your project. The `initializeCommand` tripwire blocks VS Code's "Reopen in Container" flow, which is unsupported (see below). Lives alongside the overlay.
-6. **`Dockerfile`** (classic base — seed overlays and `DEV_NIX_BASE=0`) — exposes build args you can override from `compose.override.yml` rather than editing the Dockerfile in place: `BASE_IMAGE` (default `mcr.microsoft.com/devcontainers/python:3.12-bookworm`) for non-Python base images; `EXTRA_PATH` (empty by default, set to the Python venv's bin dir in the project override) prepended to the container `PATH` so project tools resolve; and tool-version pins (`NODE_MAJOR`, `JUST_VERSION`, `SOPS_VERSION`, `CLAUDE_CODE_VERSION`) — bump these together with their companion checksum args where present (`NODESOURCE_SHA256`, `JUST_INSTALLER_SHA256`, `SOPS_SHA256`; Claude Code is installed via npm and has no checksum arg). `nix/base/Dockerfile.nix-default` honors the same `EXTRA_PATH` contract on the Nix-base path. To bump the Claude Code pin, run `devcontainer bump-claude-code` — it updates `CLAUDE_CODE_VERSION` *and* the Nix base's `pkgs/claude-code.nix` together (pass an explicit version to pin it, or `--check` to compare without editing); `tests/test-claude-code-pin-sync.sh` guards the two against drift. Likewise, run `devcontainer bump-nix` to bump the Nix pin in `lib/nix-seed.sh` — it rewrites the coupled `NIX_VERSION` and `NIX_INSTALLER_SHA256` defaults together (downloading the target installer to compute its checksum), and accepts an explicit version or `--check`.
+6. **`Dockerfile`** (classic base — seed overlays and `DEV_NIX_BASE=0`) — exposes build args you can override from `compose.override.yml` rather than editing the Dockerfile in place: `BASE_IMAGE` (default `mcr.microsoft.com/devcontainers/python:3.12-bookworm`) for non-Python base images; `EXTRA_PATH` (empty by default, set to the Python venv's bin dir in the project override) prepended to the container `PATH` so project tools resolve; and tool-version pins (`NODE_MAJOR`, `JUST_VERSION`, `SOPS_VERSION`, `CLAUDE_CODE_VERSION`) — bump these together with their companion checksum args where present (`NODESOURCE_SHA256`, `JUST_SHA256`, `SOPS_SHA256`; Claude Code is installed via npm and has no checksum arg). `nix/base/Dockerfile.nix-default` honors the same `EXTRA_PATH` contract on the Nix-base path. To bump the Claude Code pin, run `devcontainer bump-claude-code` — it updates `CLAUDE_CODE_VERSION` *and* the Nix base's `pkgs/claude-code.nix` together (pass an explicit version to pin it, or `--check` to compare without editing); `tests/test-claude-code-pin-sync.sh` guards the two against drift. Likewise, run `devcontainer bump-nix` to bump the Nix pin in `lib/nix-seed.sh` — it rewrites the coupled `NIX_VERSION` and `NIX_INSTALLER_SHA256` defaults together (downloading the target installer to compute its checksum), and accepts an explicit version or `--check`.
 
 All overlay files are optional. `install-system.sh` and `setup-env.sh` must exist (the Dockerfile `COPY`s them) but may be empty no-ops; `compose.override.yml` and the `*.txt` lists may be missing entirely — `read_list` treats a missing list as empty.
 
-Two worktree paths are hardcoded in `dev/setup-worktree` rather than living in `worktree-{symlinks,copies}.txt`: `.gitignore` is always copied (git opens it with `O_NOFOLLOW`, so a symlink would `ELOOP`), and `.claude` is always symlinked (audit logs and session captures are devcontainer infrastructure that must aggregate in the main checkout regardless of project).
+Two worktree paths are hardcoded in `dev/setup-worktree` rather than living in `worktree-{symlinks,copies}.txt`: `.gitignore` is always copied (git opens it with `O_NOFOLLOW`, so a symlink would `ELOOP`), and `.claude` is symlinked whenever the main checkout has one (audit logs and session captures are devcontainer infrastructure that must aggregate in the main checkout regardless of project).
 
 ## Tab completion
 
@@ -290,6 +300,7 @@ The two paths diverge in what they provide:
     ```
 
     Then restart the agent: `gpgconf --kill gpg-agent`. The values above give an 8-hour window. To re-warm without restarting the container: `devcontainer refresh-gpg`.
+- **X11 apps in the container can't open the display after an SSH reconnect** — the forward was set up at container entry and points at the old `DISPLAY`. Re-forward with `devcontainer refresh-x11` (X11 forwarding otherwise runs automatically on `up`/`exec`/`claude`).
 - **Container claude isn't authenticated, or shows the wrong account** — each container seeds its own private token from a host profile (`DEV_CLAUDE_PROFILE`, else the host's active profile). If that token expired, you re-logged-in on the host, or you want a different account, re-seed:
 
     ```bash
@@ -306,7 +317,7 @@ The two paths diverge in what they provide:
 
 The container's `~/.claude` is a per-worktree Docker volume, fully isolated from the host — including credentials: each container is seeded its own private token rather than sharing the host's credential file. On each entry (`up`, `exec`, `claude`, `claude-dangerously-skip-permissions`), `setup-claude` sets up the following:
 
-- **Credentials** — `setup-claude` seeds a private `~/.claude/.credentials.json` (a regular file on the isolated volume), copied once from the read-only host profile store at `~/.claude-host/credentials/<profile>.json` — profile chosen by `DEV_CLAUDE_PROFILE`, defaulting to the host's active profile — and patches the matching `oauthAccount` into `~/.claude.json` so `auth status` reports the right account. The container refreshes its own token independently: no shared credential inode, so concurrent sessions never race on OAuth refresh (the failure mode of the old shared-mount design). See [docs/adr/0001-devcontainer-private-token-isolation.md](docs/adr/0001-devcontainer-private-token-isolation.md). Re-seed with `devcontainer fix-credentials`; override with an explicit token via `devcontainer set-credentials`.
+- **Credentials** — `setup-claude` seeds a private `~/.claude/.credentials.json` (a regular file on the isolated volume), copied once from the read-only host profile store at `~/.claude-host/credentials/<profile>.json` — profile chosen by `DEV_CLAUDE_PROFILE`, defaulting to the host's active profile — and patches the matching `oauthAccount` into `~/.claude.json` so `auth status` reports the right account. The container refreshes its own token independently: no shared credential inode, so concurrent sessions never race on OAuth refresh (the failure mode of the old shared-mount design). See [docs/adr/0001-devcontainer-private-token-isolation.md](docs/adr/0001-devcontainer-private-token-isolation.md). Re-seed with `devcontainer fix-credentials`; override with an explicit token via `devcontainer set-credentials`. For mountless runtimes (CI, Codespaces), `devcontainer set-token` installs a raw setup-token bearer instead, injected as `CLAUDE_CODE_OAUTH_TOKEN` at launch, and `devcontainer token-doctor` warns when a higher-precedence auth source (`ANTHROPIC_API_KEY`, Bedrock/Vertex, `apiKeyHelper`) would silently outrank it — see [docs/adr/0002-devcontainer-setup-token-env-delivery.md](docs/adr/0002-devcontainer-setup-token-env-delivery.md).
 - **Global permissions and `CLAUDE.md`** — the `permissions` block from `~/.claude/settings.json`, plus `~/.claude/CLAUDE.md` (copied from the read-only host mount)
 - **Project permissions and memory** — the `permissions` block from `~/.claude/projects/<host-project-key>/settings.json` and `settings.local.json`, plus the project's `memory/` directory (copied)
 - **Session transcripts** — every `*.jsonl` under the host project key is mirrored into the container project key so `claude --resume` can continue a session started on the host. Resume locates a session by a cwd-derived project key (which differs between host and container) and each record carries an absolute cwd, so the host workspace prefix is rewritten to the container path as transcripts are copied. Host → container only; transcripts already present container-side are left untouched so continued work isn't clobbered.
@@ -337,6 +348,9 @@ devcontainer audit --clear
 ```
 
 Per-pid session status stubs are written to `.claude/container-sessions/` in the workspace, visible from the host.
+
+> [!NOTE]
+> In a worktree, `.claude` is a symlink to the main checkout's `.claude` (`dev/setup-worktree` links it whenever the main checkout has one, so audit logs and session captures aggregate in one place). The audit log and session stubs are therefore **shared across all worktrees** — `devcontainer audit` reports every worktree's activity, and `devcontainer clean` (or `audit --clear`) run from *any* worktree clears them for all.
 
 ### Session transcripts live on the host
 

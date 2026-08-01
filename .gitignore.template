@@ -12,6 +12,7 @@ __pycache__/
 .envrcs/.envrc.secrets
 .envrcs/.resolved-env
 .envrcs/.worktree-manifest
+.envrcs/.worktree-symlinks
 
 .claude
 .tools

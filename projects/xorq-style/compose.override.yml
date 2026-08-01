@@ -2,13 +2,19 @@ services:
   app:
     build:
       args:
+        # Prepended to PATH inside the container (project venv)
         EXTRA_PATH: "${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/.venv/bin"
     volumes:
+      # cached dependency volumes: uv download cache + project virtualenv
       - uv-cache:/home/vscode/.cache/uv
       - venv:${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/.venv
 
 volumes:
+  # external:true (shared across worktrees) suppresses the cross-worktree
+  # ownership warning; dev/devcontainer pre-creates it via
+  # ensure_external_volumes() reading external-volumes.txt.
   uv-cache:
     name: ${DEV_PROJECT_NAME:?DEV_PROJECT_NAME is required}-uv-cache
     external: true
+  # per-worktree: virtualenv paths are workspace-specific
   venv:
