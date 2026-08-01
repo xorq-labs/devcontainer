@@ -47,7 +47,8 @@ CONTAINER_PREFS = Path(os.environ.get("CLAUDE_CONTAINER_PREFS", "/home/vscode/.c
 RUN_SECRETS_TOKEN = Path(os.environ.get("CLAUDE_RUN_SECRETS_TOKEN", "/run/secrets/claude_code_oauth_token"))
 # The profile this container's seed resolved, pinned for launches — which never
 # inherit DEV_CLAUDE_PROFILE (it is forwarded per-exec, not baked into the
-# container env). Written by `seed-credentials`, read by resolve_profile.
+# container env). Written whenever seeding runs (main setup and the
+# `seed-credentials` subcommand), read by resolve_profile.
 ACTIVE_PROFILE_RECORD = HOME / ".active-profile"
 
 # Env sources that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's precedence order
@@ -120,13 +121,23 @@ def resolve_profile(use_record=True):
     the `devcontainer claude` wrapper resolve in. Without the record, a launch
     falls through to the HOST marker and can inject a different profile's
     token than seeding installed — silently authenticating as the wrong
-    identity (ADR-0002's "no silent routing" goal). Seeding writes the record
-    (see `seed-credentials` in main), so every later launch resolves the same
-    profile the seed used, and a re-seed with a different profile re-pins it.
+    identity (ADR-0002's "no silent routing" goal). Both seeding paths write
+    the record, so every later launch resolves the same profile the seed used.
 
-    Seeding itself resolves with use_record=False: the record must not feed
-    the resolution that writes it, or a stale pin would re-seed itself forever
-    and a host profile switch + fix-credentials would never take.
+    The two paths differ in whether they READ it, and that difference is the
+    whole design:
+
+    - The per-entry setup (main) resolves with use_record=True. It runs on
+      every up/exec/claude, so excluding the record there would let the host
+      marker re-point the container on any ordinary command, silently undoing
+      an explicit pin.
+    - The explicit re-seed (`seed-credentials`, i.e. `fix-credentials`)
+      resolves with use_record=False: the record must not feed the resolution
+      that rewrites it, or a stale pin would re-seed itself forever and a host
+      profile switch + fix-credentials would never take.
+
+    DEV_CLAUDE_PROFILE outranks both, so a deliberate override re-pins on
+    either path.
     """
     profile = os.environ.get("DEV_CLAUDE_PROFILE", "").strip()
     if profile:
@@ -541,7 +552,21 @@ def main():
     copy_global_instructions()
     copy_global_memory()
     copy_user_prefs(workspace)
-    seed_credentials(resolve_profile())
+    # This path runs on EVERY entry (up/exec/claude, via ensure_up), so it
+    # HONORS an existing pin: resolve_profile()'s record tier keeps a profile
+    # pinned by an explicit re-seed from being undone by the next plain
+    # `exec`. Without the pin a container that has only ever been `up`'d would
+    # fall through to the HOST marker at launch and could inject a different
+    # profile's token than seeding installed; without honoring it here, the
+    # host marker would silently re-point the container on every entry. env
+    # still wins, so `DEV_CLAUDE_PROFILE=x devcontainer exec` re-pins.
+    # Deliberate re-points go through `seed-credentials` (fix-credentials),
+    # which excludes the record — see resolve_profile and ADR-0002.
+    # Recorded before seeding so a seed that dies partway still leaves the pin
+    # matching the material it installed.
+    profile = resolve_profile()
+    record_active_profile(profile)
+    seed_credentials(profile)
     setup_settings(workspace, host_project_key)
     setup_project_settings(host_project_key, container_project_key)
     copy_sessions(workspace, host_project_key, container_project_key)
