@@ -69,8 +69,21 @@ RUN bash /tmp/install-system.sh && rm /tmp/install-system.sh
 COPY setup-claude.py /usr/local/bin/setup-claude
 COPY audit-hook /usr/local/bin/audit-hook
 COPY lib/git.sh /usr/local/lib/devcontainer/git.sh
+COPY lib/claude-code-token-env.sh /usr/local/lib/devcontainer/claude-code-token-env.sh
 COPY --from=project setup-env.sh /usr/local/bin/setup-env
 RUN chmod +x /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
+
+# Inject a claude-profile setup-token as CLAUDE_CODE_OAUTH_TOKEN for every claude
+# entry point (docs/adr/0002-devcontainer-setup-token-env-delivery.md). Unlike an
+# OAuth .credentials.json, a setup-token is read from the environment, so it must
+# be injected per launch rather than seeded to disk. Source the snippet from both
+# login shells (profile.d) and interactive non-login shells (/etc/bash.bashrc);
+# the `devcontainer claude` wrapper sources it explicitly since `dc exec` gets
+# neither. No-op when no token profile is active.
+RUN printf '. /usr/local/lib/devcontainer/claude-code-token-env.sh\n' \
+        > /etc/profile.d/claude-code-token.sh \
+    && printf '\n# claude-profile setup-token injection (ADR-0002)\n. /usr/local/lib/devcontainer/claude-code-token-env.sh\n' \
+        >> /etc/bash.bashrc
 
 # No baked .credentials.json symlink: setup-claude seeds a private per-container
 # token into the claude-home volume from the :ro host profile store

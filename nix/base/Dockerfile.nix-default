@@ -56,8 +56,18 @@ RUN bash /tmp/install-system.sh && rm /tmp/install-system.sh
 COPY setup-claude.py /usr/local/bin/setup-claude
 COPY audit-hook /usr/local/bin/audit-hook
 COPY lib/git.sh /usr/local/lib/devcontainer/git.sh
+COPY lib/claude-code-token-env.sh /usr/local/lib/devcontainer/claude-code-token-env.sh
 COPY --from=project setup-env.sh /usr/local/bin/setup-env
 RUN chmod +x /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
+
+# Same setup-token injection as the root Dockerfile (ADR-0002): the nix base is
+# the DEFAULT route for non-seed overlays, and the `devcontainer claude` wrapper
+# sources this snippet unconditionally — without it the wrapper's `.` aborts the
+# launch. No-op when no token profile is active.
+RUN printf '. /usr/local/lib/devcontainer/claude-code-token-env.sh\n' \
+        > /etc/profile.d/claude-code-token.sh \
+    && printf '\n# claude-profile setup-token injection (ADR-0002)\n. /usr/local/lib/devcontainer/claude-code-token-env.sh\n' \
+        >> /etc/bash.bashrc
 
 RUN HOST_USER="$(basename "$HOST_USER")" && \
     if [ -n "$HOST_USER" ] && [ "$HOST_USER" != "vscode" ]; then \

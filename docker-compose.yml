@@ -60,6 +60,25 @@ services:
       - SSH_AUTH_SOCK=/run/ssh-agent/agent.sock
     command: sleep infinity
 
+# ---- Mountless CI recipe: deliver a setup-token via a Compose file-based secret
+# (docs/adr/0002-devcontainer-setup-token-env-delivery.md) ----
+# With no `.claude-host` mount (CI/Codespaces), the sanctioned transport for a
+# CLAUDE_CODE_OAUTH_TOKEN is a file-based secret: mounted at
+# /run/secrets/claude_code_oauth_token (tmpfs, 0400, absent from `docker
+# inspect`) and sourced from a masked CI variable on the host. `setup-claude
+# token-path` reads it. Uncomment and merge into the service above:
+#
+#   services:
+#     app:
+#       secrets: [claude_code_oauth_token]
+#   secrets:
+#     claude_code_oauth_token:
+#       environment: CLAUDE_CODE_OAUTH_TOKEN   # masked CI var on the host
+#
+# Prefer this over baking the token into `environment:` — that leaks the raw
+# bearer into `docker inspect`. Simplest CI case needs neither: set
+# `-e CLAUDE_CODE_OAUTH_TOKEN` directly on the docker run/exec process.
+
 volumes:
   # per-worktree: session symlinks and project keys are workspace-specific
   claude-home:
