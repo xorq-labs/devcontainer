@@ -14,7 +14,12 @@ __pycache__/
 .envrcs/.worktree-manifest
 .envrcs/.worktree-symlinks
 
-.claude
+# Claude Code state is per-checkout/shared runtime data, but .claude/agents/
+# is tracked content (ADR-0003). `.claude/*` (not bare `.claude`: a pattern
+# matching the directory itself blocks every re-inclusion inside it) ignores
+# the state; the negation lets tracked agent definitions back in.
+.claude/*
+!.claude/agents/
 .tools
 
 # nix build output symlink (nix/base: `nix build .#defaultBase`)

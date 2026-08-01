@@ -1067,8 +1067,24 @@ case "${1:-up}" in
             | grep -E "^${DEV_CONTAINER_NAME}(-app)?:" \
             | xargs -r docker rmi 2>/dev/null || true
         rm -f "/tmp/devcontainer-${DEV_CONTAINER_NAME}.file-hashes"
-        rm -rf "$DEV_WORKSPACE/.claude/container-audit"
-        rm -rf "$DEV_WORKSPACE/.claude/container-sessions"
+        # Audit log and session stubs are shared state aggregated in the main
+        # checkout — deleting them affects ALL worktrees (documented above).
+        # Legacy layout: <worktree>/.claude is a whole-dir symlink and the
+        # subdir path resolves through it. ADR-0003 layout: the subdir ITSELF
+        # is the symlink, and a plain `rm -rf` would remove just the link and
+        # leave the shared state. Resolve first, blast the target, and keep a
+        # still-linked subdir pointing at a recreated (empty) shared dir so
+        # in-container mkdir/appends don't hit a dangling link.
+        for _sub in container-audit container-sessions; do
+            _sub_path="$DEV_WORKSPACE/.claude/$_sub"
+            _sub_target="$(readlink -f "$_sub_path" 2>/dev/null || true)"
+            if [ -n "$_sub_target" ]; then
+                rm -rf "$_sub_target"
+                if [ -L "$_sub_path" ]; then
+                    mkdir -p "$_sub_target"
+                fi
+            fi
+        done
         echo "Cleaned: $DEV_CONTAINER_NAME"
         ;;
     clean-caches)
