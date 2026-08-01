@@ -48,18 +48,33 @@ assert_nonempty "pre-commit ruff rev found" "$pc_ruff"
 assert_nonempty "pre-commit yamllint rev found" "$pc_yamllint"
 assert_nonempty "pre-commit hadolint rev found" "$pc_hadolint"
 
-# install-system.sh: the VERSION= assignments, plus the amd64 hadolint sha —
-# it has no counterpart to compare against any more, but a bumped
-# HADOLINT_VERSION with a stale/removed sha line is exactly the drift this
-# file exists to catch, so keep asserting it is present and well-formed.
+# install-system.sh: the VERSION= assignments, plus BOTH hadolint per-arch
+# shas. A checksum has no committed counterpart to compare against — verifying
+# one means fetching the release artifact, which no hermetic test may do — so
+# the coupling to HADOLINT_VERSION lives in dev/bump-hadolint, which rewrites
+# all three together. What is cheap and worth asserting here is that the values
+# the bump tool anchors on are all still present and well-formed, and that the
+# two arch shas are not the same string (a copy-paste of the amd64 sha into the
+# arm64 slot reads fine and breaks the arm64 build at `sha256sum -c`).
 is_ruff="$(grep -m1 -oP '^RUFF_VERSION=\K\S+' "$install_sys" || true)"
 is_yamllint="$(grep -m1 -oP '^YAMLLINT_VERSION=\K\S+' "$install_sys" || true)"
 is_hadolint="$(grep -m1 -oP '^HADOLINT_VERSION=\K\S+' "$install_sys" || true)"
-is_hadolint_sha="$(grep -m1 -oP '^HADOLINT_SHA256_AMD64=\K[0-9a-f]{64}' "$install_sys" || true)"
+is_hadolint_amd64="$(grep -m1 -oP '^HADOLINT_SHA256_AMD64=\K[0-9a-f]{64}' "$install_sys" || true)"
+is_hadolint_arm64="$(grep -m1 -oP '^HADOLINT_SHA256_ARM64=\K[0-9a-f]{64}' "$install_sys" || true)"
 assert_nonempty "install-system.sh RUFF_VERSION found" "$is_ruff"
 assert_nonempty "install-system.sh YAMLLINT_VERSION found" "$is_yamllint"
 assert_nonempty "install-system.sh HADOLINT_VERSION found" "$is_hadolint"
-assert_nonempty "install-system.sh HADOLINT_SHA256_AMD64 found" "$is_hadolint_sha"
+assert_nonempty "install-system.sh HADOLINT_SHA256_AMD64 found" "$is_hadolint_amd64"
+assert_nonempty "install-system.sh HADOLINT_SHA256_ARM64 found" "$is_hadolint_arm64"
+assert_false "hadolint per-arch shas are distinct" \
+    test "$is_hadolint_amd64" = "$is_hadolint_arm64"
+
+# Both shas are consumed by the `case "$arch"` dispatch a few lines below them;
+# a variable renamed on one side only would leave the install unpinned.
+assert_true "install-system.sh uses HADOLINT_SHA256_AMD64" \
+    grep -q 'hadolint_sha=\$HADOLINT_SHA256_AMD64' "$install_sys"
+assert_true "install-system.sh uses HADOLINT_SHA256_ARM64" \
+    grep -q 'hadolint_sha=\$HADOLINT_SHA256_ARM64' "$install_sys"
 
 assert_eq "ruff: pre-commit == install-system.sh" "$pc_ruff" "$is_ruff"
 assert_eq "yamllint: pre-commit == install-system.sh" "$pc_yamllint" "$is_yamllint"
