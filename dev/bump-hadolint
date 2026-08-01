@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bump the pinned hadolint version and its per-arch checksums.
+#
+# Usage:
+#   devcontainer bump-hadolint            # bump to the latest hadolint release
+#   devcontainer bump-hadolint 2.14.0     # pin an explicit version
+#   devcontainer bump-hadolint --check    # report current vs latest, don't edit
+#   devcontainer bump-hadolint --verify   # validate the committed checksums
+#
+# --check and --verify answer different questions and are mutually exclusive:
+#
+#   --check  is a REPORT, exactly like bump-nix --check and bump-claude-code
+#            --check: it prints current vs latest (or vs an explicitly
+#            requested version) and ALWAYS exits 0. "A newer hadolint exists"
+#            is news, not a failure. It performs no download.
+#
+#   --verify is a GATE: it fetches the release for the CURRENTLY COMMITTED
+#            version (or an explicit one) and checks BOTH committed per-arch
+#            checksums against it, exiting non-zero on any mismatch — and also
+#            non-zero if the release could not be fetched, because a gate that
+#            passes when it could not check is worse than no gate. This is the
+#            check no test can perform (see below), and the only one that
+#            catches a stale arm64 sha on an amd64 machine.
+#
+# The pin is a coupled TRIPLE in projects/devcontainer/install-system.sh —
+# HADOLINT_VERSION, HADOLINT_SHA256_AMD64 and HADOLINT_SHA256_ARM64 — plus the
+# hadolint hook `rev:` in .pre-commit-config.yaml, which
+# tests/test-lint-config-sync.sh requires to equal HADOLINT_VERSION.
+#
+# Nothing coupled those before this tool existed. A hand bump that updates the
+# version and the amd64 sha passes every test in the tree and then breaks the
+# arm64 container build at `sha256sum -c` — the arm64 sha had no guard at all.
+# A hermetic test cannot close that gap (verifying a checksum means fetching
+# the artifact), so the coupling lives here: all four values are resolved and
+# rewritten in one run, and nothing is written until BOTH binaries have been
+# downloaded and hashed.
+#
+# ANCHORS: the greps/awk below are deliberately byte-identical to the ones in
+# tests/test-lint-config-sync.sh. A reformat of either target file must break
+# this tool and that test together, loudly, rather than silently no-op'ing here
+# (same contract as the one noted in tests/test-claude-code-pin-sync.sh).
+
+REPO="hadolint/hadolint"
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+install_sys="$base/projects/devcontainer/install-system.sh"
+precommit="$base/.pre-commit-config.yaml"
+
+check_only=false
+verify_only=false
+target=""
+for arg in "$@"; do
+    case "$arg" in
+        --check) check_only=true ;;
+        --verify) verify_only=true ;;
+        -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
+        *)
+            if [ -n "$target" ]; then
+                echo "error: unexpected extra argument: $arg" >&2
+                exit 1
+            fi
+            target="$arg"
+            ;;
+    esac
+done
+
+# They disagree on what the default target is (latest vs committed) and on what
+# a non-zero exit means, so there is no coherent combined behavior to define.
+if $check_only && $verify_only; then
+    echo "error: --check and --verify are mutually exclusive — --check reports current vs latest, --verify validates the committed checksums against the release" >&2
+    exit 1
+fi
+
+[ -f "$install_sys" ] || { echo "error: install-system.sh not found at $install_sys" >&2; exit 1; }
+
+# --- current state (anchors shared with tests/test-lint-config-sync.sh) ------
+
+current="$(grep -m1 -oP '^HADOLINT_VERSION=\K\S+' "$install_sys" || true)"
+if [ -z "$current" ]; then
+    echo "error: could not find 'HADOLINT_VERSION=' in $install_sys" >&2
+    exit 1
+fi
+cur_amd64="$(grep -m1 -oP '^HADOLINT_SHA256_AMD64=\K[0-9a-f]{64}' "$install_sys" || true)"
+cur_arm64="$(grep -m1 -oP '^HADOLINT_SHA256_ARM64=\K[0-9a-f]{64}' "$install_sys" || true)"
+for pair in "HADOLINT_SHA256_AMD64:$cur_amd64" "HADOLINT_SHA256_ARM64:$cur_arm64"; do
+    if [ -z "${pair#*:}" ]; then
+        echo "error: could not find a 64-hex '${pair%%:*}=' assignment in $install_sys" >&2
+        exit 1
+    fi
+done
+
+# The hadolint hook rev in .pre-commit-config.yaml, v-stripped. A missing
+# config file is tolerated (the test sandbox runs without one, as bump-claude-
+# code tolerates a missing Nix pin); a config file whose hadolint hook cannot
+# be found is a hard error — that is the anchor drifting.
+precommit_rev() {
+    awk -v repo="hadolint-py" '
+        $0 ~ "repo: .*" repo "$" { want = 1; next }
+        want && /rev:/ { sub(/^.*rev:[[:space:]]*v?/, ""); print; exit }
+    ' "$precommit"
+}
+pc_current=""
+pc_present=false
+if [ -f "$precommit" ]; then
+    pc_present=true
+    pc_current="$(precommit_rev || true)"
+    if [ -z "$pc_current" ]; then
+        echo "error: could not find the hadolint-py hook rev in $precommit" >&2
+        exit 1
+    fi
+fi
+
+# --- target version ----------------------------------------------------------
+
+# Resolve the latest hadolint release from the GitHub API. On failure print
+# nothing and let the empty-result check below produce a clean error.
+latest_version() {
+    curl -sf "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+        | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin)["tag_name"])
+except Exception:
+    pass' 2>/dev/null || true
+}
+
+if [ -n "$target" ]; then
+    new="$target"
+elif $verify_only; then
+    # --verify asks "are the committed checksums right for what is committed?"
+    # so its default target is the committed version, not the latest release.
+    new="$current"
+else
+    new="$(latest_version)" || true
+    if [ -z "$new" ]; then
+        echo "error: could not determine the latest hadolint version" >&2
+        exit 1
+    fi
+fi
+
+# hadolint tags carry a leading "v"; the pinned values never do (the download
+# URL and the pre-commit rev re-add it).
+new="${new#v}"
+
+# Validate before the version can reach a URL or the sed below; forbidding the
+# sed delimiter keeps the substitutions injection-safe.
+if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
+    echo "error: invalid version: $new" >&2
+    exit 1
+fi
+
+# Two different questions about the hook rev. The rewrite path cares whether it
+# equals the TARGET (that is what it will be set to); the --check report cares
+# whether it equals the COMMITTED version, because that — and only that — is an
+# inconsistency in the tree rather than "everything is a release behind".
+pc_drift=false
+if $pc_present && [ "$pc_current" != "$new" ]; then pc_drift=true; fi
+pc_inconsistent=false
+if $pc_present && [ "$pc_current" != "$current" ]; then pc_inconsistent=true; fi
+
+# --- --check: report the current/target versions, never edit, always exit 0 --
+#
+# Byte-for-byte the shape of `bump-nix --check` and `bump-claude-code --check`,
+# down to the %-11s label column: this is a family of three commands and they
+# must read alike. Like them it exits 0 whether or not the versions match, and
+# like bump-claude-code it surfaces the second pinned copy of the version (here
+# the pre-commit hook rev) only when that copy needs repair.
+#
+# It deliberately does NOT download anything, and says nothing about the
+# checksums — that is --verify's job. A report that needed the release artifact
+# could not run offline, and "a newer hadolint is out" is not something a
+# report should fail on. Keep the emitted lines identical in shape to the
+# siblings': the three commands are read side by side.
+if $check_only; then
+    printf '%-11s%s\n' "current:" "$current"
+    if [ -n "$target" ]; then
+        printf '%-11s%s\n' "requested:" "$new"
+    else
+        printf '%-11s%s\n' "latest:" "$new"
+    fi
+    if $pc_inconsistent; then
+        printf '%-11s%s\n' "hook rev:" "$pc_current"
+    fi
+    if [ "$current" = "$new" ] && ! $pc_inconsistent; then
+        echo "already up to date"
+    elif [ "$current" = "$new" ]; then
+        echo "run 'devcontainer bump-hadolint' to repair the pre-commit hook rev"
+    else
+        echo "run 'devcontainer bump-hadolint' to update projects/devcontainer/install-system.sh"
+    fi
+    exit 0
+fi
+
+# --- resolve both checksums (before anything is written) ---------------------
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+# hadolint's release asset names; the arch tokens match the `case "$arch"` in
+# install-system.sh.
+fetch_sha() {
+    local asset="$1" url dest
+    url="https://github.com/${REPO}/releases/download/v${new}/hadolint-Linux-${asset}"
+    dest="$tmp/hadolint-$asset"
+    if ! curl -LsSf --retry 3 --retry-connrefused "$url" -o "$dest"; then
+        echo "error: could not download $url — does the version exist?" >&2
+        return 1
+    fi
+    # A release that 404s to an HTML error page, or an empty artifact, would
+    # otherwise be hashed and committed as a valid-looking checksum.
+    if [ ! -s "$dest" ]; then
+        echo "error: downloaded $url but it is empty" >&2
+        return 1
+    fi
+    sha256sum "$dest" | cut -d' ' -f1
+}
+
+# A failed fetch must not fall through to a comparison against an empty string
+# — under --verify that is the "gate passed because it could not check" case.
+if ! new_amd64="$(fetch_sha x86_64)" || ! new_arm64="$(fetch_sha arm64)"; then
+    if $verify_only; then
+        echo "error: cannot verify the hadolint v${new} checksums — the release could not be fetched (treating an unverifiable pin as a failure)" >&2
+    fi
+    exit 1
+fi
+
+version_drift=false
+[ "$current" = "$new" ] || version_drift=true
+sha_drift=false
+{ [ "$cur_amd64" = "$new_amd64" ] && [ "$cur_arm64" = "$new_arm64" ]; } || sha_drift=true
+
+# --- --verify: gate the committed checksums against the real release --------
+#
+# The one check no test in this repo can perform, and the one that catches the
+# failure this tool exists for: a committed arm64 sha that is not the sha of
+# the arm64 binary. Never edits; exits non-zero on any mismatch.
+if $verify_only; then
+    echo "verifying the committed hadolint checksums against release v${new}"
+    verify_failed=false
+    report_arch() {
+        local label="$1" committed="$2" release="$3"
+        if [ "$committed" = "$release" ]; then
+            printf '  %-6s OK        %s\n' "$label" "$committed"
+        else
+            printf '  %-6s MISMATCH  committed %s\n' "$label" "$committed"
+            printf '  %-6s           release  %s\n' "" "$release"
+            verify_failed=true
+        fi
+    }
+    report_arch "amd64" "$cur_amd64" "$new_amd64"
+    report_arch "arm64" "$cur_arm64" "$new_arm64"
+    if $verify_failed; then
+        echo "error: committed hadolint checksums do not match release v${new} — run 'devcontainer bump-hadolint ${new}' to repair them" >&2
+        exit 1
+    fi
+    if $version_drift; then
+        echo "both committed checksums match release v${new} (note: HADOLINT_VERSION is $current)"
+    else
+        echo "both committed checksums match release v${new}"
+    fi
+    exit 0
+fi
+
+if ! $version_drift && ! $sha_drift && ! $pc_drift; then
+    echo "hadolint already pinned to $current${target:+ (requested)} (both arch checksums verified)"
+    [ -n "$target" ] || echo "(latest release)"
+    exit 0
+fi
+
+# --- rewrite --------------------------------------------------------------
+
+# `$new` and both shas are validated/computed above, so they are safe as sed
+# replacements. All three assignments move together: a run that got this far
+# has both checksums in hand, so there is no path that writes one half.
+sed -i \
+    -e "s|^HADOLINT_VERSION=.*|HADOLINT_VERSION=${new}|" \
+    -e "s|^HADOLINT_SHA256_AMD64=.*|HADOLINT_SHA256_AMD64=${new_amd64}|" \
+    -e "s|^HADOLINT_SHA256_ARM64=.*|HADOLINT_SHA256_ARM64=${new_arm64}|" \
+    "$install_sys"
+
+# sed exits 0 whether or not its patterns matched, so prove the edit took by
+# re-reading through the same anchors.
+if [ "$(grep -m1 -oP '^HADOLINT_VERSION=\K\S+' "$install_sys" || true)" != "$new" ] \
+    || [ "$(grep -m1 -oP '^HADOLINT_SHA256_AMD64=\K[0-9a-f]{64}' "$install_sys" || true)" != "$new_amd64" ] \
+    || [ "$(grep -m1 -oP '^HADOLINT_SHA256_ARM64=\K[0-9a-f]{64}' "$install_sys" || true)" != "$new_arm64" ]; then
+    echo "error: could not update the hadolint pins in ${install_sys#"$base/"} — its layout no longer matches; set HADOLINT_VERSION=${new}, HADOLINT_SHA256_AMD64=${new_amd64} and HADOLINT_SHA256_ARM64=${new_arm64} there manually" >&2
+    exit 1
+fi
+
+if $version_drift; then
+    echo "Bumped hadolint: $current → $new (both arch checksums updated in lockstep)"
+else
+    echo "hadolint already pinned to $current; refreshed the per-arch checksums"
+fi
+
+# Keep the pre-commit hook rev in sync: tests/test-lint-config-sync.sh asserts
+# it equals HADOLINT_VERSION, so bumping only one immediately fails the suite.
+if $pc_drift; then
+    awk -v repo="hadolint-py" -v rev="v${new}" '
+        !edited && $0 ~ "repo: .*" repo "$" { want = 1; print; next }
+        want && /rev:/ { sub(/rev:[[:space:]]*.*/, "rev: " rev); want = 0; edited = 1 }
+        { print }
+    ' "$precommit" > "$tmp/pre-commit-config.yaml"
+    # Write through a temp file and rename: a generator that failed mid-stream
+    # must not leave a truncated pre-commit config behind.
+    mv "$tmp/pre-commit-config.yaml" "$precommit"
+    if [ "$(precommit_rev || true)" != "$new" ]; then
+        echo "error: could not update the hadolint rev in ${precommit#"$base/"} — its layout no longer matches; set 'rev: v${new}' under the hadolint-py repo manually" >&2
+        exit 1
+    fi
+    echo "Also bumped the pre-commit hadolint hook: v$pc_current → v$new"
+fi
+
+echo "Rebuild to apply the in-container binary: 'devcontainer up' will detect the config change and prompt for a rebuild."
