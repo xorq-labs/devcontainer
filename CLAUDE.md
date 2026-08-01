@@ -34,7 +34,7 @@ bash tests/test-resolve-list-cleanup.sh
 ## Repo layout
 
 - `dev/` — user-facing scripts: `devcontainer`, `new-worktree`, `setup-worktree`, `cleanup-worktree`, `init`
-- `lib/` — shared bash libraries sourced by dev/ scripts (`git.sh`, `host-bridge.sh`, `host-mounts.sh`, `list-file.sh`)
+- `lib/` — shared bash libraries sourced by dev/ scripts (`git.sh`, `host-bridge.sh`, `host-mounts.sh`, `list-file.sh`, `command-table.sh`) plus `command-table.tsv`, the declarative `devcontainer` command surface
 - `defaults/` — fallback project overlay (used when no project-specific overlay matches)
 - `projects/<name>/` — project-specific overlays (install-system.sh, setup-env.sh, compose.override.yml, worktree-*.txt)
 - `.envrcs/` — direnv fragments; `.envrc.user` and `.envrc.secrets` are gitignored per-developer files
@@ -169,8 +169,29 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - `dev/init` never touches files it skips as pre-existing; `--nix` refuses
   files that diverged from the defaults baseline without `--force`
   (`tests/test-init-nix.sh`).
-- Completion command lists (bash/zsh/fish) and `show_usage` must match the
-  dispatch case in `dev/devcontainer` (`tests/test-completions-sync.sh`).
+- The `devcontainer` command surface has ONE source: `lib/command-table.tsv`
+  (read and validated by `lib/command-table.sh`). `show_usage` in
+  `dev/devcontainer` and the bash/zsh/fish scripts emitted by
+  `dev/devcontainer-completions` are all GENERATED from it, so those four
+  encodings can no longer disagree — no test is needed for that, it is
+  structural. What is guarded is the one pair still hand-written at both ends
+  (dispatch arms == table rows), plus table well-formedness, the generated
+  scripts parsing in their target shell, and every table name actually
+  reaching all three of them — generation makes the lists agree with each
+  other, not with the table (`tests/test-completions-sync.sh`).
+  The table is read at generation time only: `install-completions` and the
+  Nix package redirect the generator's stdout to a file, so an installed
+  completion script has no runtime dependency on the repo.
+- The `arg-type` vocabulary is a four-file convention: `ok_type` in
+  `lib/command-table.sh`, the doc block in `lib/command-table.tsv`, and one
+  `case "${types[$n]}"` block per shell in `dev/devcontainer-completions`. A
+  value known to the validator but to no generator emits no wiring, silently
+  (`tests/test-completions-sync.sh` builds a synthetic one-command-per-type
+  table and requires non-empty, distinct wiring in all three shells).
+- Because generation can now fail (a malformed table), writing a generated
+  completion must be atomic: `dev/install-completions` renders to a temp file
+  and renames, never redirecting into the installed file
+  (`tests/test-completions-sync.sh`).
 - The worktree manifest format written by `dev/setup-worktree`
   (`<action>\t<path>`, plus a legacy bare-path form) is parsed by
   `dev/cleanup-worktree`; the two must change in lockstep (—).
@@ -183,6 +204,7 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - Commit messages follow conventional commits: `fix:`, `feat:`, `ci:`, etc.
 - A PR that resolves an issue puts `Closes #N` in its **body** (not just the title). Citing the number in prose does not close anything: #54 was titled "…(#53)" and #53 stayed open for two weeks after it shipped, while #35 was independently re-solved by #71 because nobody knew it was open. An issue list that never drains stops being read, and a fixed-but-open issue is worse than no issue — it sends the next reader after work that is already done.
 - Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003).
+- Adding a `devcontainer` subcommand: add the dispatch arm in `dev/devcontainer`, add a row to `lib/command-table.tsv`. That is the whole workflow — the usage text, the bash/zsh/fish word lists, their descriptions, and the per-command argument wiring are all generated from the row. Never hand-edit a command list in `dev/devcontainer-completions` or the Commands block of `show_usage`.
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
 - Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift.

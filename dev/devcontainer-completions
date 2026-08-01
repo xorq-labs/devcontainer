@@ -1,21 +1,110 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Emit shell completions for `devcontainer`. The three command lists below
-# (bash, zsh, fish) are hand-maintained and must mirror the dispatch `case`
-# in dev/devcontainer: when a subcommand is added, removed, or renamed there,
-# update all three lists here. tests/test-completions-sync.sh guards the sync.
+# Emit shell completions for `devcontainer`.
+#
+# Command names, their descriptions, and their argument wiring are GENERATED
+# from lib/command-table.tsv — there is no hand-maintained per-shell command
+# list here any more. To add a subcommand: add the dispatch arm in
+# dev/devcontainer and add a row to the table. tests/test-completions-sync.sh
+# guards the one pair that cannot be generated (dispatch arms == table names).
+#
+# Deliberately NOT table-driven (they are per-shell boilerplate with no
+# per-command variation): the `-w/--workspace` global option, the subcommand
+# scanner in the bash function, and each shell's framework preamble.
+#
+# The table is read at generation time only. `install-completions` and the Nix
+# package redirect this script's stdout into a static file, so an installed
+# completion script never reads the table (or this repo) again.
+
+_dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# shellcheck source=../lib/command-table.sh
+. "$_dir/../lib/command-table.sh"
 
 shell="${1:-bash}"
-
 case "$shell" in
-    bash)
-        cat <<'BASH'
+    bash|zsh|fish) ;;
+    *) echo "Unsupported shell: $shell (try bash, zsh, or fish)" >&2; exit 1 ;;
+esac
+
+# --- table load -------------------------------------------------------------
+
+# arg-syntax and usage-desc are show_usage's columns; only the completion
+# columns are kept here.
+names=() types=() wordspecs=() labels=() shorts=()
+_rows="$(command_table_rows)" || exit 1
+while IFS=$'\t' read -r _name _syntax _type _words _label _short _usage; do
+    [ -n "$_name" ] || continue
+    names+=("$_name")
+    types+=("$_type")
+    wordspecs+=("$_words")
+    labels+=("$_label")
+    shorts+=("$_short")
+done <<<"$_rows"
+
+all_names="${names[*]}"
+
+# --- escaping ---------------------------------------------------------------
+#
+# Descriptions are free prose from the table; they must survive the quoting of
+# whichever shell consumes them. Do not rely on authoring discipline (the old
+# hand-maintained fish list simply avoided apostrophes) — escape here.
+
+# zsh `'name:description'`: `'` ends the quote, `:` separates the two fields,
+# and `\` is the escape character the completion system strips back off. The
+# backslash pass MUST come first, or it would double the backslashes this
+# function itself just added (and an input backslash would otherwise eat the
+# `\:` escape of a following colon).
+zsh_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\'/\'\\\'\'}"
+    s="${s//:/\\:}"
+    printf '%s' "$s"
+}
+
+# fish `'...'`: single quotes take exactly two escapes, `\\` and `\'`.
+fish_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\'/\\\'}"
+    printf '%s' "$s"
+}
+
+# arg-words entries are `word[:description]`; the table validator has already
+# rejected a second colon and any word that is not a plain flag/value.
+spec_word() { printf '%s' "${1%%:*}"; }
+spec_desc() { case "$1" in *:*) printf '%s' "${1#*:}" ;; *) : ;; esac; }
+
+# Split a row's arg-words spec into the shared `entries` array.
+entries=()
+spec_entries() {
+    entries=()
+    [ "$1" != "-" ] || return 0
+    IFS='|' read -r -a entries <<<"$1"
+}
+
+# Space-separated word list for a row's arg-words (empty when there are none).
+row_words() {
+    local out="" entry
+    spec_entries "$1"
+    for entry in "${entries[@]}"; do
+        out+="${out:+ }$(spec_word "$entry")"
+    done
+    printf '%s' "$out"
+}
+
+# --- bash -------------------------------------------------------------------
+
+emit_bash() {
+    cat <<'BASH'
 _devcontainer() {
     local cur prev words cword
     _init_completion || return
 
-    local subcmds="init up down reset clean clean-caches clean-images status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg refresh-x11 copy-host-transcripts fix-credentials set-credentials set-token token-doctor fix-network unlock ps audit bump-claude-code bump-nix completions install-completions"
+BASH
+    printf '    local subcmds="%s"\n' "$all_names"
+    cat <<'BASH'
     local global_opts="-w --workspace"
 
     local i=1 subcmd=""
@@ -39,70 +128,38 @@ _devcontainer() {
     fi
 
     case "$subcmd" in
-        init)
-            COMPREPLY=($(compgen -W "--local --nix" -- "$cur"))
-            ;;
-        exec)
-            COMPREPLY=($(compgen -c -- "$cur"))
-            ;;
-        set-credentials|set-token)
-            _filedir
-            ;;
-        ps)
-            COMPREPLY=($(compgen -W "--all" -- "$cur"))
-            ;;
-        audit)
-            COMPREPLY=($(compgen -W "--summary --new --all --clear" -- "$cur"))
-            ;;
-        bump-claude-code|bump-nix)
-            COMPREPLY=($(compgen -W "--check" -- "$cur"))
-            ;;
-        completions)
-            COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
-            ;;
-        install-completions)
-            COMPREPLY=($(compgen -W "bash zsh fish --print-paths" -- "$cur"))
-            ;;
+BASH
+    local n words_list body
+    for n in "${!names[@]}"; do
+        body=""
+        words_list="$(row_words "${wordspecs[$n]}")"
+        [ -z "$words_list" ] || body+="            COMPREPLY=(\$(compgen -W \"$words_list\" -- \"\$cur\"))"$'\n'
+        case "${types[$n]}" in
+            file)    body+='            _filedir'$'\n' ;;
+            dir)     body+='            _filedir -d'$'\n' ;;
+            command) body+='            COMPREPLY=($(compgen -c -- "$cur"))'$'\n' ;;
+        esac
+        [ -n "$body" ] || continue
+        printf '        %s)\n%s            ;;\n' "${names[$n]}" "$body"
+    done
+    cat <<'BASH'
     esac
 }
 BASH
-        printf 'complete -F _devcontainer devcontainer\n'
-        ;;
-    zsh)
-        echo '#compdef devcontainer'
-        cat <<'ZSH'
-_devcontainer() {
-    local -a subcmds=(
-        'init:create a project overlay'
-        'up:start the dev container'
-        'down:stop the dev container'
-        'reset:destroy container and all volumes'
-        'clean:reset + remove host-side artifacts (keeps the shared project image)'
-        'clean-caches:remove the project shared caches (affects all worktrees)'
-        'clean-images:remove the project shared images (affects all worktrees)'
-        'exec:run a command in the dev container'
-        'claude:run claude in the dev container'
-        'claude-dangerously-skip-permissions:run claude with --dangerously-skip-permissions'
-        'refresh-ssh:re-forward SSH agent without container restart'
-        'refresh-gpg:re-forward GPG agent without container restart'
-        'refresh-x11:re-forward X11 display without container restart'
-        'copy-host-transcripts:mirror host session transcripts so claude --resume finds them'
-        'fix-credentials:re-seed the container private token from its profile (DEV_CLAUDE_PROFILE, else host active)'
-        'set-credentials:give this container a private token from a file or stdin'
-        'set-token:install a manual setup-token override for a mountless runtime (CLAUDE_CODE_OAUTH_TOKEN at launch)'
-        'token-doctor:warn if a higher-precedence auth source would shadow an active setup-token'
-        'fix-network:disconnect stale networks (after ungraceful host shutdown)'
-        'unlock:remove stale lockfile'
-        'ps:show running claude sessions'
-        'audit:show permission audit log'
-        'bump-claude-code:update pinned Claude Code version in the Dockerfile'
-        'bump-nix:update pinned Nix version and installer sha in lib/nix-seed.sh'
-        'status:show whether the container is running'
-        'list:list all worktrees with container status and overlay'
-        'resolve:show resolved overlay and configuration (dry run)'
-        'logs:show container logs'
-        'completions:emit shell completions'
-        'install-completions:install completions to each shell autoload dir'
+    printf 'complete -F _devcontainer devcontainer\n'
+}
+
+# --- zsh --------------------------------------------------------------------
+
+emit_zsh() {
+    echo '#compdef devcontainer'
+    echo '_devcontainer() {'
+    echo '    local -a subcmds=('
+    local n
+    for n in "${!names[@]}"; do
+        printf "        '%s:%s'\n" "${names[$n]}" "$(zsh_escape "${shorts[$n]}")"
+    done
+    cat <<'ZSH'
     )
     _arguments -s \
         '(-w --workspace)'{-w,--workspace}'[workspace directory]:dir:_directories' \
@@ -112,71 +169,79 @@ _devcontainer() {
         subcmd) _describe 'subcommand' subcmds ;;
         args)
             case $words[1] in
-                init) _values 'flag' --local --nix ;;
-                exec) _command_names ;;
-                set-credentials|set-token) _files ;;
-                ps) _values 'flag' --all ;;
-                audit) _values 'mode' --summary --new --all --clear ;;
-                bump-claude-code|bump-nix) _values 'flag' --check ;;
-                completions) _values 'shell' bash zsh fish ;;
-                install-completions) _values 'shell' bash zsh fish --print-paths ;;
+ZSH
+    local words_list label body
+    for n in "${!names[@]}"; do
+        body=""
+        words_list="$(row_words "${wordspecs[$n]}")"
+        label="${labels[$n]}"
+        [ "$label" != "-" ] || label="arg"
+        [ -z "$words_list" ] || body+=" _values '$(zsh_escape "$label")' $words_list ;"
+        case "${types[$n]}" in
+            file)    body+=' _files ;' ;;
+            dir)     body+=' _files -/ ;' ;;
+            command) body+=' _command_names ;' ;;
+        esac
+        [ -n "$body" ] || continue
+        printf '                %s)%s;\n' "${names[$n]}" "$body"
+    done
+    cat <<'ZSH'
             esac
             ;;
     esac
 }
 _devcontainer "$@"
 ZSH
-        ;;
-    fish)
-        cat <<'FISH'
-set -l cmds init up down reset clean clean-caches clean-images status list resolve logs exec claude claude-dangerously-skip-permissions refresh-ssh refresh-gpg refresh-x11 copy-host-transcripts fix-credentials set-credentials set-token token-doctor fix-network unlock ps audit bump-claude-code bump-nix completions install-completions
-complete -c devcontainer -f
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a init -d 'create a project overlay'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a up -d 'start the dev container'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a down -d 'stop the dev container'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a reset -d 'destroy container and all volumes'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a clean -d 'reset + remove host-side artifacts (keeps the shared project image)'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a clean-caches -d 'remove the project shared caches (affects all worktrees)'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a clean-images -d 'remove the project shared images (affects all worktrees)'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a exec -d 'run a command in the dev container'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a claude -d 'run claude in the dev container'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a claude-dangerously-skip-permissions -d 'run claude with --dangerously-skip-permissions'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-ssh -d 're-forward SSH agent without container restart'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-gpg -d 're-forward GPG agent without container restart'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a refresh-x11 -d 're-forward X11 display without container restart'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a copy-host-transcripts -d 'mirror host session transcripts so claude --resume finds them'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-credentials -d 're-seed the container private token from its profile'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a set-credentials -d 'give this container a private token from a file or stdin'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a set-token -d 'install a manual setup-token override (CLAUDE_CODE_OAUTH_TOKEN at launch)'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a token-doctor -d 'warn if a higher-precedence auth source would shadow an active setup-token'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a fix-network -d 'disconnect stale networks'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a unlock -d 'remove stale lockfile'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a ps -d 'show running claude sessions'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a audit -d 'show permission audit log'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a bump-claude-code -d 'update pinned Claude Code version in the Dockerfile'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a bump-nix -d 'update pinned Nix version and installer sha in lib/nix-seed.sh'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a status -d 'show whether the container is running'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a list -d 'list all worktrees with container status and overlay'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a resolve -d 'show resolved overlay and configuration (dry run)'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a logs -d 'show container logs'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a completions -d 'emit shell completions'
-complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds" -a install-completions -d 'install completions to each shell autoload dir'
-complete -c devcontainer -n "__fish_seen_subcommand_from init" -l local -d 'create overlay in workspace .devcontainer/'
-complete -c devcontainer -n "__fish_seen_subcommand_from init" -l nix -d 'layer a Nix store onto the overlay'
-complete -c devcontainer -n "__fish_seen_subcommand_from ps" -l all -d 'show all containers'
-complete -c devcontainer -n "__fish_seen_subcommand_from set-credentials" -F -d 'credentials file'
-complete -c devcontainer -n "__fish_seen_subcommand_from set-token" -F -d 'setup-token file'
-complete -c devcontainer -n "__fish_seen_subcommand_from audit" -a "--summary --new --all --clear"
-complete -c devcontainer -n "__fish_seen_subcommand_from bump-claude-code" -l check -d 'report current vs latest without editing'
-complete -c devcontainer -n "__fish_seen_subcommand_from bump-nix" -l check -d 'report current vs latest without editing'
-complete -c devcontainer -n "__fish_seen_subcommand_from completions" -a "bash zsh fish"
-complete -c devcontainer -n "__fish_seen_subcommand_from install-completions" -a "bash zsh fish"
-complete -c devcontainer -n "__fish_seen_subcommand_from install-completions" -l print-paths -d 'show target paths without installing'
-FISH
-        ;;
-    *)
-        echo "Unsupported shell: $shell (try bash, zsh, or fish)" >&2
-        exit 1
-        ;;
+}
+
+# --- fish -------------------------------------------------------------------
+
+emit_fish() {
+    printf 'set -l cmds %s\n' "$all_names"
+    printf 'complete -c devcontainer -f\n'
+    local root='complete -c devcontainer -n "not __fish_seen_subcommand_from $cmds"'
+    printf "%s -s w -l workspace -ra '(__fish_complete_directories)' -d 'workspace directory'\n" "$root"
+    local n
+    for n in "${!names[@]}"; do
+        printf "%s -a %s -d '%s'\n" "$root" "${names[$n]}" "$(fish_escape "${shorts[$n]}")"
+    done
+    local sub entry word desc bare label
+    for n in "${!names[@]}"; do
+        sub="complete -c devcontainer -n \"__fish_seen_subcommand_from ${names[$n]}\""
+        spec_entries "${wordspecs[$n]}"
+        if [ "${#entries[@]}" -gt 0 ]; then
+            # Bare words become plain argument candidates on one line; a word
+            # that carries a description becomes a real fish option so the
+            # description is shown.
+            bare=""
+            for entry in "${entries[@]}"; do
+                desc="$(spec_desc "$entry")"
+                [ -n "$desc" ] || bare+="${bare:+ }$(spec_word "$entry")"
+            done
+            [ -z "$bare" ] || printf "%s -a '%s'\n" "$sub" "$(fish_escape "$bare")"
+            for entry in "${entries[@]}"; do
+                desc="$(spec_desc "$entry")"
+                [ -n "$desc" ] || continue
+                word="$(spec_word "$entry")"
+                case "$word" in
+                    --?*) printf "%s -l %s -d '%s'\n" "$sub" "${word#--}" "$(fish_escape "$desc")" ;;
+                    -?)   printf "%s -s %s -d '%s'\n" "$sub" "${word#-}" "$(fish_escape "$desc")" ;;
+                    *)    printf "%s -a '%s' -d '%s'\n" "$sub" "$(fish_escape "$word")" "$(fish_escape "$desc")" ;;
+                esac
+            done
+        fi
+        label="${labels[$n]}"
+        [ "$label" != "-" ] || label="argument"
+        case "${types[$n]}" in
+            file) printf "%s -F -d '%s'\n" "$sub" "$(fish_escape "$label")" ;;
+            dir)  printf "%s -a '(__fish_complete_directories)' -d '%s'\n" "$sub" "$(fish_escape "$label")" ;;
+            command) printf "%s -a '(__fish_complete_subcommand)'\n" "$sub" ;;
+        esac
+    done
+}
+
+case "$shell" in
+    bash) emit_bash ;;
+    zsh)  emit_zsh ;;
+    fish) emit_fish ;;
 esac
