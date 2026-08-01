@@ -15,17 +15,6 @@ set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
-# The harness has no bare non-empty asserter; this guard leans on it to prove
-# the grep anchors still match (an empty capture means the anchor missed).
-assert_nonempty() {
-    local label="$1" value="$2"
-    if [ -n "$value" ]; then
-        _pass "$label"
-    else
-        _fail "$label" "empty — anchor missed? file moved?"
-    fi
-}
-
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 dockerfile="$DEV_BASE/Dockerfile"
 nix_pin="$DEV_BASE/nix/base/pkgs/claude-code.nix"

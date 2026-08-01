@@ -62,6 +62,15 @@ assert_eq() {
     fi
 }
 
+assert_nonempty() {
+    local label="$1" value="$2"
+    if [ -n "$value" ]; then
+        _pass "$label"
+    else
+        _fail "$label" "empty — anchor missed? file moved?"
+    fi
+}
+
 assert_contains() {
     local label="$1" needle="$2" haystack="$3"
     if [[ "$haystack" == *"$needle"* ]]; then

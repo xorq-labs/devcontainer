@@ -25,17 +25,6 @@ set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 
-# The harness has no bare non-empty asserter; this guard leans on it to prove
-# the grep anchors still match (an empty capture means the anchor missed).
-assert_nonempty() {
-    local label="$1" value="$2"
-    if [ -n "$value" ]; then
-        _pass "$label"
-    else
-        _fail "$label" "empty — anchor missed? file moved?"
-    fi
-}
-
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 devcontainer="$DEV_BASE/dev/devcontainer"
 root_df="$DEV_BASE/Dockerfile"
@@ -50,8 +39,14 @@ done
 
 # The alternation inside overlay_sets_classic_args()'s
 #   grep -qE '^[[:space:]]*(A|B|...)[[:space:]]*:'
-# — anchored on the literal `^[[:space:]]*(` prefix, unique to that grep.
-regex_args="$(grep -m1 -oP "grep -qE '\^\[\[:space:\]\]\*\(\K[A-Z0-9_|]+(?=\))" "$devcontainer" \
+# Scoped to that function's body FIRST: `overlay_has_seed_volume()` next door
+# uses the same `grep -vE ... | grep -qE '<anchored pattern>'` idiom, so a
+# file-wide match could silently validate a sibling helper's regex while the
+# real routing alternation drifted.
+fn_body="$(awk '/^overlay_sets_classic_args\(\) \{/,/^\}/' "$devcontainer")"
+assert_nonempty "overlay_sets_classic_args body located" "$fn_body"
+regex_args="$(printf '%s\n' "$fn_body" \
+    | grep -m1 -oP "grep -qE '\^\[\[:space:\]\]\*\(\K[A-Z0-9_|]+(?=\))" \
     | tr '|' '\n' | sort || true)"
 assert_nonempty "overlay_sets_classic_args alternation extracted" "$regex_args"
 
