@@ -19,8 +19,12 @@
 #   .gitignore — always a copy: git opens it with O_NOFOLLOW, so a symlink
 #                would ELOOP (falls back to .gitignore.template when the main
 #                checkout has no live, per-checkout .gitignore).
-#   .claude    — always a symlink, so audit logs and session captures
-#                aggregate in the main checkout.
+#   .claude    — a real directory (git materializes it for tracked content
+#                like .claude/agents/); only the shared-state subdirs
+#                (container-audit/, container-sessions/) are symlinked so
+#                audit logs and session captures aggregate in the main
+#                checkout (ADR-0003). A pre-ADR-0003 whole-directory symlink
+#                is left as-is (legacy layout).
 set -euo pipefail
 
 _base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -107,8 +111,26 @@ link_from_main() {
 }
 
 # .claude: audit logs and session captures must aggregate in the main checkout
-# (devcontainer infrastructure, not project-specific) — always a symlink.
-link_from_main ".claude"
+# (devcontainer infrastructure, not project-specific), but .claude/agents/ is
+# tracked content that git materializes into the worktree — so .claude is a
+# real directory and only the shared-state subdirs are symlinked (ADR-0003).
+# A worktree from before ADR-0003 has a whole-directory symlink instead; keep
+# it (legacy layout — the subdirs already resolve through it) and re-record it
+# so cleanup-worktree still removes it. Migrate by deleting the symlink and
+# re-running setup-worktree.
+heal_stale_symlink "$here/.claude" && changes=$((changes + 1))
+if [ -L "$here/.claude" ]; then
+    printf 'symlink\t%s\n' ".claude" >> "$manifest"
+else
+    if [ ! -d "$here/.claude" ]; then
+        mkdir -pv "$here/.claude"
+        changes=$((changes + 1))
+    fi
+    for _sub in container-audit container-sessions; do
+        mkdir -p "$main/.claude/$_sub"
+        link_from_main ".claude/$_sub"
+    done
+fi
 
 # Symlink paths listed in worktree-symlinks.txt (from the project overlay).
 while IFS= read -r target; do

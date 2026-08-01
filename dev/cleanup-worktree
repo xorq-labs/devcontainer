@@ -30,8 +30,16 @@ _dirty_error() {
     exit 1
 }
 
+# --untracked-files=all is load-bearing, not a detail: by default git collapses
+# a wholly-untracked directory to one entry (`?? .claude/`), which matches no
+# manifest path and would block removal of any worktree in a repo whose live
+# .gitignore does not ignore .claude — post-ADR-0003 .claude is a real
+# directory holding the two manifest-recorded state symlinks. Listing untracked
+# files individually makes them match the manifest entries exactly, and keeps
+# the pre-flight honest: a genuinely undominated file inside such a directory
+# still shows up and still blocks (as `git worktree remove` itself would).
 # cut -c4- strips the XY status prefix; sed splits rename "old -> new" into two lines
-mapfile -t _dirty < <(git -C "$here" status --porcelain 2>/dev/null \
+mapfile -t _dirty < <(git -C "$here" status --porcelain --untracked-files=all 2>/dev/null \
     | cut -c4- | sed 's/ -> /\n/' | grep -v '^$')
 if [ "${#_dirty[@]}" -gt 0 ] && [ -f "$manifest" ]; then
     declare -A _dominated_set

@@ -61,8 +61,9 @@ the ADR in the same PR — doc and code land together or not at all. When an
 agent hits a design fork mid-PR, it drafts the ADR amendment (options,
 trade-offs, recommendation) and pushes it for review rather than blocking on
 an interactive question. Current records: ADR-0001 (private credential
-seeding), ADR-0002 (setup-token env delivery), and nix/base/README.md "Design
-decisions" for the base-image record.
+seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
+`.claude/agents/` in git; per-subdir state symlinks), and nix/base/README.md
+"Design decisions" for the base-image record.
 
 ## Invariants
 
@@ -130,9 +131,22 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   `-devcontainer-<compose-project>` — renaming any breaks
   `dev/devcontainer-sessions` (partially tested:
   `tests/test-devcontainer-sessions.sh`).
-- `.claude` is symlinked from a worktree to the main checkout when the main
-  checkout has one (`link_from_main` skips a missing source) — audit logs and
-  session stubs are then shared, so `clean` affects all worktrees (—).
+- A worktree's `.claude` is a real directory (tracked content like
+  `.claude/agents/` lives in it) with only `container-audit/` and
+  `container-sessions/` symlinked to the main checkout — audit logs and
+  session stubs are shared, so `clean` affects all worktrees; pre-ADR-0003
+  worktrees still carry a whole-directory symlink that every consumer must
+  keep tolerating (`tests/test-worktree-claude-layout.sh`).
+- `devcontainer clean` must delete the shared state through the link AND
+  always recreate the emptied directory: run from the main checkout or a
+  legacy worktree it deletes the very directory sibling new-layout worktrees
+  link to, and skipping the recreate leaves them dangling
+  (`tests/test-worktree-claude-layout.sh` lifts the block out and runs it on
+  all three layouts).
+- `cleanup-worktree`'s pre-flight compares `git status` paths against manifest
+  entries, so it must ask for `--untracked-files=all`: git's default collapses
+  a wholly-untracked `.claude/` to one entry that matches no manifest path
+  (`tests/test-worktree-claude-layout.sh`).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).
@@ -159,7 +173,7 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - Shellcheck is configured with `--severity=warning` and `disable=SC2155` (see `.shellcheckrc`).
 - Python targets 3.12, formatted by ruff with 120 char line length (see `ruff.toml`).
 - Commit messages follow conventional commits: `fix:`, `feat:`, `ci:`, etc.
-- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras.
+- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003).
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
 - Linter versions live in three paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks), `projects/devcontainer/install-system.sh` (in-container linters), and `.github/workflows/lint.yml` (CI). Bump ruff, yamllint, and hadolint in all three together; `tests/test-lint-config-sync.sh` guards against drift.
