@@ -78,6 +78,46 @@ rc=0; out="$(tokenpath "$root" "")" || rc=$?
 assert_eq "token-path uses active-profile when DEV_CLAUDE_PROFILE is empty" \
     "$root/host/credentials/prod.token" "$out"
 
+# ---- the seed-pinned container record beats the host marker at launch ----
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-pinned' >"$root/host/credentials/pinned.token"
+printf '%s' 'sk-ant-oat01-active' >"$root/host/credentials/prod.token"
+printf 'prod' >"$root/host/credentials/active-profile"
+printf 'pinned\n' >"$root/home/.active-profile"
+rc=0; out="$(tokenpath "$root" "")" || rc=$?
+assert_eq "the container record beats the host marker" \
+    "$root/host/credentials/pinned.token" "$out"
+rc=0; out="$(tokenpath "$root" prod)" || rc=$?
+assert_eq "an explicit DEV_CLAUDE_PROFILE beats the record" \
+    "$root/host/credentials/prod.token" "$out"
+
+# ---- seeding pins the resolved profile; launches then follow the seed ----
+# The wrong-identity case: seed with DEV_CLAUDE_PROFILE=work, then the host
+# marker points elsewhere — a launch (no per-exec env) must still resolve the
+# profile the seed installed, not the marker's.
+root="$(make_sandbox)"
+printf '%s' 'sk-ant-oat01-tok' >"$root/host/credentials/work.token"
+seed "$root" work >/dev/null
+assert_eq "seed-credentials records the resolved profile" \
+    "work" "$(cat "$root/home/.active-profile")"
+printf '%s' 'sk-ant-oat01-other' >"$root/host/credentials/other.token"
+printf 'other' >"$root/host/credentials/active-profile"
+rc=0; out="$(tokenpath "$root" "")" || rc=$?
+assert_eq "launch resolution follows the seed, not the host marker" \
+    "$root/host/credentials/work.token" "$out"
+
+# ---- re-seeding follows a moved host marker (record does not self-feed) ----
+seed "$root" "" >/dev/null
+assert_eq "re-seed re-pins from the moved host marker" \
+    "other" "$(cat "$root/home/.active-profile")"
+
+# ---- seeding with no profile anywhere clears a stale record ----
+root="$(make_sandbox)"
+printf 'stale\n' >"$root/home/.active-profile"
+seed "$root" "" >/dev/null
+assert_false "an empty resolution clears the stale record" \
+    is_regular_file "$root/home/.active-profile"
+
 # ---- an explicit set-token private file overrides the store token ----
 root="$(make_sandbox)"
 printf '%s' 'sk-ant-oat01-store' >"$root/host/credentials/work.token"

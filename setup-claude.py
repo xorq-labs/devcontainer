@@ -45,6 +45,10 @@ CONTAINER_PREFS = Path(os.environ.get("CLAUDE_CONTAINER_PREFS", "/home/vscode/.c
 # setup-token (tmpfs, 0400, absent from `docker inspect`). Overridable so the
 # resolver can be exercised off-container (see tests/test-claude-token.sh).
 RUN_SECRETS_TOKEN = Path(os.environ.get("CLAUDE_RUN_SECRETS_TOKEN", "/run/secrets/claude_code_oauth_token"))
+# The profile this container's seed resolved, pinned for launches — which never
+# inherit DEV_CLAUDE_PROFILE (it is forwarded per-exec, not baked into the
+# container env). Written by `seed-credentials`, read by resolve_profile.
+ACTIVE_PROFILE_RECORD = HOME / ".active-profile"
 
 # Env sources that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's precedence order
 # (docs/adr/0002-devcontainer-setup-token-env-delivery.md). PAIRED with the
@@ -106,15 +110,49 @@ def copy_user_prefs(workspace):
         json.dump(prefs, f, indent=2)
 
 
-def resolve_profile():
-    """Which profile to seed: DEV_CLAUDE_PROFILE, else the host's active profile."""
+def resolve_profile(use_record=True):
+    """Which profile to use: DEV_CLAUDE_PROFILE, else the profile this
+    container's seed pinned, else the host's active profile.
+
+    The container record tier exists because launches never inherit
+    DEV_CLAUDE_PROFILE: it is forwarded per-exec (seeding, fix-credentials,
+    token-doctor) but is absent from the ambient container env that shells and
+    the `devcontainer claude` wrapper resolve in. Without the record, a launch
+    falls through to the HOST marker and can inject a different profile's
+    token than seeding installed — silently authenticating as the wrong
+    identity (ADR-0002's "no silent routing" goal). Seeding writes the record
+    (see `seed-credentials` in main), so every later launch resolves the same
+    profile the seed used, and a re-seed with a different profile re-pins it.
+
+    Seeding itself resolves with use_record=False: the record must not feed
+    the resolution that writes it, or a stale pin would re-seed itself forever
+    and a host profile switch + fix-credentials would never take.
+    """
     profile = os.environ.get("DEV_CLAUDE_PROFILE", "").strip()
     if profile:
         return profile
+    if use_record and ACTIVE_PROFILE_RECORD.exists():
+        record = ACTIVE_PROFILE_RECORD.read_text().strip()
+        if record:
+            return record
     marker = HOST / "credentials" / "active-profile"
     if marker.exists():
         return marker.read_text().strip()
     return ""
+
+
+def record_active_profile(profile):
+    """Pin the seed-time profile for launches (they don't see DEV_CLAUDE_PROFILE).
+
+    An empty resolution clears a stale record instead of writing one, so a
+    container seeded with no profile anywhere tracks the host marker live
+    rather than an obsolete pin.
+    """
+    if profile:
+        HOME.mkdir(parents=True, exist_ok=True)
+        ACTIVE_PROFILE_RECORD.write_text(profile + "\n")
+    elif ACTIVE_PROFILE_RECORD.exists():
+        ACTIVE_PROFILE_RECORD.unlink()
 
 
 def _set_onboarding_prefs():
@@ -444,7 +482,13 @@ def main():
     # before the REQUIRED_VARS check.
     if sys.argv[1:] == ["seed-credentials"]:
         HOME.mkdir(parents=True, exist_ok=True)
-        seed_credentials(resolve_profile())
+        # Fresh resolution (env > host marker, record excluded), then pin it
+        # for launches BEFORE seeding: token-path in every later shell must
+        # agree with what this seed installed (see resolve_profile).
+        # fix-credentials re-runs this, re-pinning.
+        profile = resolve_profile(use_record=False)
+        record_active_profile(profile)
+        seed_credentials(profile)
         return
 
     # Standalone token resolver (used by the token-env snippet and the

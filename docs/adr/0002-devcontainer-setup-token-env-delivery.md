@@ -53,7 +53,12 @@ source and applied at every claude entry point.
   Docker/Compose file-based secret (`/run/secrets/claude_code_oauth_token`, the
   sanctioned mountless transport), else the read-only host store
   (`~/.claude-host/credentials/<profile>.token`, profile from
-  `DEV_CLAUDE_PROFILE` or the host `active-profile` marker). The store copy
+  `DEV_CLAUDE_PROFILE`, else the container record seeding pinned at
+  `~/.claude/.active-profile`, else the host `active-profile` marker — the
+  record exists because launches never inherit the per-exec
+  `DEV_CLAUDE_PROFILE`, and without it a launch could inject a different
+  profile's token than seeding installed; seeding re-resolves fresh, env >
+  marker, and re-pins). The store copy
   is read **live, never seeded** — a host-side delete takes effect on the next
   launch (this matters: a setup-token has **no CLI revoke**, so deletion is the
   only revoke; see Consequences).
