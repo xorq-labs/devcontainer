@@ -16,17 +16,7 @@ jobs:
         run: |
           git config --global user.email "ci@example.com"
           git config --global user.name "CI"
-      - name: Run tests/*.sh
-        run: |
-          shopt -s nullglob
-          tests=(tests/*.sh)
-          if [ "${#tests[@]}" -eq 0 ]; then
-            echo "no test scripts found under tests/" >&2
-            exit 1
-          fi
-          rc=0
-          for t in "${tests[@]}"; do
-            echo "== $t =="
-            bash "$t" || rc=1
-          done
-          exit "$rc"
+      # tests/run-all is the single entry point for the suite; CI must not
+      # re-implement its loop (see the header comment in tests/run-all).
+      - name: Run test suites
+        run: bash tests/run-all

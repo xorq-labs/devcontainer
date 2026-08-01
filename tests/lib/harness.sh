@@ -15,6 +15,15 @@
 # the tests set up. Suites drive these explicitly, so start from a clean slate.
 unset DEV_WORKSPACE DEV_MAIN_TREE DEV_MAIN_GIT DEV_WORKTREE \
     DEV_PROJECT_DIR DEV_PROJECT_NAME DEV_CONTAINER_WORKSPACE
+# Behavior-altering DEV_* inputs honored by dev/devcontainer and
+# setup-claude.py. The repo's own .envrcs/.envrc.user exports
+# DEV_MODEL_VERSION, so on a direnv-active host these leak into suites that
+# assert on resolved output (e.g. tests/test-resolve-list-cleanup.sh) and fail
+# locally while CI stays green.
+unset DEV_MODEL_VERSION DEV_DANGEROUSLY_SKIP_PERMISSIONS \
+    DEV_NIX_BASE DEV_NIX_BASE_IMAGE \
+    DEV_CLAUDE_PROFILE DEV_CLAUDE_LOGS DEV_CLAUDE_VERIFY DEV_CLAUDE_VERIFY_CMD \
+    DEV_HOST_PROJECT_KEY DEV_CONTAINER_PROJECT_KEY
 # The unprefixed project.env names too — dev/devcontainer now ignores ambient
 # values, and suites that assert on that must not start from a polluted slate.
 unset MODEL_VERSION DANGEROUSLY_SKIP_PERMISSIONS
@@ -50,6 +59,15 @@ assert_eq() {
         _pass "$label"
     else
         _fail "$label" "expected: $expected" "actual:   $actual"
+    fi
+}
+
+assert_nonempty() {
+    local label="$1" value="$2"
+    if [ -n "$value" ]; then
+        _pass "$label"
+    else
+        _fail "$label" "empty — anchor missed? file moved?"
     fi
 }
 
