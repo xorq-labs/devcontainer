@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
+# Project-specific system packages and language toolchain.
+# Runs as root during `docker build`, after the generic Dockerfile installs
+# the infrastructure layer (Node + claude-code, gh, socat, just, sops).
+#
+# dasher is a pure-Python uv project: it needs only a C toolchain (for
+# packages with native extensions) and uv itself.
 set -euo pipefail
 
 apt-get update
 apt-get install -y --no-install-recommends build-essential
 rm -rf /var/lib/apt/lists/*
 
+# uv (Python package manager) — pinned installer, checksum-verified.
 UV_VERSION=0.7.8
 UV_INSTALLER_SHA256=3e3043ca08e1156fbe18d90a1a4def3ae795418857c8f4ed3f807ffc45e51c3d
 curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" -o /tmp/uv-install.sh

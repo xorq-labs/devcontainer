@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# Project-specific in-container setup. Runs inside the container as user
+# vscode, invoked by dev/devcontainer.
+#
+# Subcommands:
+#   first-run        — dependency install, pre-commit hooks, and direnv wiring
+#   sync-if-needed   — re-sync deps only when uv.lock is newer than the
+#                      .venv/.last-sync stamp (cheap enough to run every start)
 set -euo pipefail
 cmd="${1:-first-run}"
 case "$cmd" in
@@ -14,12 +21,16 @@ case "$cmd" in
             echo 'eval "$(direnv hook bash)"' >> ~/.bashrc
         fi
 
+        # Whitelist the workspace so direnv loads .envrc without a manual
+        # `direnv allow` in every fresh container.
         mkdir -p ~/.config/direnv
         cat > ~/.config/direnv/direnv.toml <<TOML
 [whitelist]
 prefix = ["${PWD}"]
 TOML
 
+        # Seed the per-developer (gitignored) .envrc.user from the tracked
+        # template on first run only — never overwrite an existing one.
         if [ -f .envrcs/.envrc.user.template ] && [ ! -e .envrcs/.envrc.user ] && [ ! -L .envrcs/.envrc.user ]; then
             cp .envrcs/.envrc.user.template .envrcs/.envrc.user
         fi

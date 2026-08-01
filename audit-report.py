@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Analyze the container audit log and report tool usage."""
+"""Summarize the container audit log written by audit-hook.
+
+Reads the JSONL log (one {ts, tool, input} entry per tool invocation,
+.claude/container-audit/audit.jsonl), tallies tool usage and Bash command
+prefixes, and derives permission patterns (Bash(<prefix>:*), tool names)
+that it compares against the host's ~/.claude/settings.json allow list.
+Invoked by `devcontainer audit` as:
+
+    audit-report.py <audit.jsonl> [mode] [audit-prefixes.txt]
+
+Modes:
+    --summary  (default) tool counts, Bash prefix counts, and the patterns
+               not covered by the host baseline
+    --new      only the patterns missing from the host baseline, one per line
+    --all      every observed pattern, one per line
+"""
 
 import json
 import subprocess
@@ -14,6 +29,15 @@ def load_grouped_prefixes(prefixes_file=None):
     else:
         list_file = Path(__file__).parent / "defaults" / "audit-prefixes.txt"
     read_list = Path(__file__).parent / "lib" / "list-file.sh"
+    # Shell out to lib/list-file.sh instead of parsing here: read_list is the
+    # single parser for overlay list files (its header says Python callers
+    # invoke it via subprocess), so comment/blank-line/whitespace handling
+    # can't drift between the bash and Python consumers.
+    #
+    # The silent empty-set fallback is deliberate: read_list treats a missing
+    # file as empty, so an overlay without audit-prefixes.txt (devcontainer
+    # audit always passes the overlay path) simply gets no two-word prefix
+    # grouping. The except covers environment failures (no bash, lib missing).
     try:
         result = subprocess.run(
             ["bash", "-c", f'. "{read_list}" && read_list "{list_file}"'],

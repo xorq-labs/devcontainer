@@ -2,5 +2,11 @@ export UV_TOOL_DIR="${direnv_root}/.tools/uvx"
 export UV_TOOL_BIN_DIR="${direnv_root}/.tools/bin"
 PATH_add "${direnv_root}/.tools/bin"
 
-# Install git hooks (idempotent — only touches missing or already-symlinked hooks)
+# Install git hooks as a side effect of `direnv allow`: symlink_hooks (see
+# lib/git.sh) links each dev/hooks/* file — notably the custom pre-commit
+# wrapper — into .git/hooks. Idempotent: it only touches hooks that are
+# missing or already symlinks, never a real file someone placed there.
+# This is the installation step the README refers to when it says never to
+# run `pre-commit install` — that would replace the symlinked custom hook
+# with pre-commit's own stub.
 (source "${direnv_root}/lib/git.sh" && symlink_hooks "${direnv_root}")
