@@ -40,8 +40,12 @@ the two deviations collide with that head-on:
 The mechanism the new layout must preserve: setup-worktree creates an
 **absolute** symlink (`ln -sv "$main/$target" ...`), and `docker-compose.yml`
 bind-mounts the main checkout **at its own host path** inside the container
-(`- ${DEV_MAIN_TREE}:${DEV_MAIN_TREE}:cached` — put there so worktree
-`.git` files' absolute `gitdir:` pointers resolve). So inside a worktree's
+(`- ${DEV_MAIN_TREE}:${DEV_MAIN_TREE}:cached`; the sibling
+`${DEV_MAIN_GIT}` mount just above it is the one carrying the "so worktree
+`.git` files' absolute `gitdir:` pointers resolve" rationale, and the main
+tree is mounted at its own host path for the same reason — absolute paths
+into the main checkout have to mean the same thing inside the container as
+outside). So inside a worktree's
 container, `/workspaces/src/.claude` dereferences to the main checkout's host
 path, which is mounted, and audit writes land in the main checkout. The
 current symlink does **not** dangle in-container; aggregation works through
@@ -71,9 +75,10 @@ its state subdirectories, so tracked content under `.claude/` can coexist.
   removes the links and its existing `rmdir -p` pass removes the then-empty
   `.claude` directory (or leaves it when tracked `agents/` content remains,
   which `git worktree remove` owns).
-- **`settings.local.json` stays per-worktree** (not symlinked), matching the
+- **`settings.local.json` is per-worktree** (not symlinked), matching the
   upstream convention: it is the developer's local, per-checkout Claude
-  config, not aggregated state.
+  config, not aggregated state. This is a *change* — the whole-directory
+  symlink made it shared; see Consequences.
 - **`.claude/worktrees/` is not symlinked**: it is Claude Code's own worktree
   storage in the main checkout; sharing it into a worktree through a link
   from inside a worktree is recursive (a worktree containing a link to the
@@ -99,11 +104,20 @@ its state subdirectories, so tracked content under `.claude/` can coexist.
    and deletes the shared state; under the new layout the subdir is itself
    the symlink, and `rm -rf` on it would remove just the link and leave the
    shared state — silently voiding the documented shared blast radius. Fixed:
-   `clean` now resolves the path (`readlink -f`), `rm -rf`s the target, and —
-   when the subdir was a symlink — recreates the (empty) target directory so
-   the link does not dangle. That last step matters: `setup-claude.py`'s
-   `Path.mkdir(exist_ok=True)` raises `FileExistsError` on a dangling
-   symlink, so leaving one would break the next container setup.
+   `clean` now resolves the path (`readlink -f`), `rm -rf`s the target, and
+   **always** recreates the (empty) target directory. Recreating
+   unconditionally rather than only when the caller's own subdir is a symlink
+   is the point: `clean` run from the main checkout (or from a legacy
+   worktree, where the subdir resolves *through* the whole-dir link and so is
+   not itself a symlink) deletes the same shared directory that every
+   new-layout sibling worktree links to, and would leave all of those
+   dangling. `setup-claude.py`'s `Path.mkdir(exist_ok=True)` raises
+   `FileExistsError` on a dangling symlink and `audit-hook` would append into
+   nothing, so the recreate is what keeps the blast radius "shared state
+   emptied" rather than "sibling worktrees broken". It costs nothing on a
+   main checkout, where the target is the real directory just deleted.
+   `tests/test-worktree-claude-layout.sh` exercises the block on all three
+   layouts.
 3. **Existing worktrees** — legacy mode, as decided above: setup-worktree
    remains idempotent on both layouts, and cleanup-worktree keeps parsing the
    legacy manifest line (`symlink\t.claude`) unchanged.
@@ -117,14 +131,35 @@ its state subdirectories, so tracked content under `.claude/` can coexist.
   each developer must mirror the template change into their main checkout's
   live `.gitignore` (or re-copy it from `.gitignore.template`). Until they
   do, a bare `.claude` entry keeps hiding `.claude/agents/` from git status
-  in that checkout — confusing but harmless; the files are still tracked.
+  in that checkout — already-tracked agent files stay tracked and their edits
+  still show, but adding a **new** agent definition requires `git add -f`
+  (a plain `git add .claude/agents/foo.md` fails with "ignored by one of your
+  .gitignore files"), so the migration is a prerequisite for authoring
+  agents, not merely cosmetic.
+- **`settings.local.json` becomes per-worktree — a behavior change for
+  existing developers.** Under the whole-directory symlink a worktree's
+  `.claude/settings.local.json` *was* the main checkout's file, so permission
+  grants were shared across every worktree by accident of the layout. Under
+  the per-subdir layout each worktree gets its own (it is deliberately not
+  symlinked; see the Decision). Consequence: previously-shared grants stop
+  following you into worktrees, and every newly created worktree starts with
+  no local permissions and re-prompts. This matches the upstream convention
+  and is intentional; developers who want a grant everywhere should put it in
+  the tracked project `.claude/settings.json` or in their user-level
+  `~/.claude/settings.json` instead of a per-worktree local file.
 - Worktrees created from now on get the per-subdir layout; existing worktrees
   keep working in legacy mode until migrated. Every consumer of the layout
   (`setup-worktree`, `cleanup-worktree`, `devcontainer clean`) tolerates
   both; `tests/test-worktree-claude-layout.sh` pins that.
 - `devcontainer clean` keeps its shared blast radius (audit log + session
-  stubs for ALL worktrees) on both layouts, and now leaves a valid empty
-  shared dir behind when run from a per-subdir worktree.
+  stubs for ALL worktrees) on both layouts, and always leaves a valid empty
+  shared directory behind, so no worktree's state symlink is left dangling by
+  a clean run from anywhere.
+- `cleanup-worktree`'s pre-flight now lists untracked files individually
+  (`--untracked-files=all`). Because `.claude` is a real directory, git's
+  default output collapses it to `?? .claude/`, which matches no manifest
+  entry; in a repo whose live `.gitignore` does not ignore `.claude`, that
+  collapsed entry would block removal of every worktree.
 - Anything new under `.claude/` is ignored by default (`.claude/*`); tracking
   more upstream-shared content later (e.g. project `settings.json`) is a
   one-line negation added to the template, not a redesign.

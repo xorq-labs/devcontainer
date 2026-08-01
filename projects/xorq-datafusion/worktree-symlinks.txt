@@ -1,9 +1,11 @@
 # Paths under the main worktree to symlink into new worktrees.
 # Format: see lib/list-file.sh.
 #
-# Note: `.claude` is always symlinked by setup-worktree itself (audit
-# logs and session captures are devcontainer infrastructure, not
-# project-specific) — don't list it here.
+# Note: `.claude` is handled by setup-worktree itself — it makes a real
+# .claude directory and symlinks only container-audit/ and
+# container-sessions/ from the main checkout (audit logs and session
+# captures are devcontainer infrastructure, not project-specific) — so
+# don't list `.claude` or those subdirs here.
 #
 # `ci/ibis-testing-data` is backed by test fixture data; this symlink lets
 # sibling worktrees resolve into the same directory.

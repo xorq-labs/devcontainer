@@ -1,2 +1,4 @@
 # Paths under the main worktree to symlink into new worktrees.
-# .claude/ is always symlinked (hardcoded in setup-worktree).
+# .claude is hardcoded in setup-worktree: a real directory whose
+# container-audit/ and container-sessions/ subdirs are symlinked to the main
+# checkout. Don't list it (or those subdirs) here.

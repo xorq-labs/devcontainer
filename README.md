@@ -220,7 +220,7 @@ From your project directory, create a project overlay with `devcontainer init --
 
 All overlay files are optional. `install-system.sh` and `setup-env.sh` must exist (the Dockerfile `COPY`s them) but may be empty no-ops; `compose.override.yml` and the `*.txt` lists may be missing entirely — `read_list` treats a missing list as empty.
 
-Two worktree paths are hardcoded in `dev/setup-worktree` rather than living in `worktree-{symlinks,copies}.txt`: `.gitignore` is always copied (git opens it with `O_NOFOLLOW`, so a symlink would `ELOOP`), and `.claude` is symlinked whenever the main checkout has one (audit logs and session captures are devcontainer infrastructure that must aggregate in the main checkout regardless of project).
+Two worktree paths are hardcoded in `dev/setup-worktree` rather than living in `worktree-{symlinks,copies}.txt`: `.gitignore` is always copied (git opens it with `O_NOFOLLOW`, so a symlink would `ELOOP`), and `.claude` is always set up as a **real directory with its two state subdirectories symlinked** — `container-audit/` and `container-sessions/` point at the main checkout, because audit logs and session captures are devcontainer infrastructure that must aggregate there regardless of project, while the rest of `.claude` (tracked content like `agents/`, and per-worktree `settings.local.json`) stays local to the worktree. Worktrees created before this layout carry a whole-directory `.claude` symlink; setup-worktree leaves those as-is (migrate by deleting the symlink and re-running it). See [docs/adr/0003-track-claude-agents-in-git.md](docs/adr/0003-track-claude-agents-in-git.md).
 
 ## Tab completion
 
@@ -350,7 +350,7 @@ devcontainer audit --clear
 Per-pid session status stubs are written to `.claude/container-sessions/` in the workspace, visible from the host.
 
 > [!NOTE]
-> In a worktree, `.claude` is a symlink to the main checkout's `.claude` (`dev/setup-worktree` links it whenever the main checkout has one, so audit logs and session captures aggregate in one place). The audit log and session stubs are therefore **shared across all worktrees** — `devcontainer audit` reports every worktree's activity, and `devcontainer clean` (or `audit --clear`) run from *any* worktree clears them for all.
+> In a worktree, `.claude` is a real directory, but `.claude/container-audit` and `.claude/container-sessions` are symlinks to the main checkout's copies (`dev/setup-worktree` always links those two so audit logs and session captures aggregate in one place; pre-existing worktrees may still have the older whole-directory `.claude` symlink, which resolves the same way). The audit log and session stubs are therefore **shared across all worktrees** — `devcontainer audit` reports every worktree's activity, and `devcontainer clean` (or `audit --clear`) run from *any* worktree clears them for all. Everything else under `.claude` is per-worktree, including `settings.local.json`.
 
 ### Session transcripts live on the host
 
