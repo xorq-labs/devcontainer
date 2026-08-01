@@ -59,6 +59,8 @@ Commands:
                                         use standalone when agent changes mid-session)
   refresh-gpg                         re-forward GPG agent (runs automatically on up/exec/claude;
                                         use standalone when host gpg-agent restarts)
+  refresh-x11                         re-forward X11 display (runs automatically on up/exec/claude;
+                                        use standalone when the host X server or DISPLAY changes)
   copy-host-transcripts               mirror host Claude session transcripts into the
                                         container so `claude --resume` finds them (runs
                                         automatically on up/exec/claude; use standalone to
@@ -773,6 +775,9 @@ require_tty() {
 . "$DEV_BASE_DIR/lib/list-file.sh"
 . "$DEV_BASE_DIR/lib/host-mounts.sh"
 
+# Ordering: this must run before the FIRST `dc` invocation. dc's compose file
+# list includes the generated host-mounts override, so a dc call placed above
+# this line would silently run without the host mounts.
 generate_host_mounts_override
 
 # Named-volume mount targets from the merged compose config — these come
@@ -921,6 +926,13 @@ dc_up() {
 
 ensure_up() {
     # Subshell scopes fd 9 so no child process can inherit the flock.
+    #
+    # Invariant: the per-worktree lock is held on fd 9 (the repo-scoped build
+    # lock in ensure_image is fd 8). ANY helper backgrounded inside this locked
+    # region MUST be launched with `9>&-` — as the setup_*_forward calls below
+    # are — otherwise the orphaned child inherits the fd and holds the lock for
+    # as long as it lives, and every later invocation hangs on a permanent
+    # "Another devcontainer operation is in progress".
     (
         if ! flock -n 9; then
             echo "Another devcontainer operation is in progress, waiting..."
@@ -1033,7 +1045,7 @@ case "${1:-up}" in
         ;;
     clean)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
-            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, audit log, and session status stubs). The project image and shared caches are kept (shared by ALL worktrees) — use 'devcontainer clean-images' / 'clean-caches' to remove those. Claude session transcripts are kept: they live on the host in $DEV_CLAUDE_LOGS. Continue? [y/N] " answer
+            read -rp "This will destroy $DEV_CONTAINER_NAME (container, per-worktree volumes, audit log, and session status stubs). The audit log and session stubs live in the main checkout's .claude (worktrees symlink to it), so cleaning from ANY worktree clears them for ALL worktrees. The project image and shared caches are kept (shared by ALL worktrees) — use 'devcontainer clean-images' / 'clean-caches' to remove those. Claude session transcripts are kept: they live on the host in $DEV_CLAUDE_LOGS. Continue? [y/N] " answer
             if [[ "$answer" != [yY]* ]]; then
                 exit 0
             fi
@@ -1198,6 +1210,8 @@ case "${1:-up}" in
         echo "GPG agent forwarded into $DEV_CONTAINER_NAME"
         ;;
     refresh-x11)
+        # Re-forward the host X11 display into the running container without a
+        # restart (also runs automatically on up/exec/claude via setup_x11_forward).
         if ! is_running; then
             echo "error: container is not running" >&2
             exit 1
