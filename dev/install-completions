@@ -43,10 +43,24 @@ post_install_hint() {
 }
 
 install_one() {
-    local shell="$1" dest
+    local shell="$1" dest tmp
     dest="$(target_path "$shell")" || { echo "error: unsupported shell: $shell" >&2; return 1; }
     mkdir -p "$(dirname "$dest")"
-    "$_gen" "$shell" > "$dest"
+    # Generate to a sibling temp file and rename into place. Redirecting
+    # straight into $dest truncates it before the generator has produced a
+    # byte, so a generator failure (a malformed command table is enough) would
+    # replace a working installed completion with an empty file — a shell
+    # loads that silently and completion just stops working.
+    tmp="$(mktemp "$dest.XXXXXX")" || return 1
+    if ! "$_gen" "$shell" > "$tmp"; then
+        rm -f "$tmp"
+        echo "error: generating $shell completions failed; left $dest untouched" >&2
+        return 1
+    fi
+    # mktemp is 0600; completions are world-readable data, and the plain
+    # redirect this replaces created them at 0644 under a default umask.
+    chmod 644 "$tmp"
+    mv -f "$tmp" "$dest"
     echo "installed $shell completions → $dest"
     post_install_hint "$shell" "$dest"
 }

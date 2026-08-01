@@ -167,11 +167,23 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   `dev/devcontainer-completions` are all GENERATED from it, so those four
   encodings can no longer disagree — no test is needed for that, it is
   structural. What is guarded is the one pair still hand-written at both ends
-  (dispatch arms == table rows), plus table well-formedness and the generated
-  scripts parsing in their target shell (`tests/test-completions-sync.sh`).
+  (dispatch arms == table rows), plus table well-formedness, the generated
+  scripts parsing in their target shell, and every table name actually
+  reaching all three of them — generation makes the lists agree with each
+  other, not with the table (`tests/test-completions-sync.sh`).
   The table is read at generation time only: `install-completions` and the
   Nix package redirect the generator's stdout to a file, so an installed
   completion script has no runtime dependency on the repo.
+- The `arg-type` vocabulary is a four-file convention: `ok_type` in
+  `lib/command-table.sh`, the doc block in `lib/command-table.tsv`, and one
+  `case "${types[$n]}"` block per shell in `dev/devcontainer-completions`. A
+  value known to the validator but to no generator emits no wiring, silently
+  (`tests/test-completions-sync.sh` builds a synthetic one-command-per-type
+  table and requires non-empty, distinct wiring in all three shells).
+- Because generation can now fail (a malformed table), writing a generated
+  completion must be atomic: `dev/install-completions` renders to a temp file
+  and renames, never redirecting into the installed file
+  (`tests/test-completions-sync.sh`).
 - The worktree manifest format written by `dev/setup-worktree`
   (`<action>\t<path>`, plus a legacy bare-path form) is parsed by
   `dev/cleanup-worktree`; the two must change in lockstep (—).

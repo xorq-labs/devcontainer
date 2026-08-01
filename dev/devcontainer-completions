@@ -50,9 +50,14 @@ all_names="${names[*]}"
 # whichever shell consumes them. Do not rely on authoring discipline (the old
 # hand-maintained fish list simply avoided apostrophes) — escape here.
 
-# zsh `'name:description'`: `'` ends the quote, `:` separates the two fields.
+# zsh `'name:description'`: `'` ends the quote, `:` separates the two fields,
+# and `\` is the escape character the completion system strips back off. The
+# backslash pass MUST come first, or it would double the backslashes this
+# function itself just added (and an input backslash would otherwise eat the
+# `\:` escape of a following colon).
 zsh_escape() {
     local s="$1"
+    s="${s//\\/\\\\}"
     s="${s//\'/\'\\\'\'}"
     s="${s//:/\\:}"
     printf '%s' "$s"

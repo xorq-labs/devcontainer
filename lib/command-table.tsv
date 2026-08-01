@@ -33,8 +33,9 @@
 #               38-column indent.
 #
 # The generator rejects a malformed table (duplicate name, unknown arg-type,
-# empty description, wrong column count, `:` inside an arg-word description)
-# rather than emitting a broken completion script.
+# empty description, wrong column count, `:` inside an arg-word description,
+# leading/trailing whitespace in any column) rather than emitting a broken
+# completion script. CRLF line endings are tolerated: the `\r` is stripped.
 #
 #name	arg-syntax	arg-type	arg-words	arg-label	short-desc	usage-desc
 

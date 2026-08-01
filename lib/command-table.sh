@@ -29,8 +29,10 @@ command_table_path() {
 command_table_rows() {
     local path="${1:-}"
     [ -n "$path" ] || path="$(command_table_path)"
-    if [ ! -r "$path" ]; then
-        echo "error: command table not found (or unreadable): $path" >&2
+    # -f as well as -r: a directory is readable, and awk would answer with its
+    # own "read error (Is a directory)" instead of this script's message.
+    if [ ! -f "$path" ] || [ ! -r "$path" ]; then
+        echo "error: command table not found (or not a readable file): $path" >&2
         return 1
     fi
     awk -F'\t' '
@@ -42,11 +44,25 @@ command_table_rows() {
             split("none file dir command", _t, " ")
             for (i in _t) ok_type[_t[i]] = 1
         }
+        # A CRLF checkout would otherwise carry the \r into the last column,
+        # where it leaks verbatim into `devcontainer help` output and into the
+        # quoted descriptions of the generated completions.
+        { sub(/\r$/, "") }
         /^[[:space:]]*($|#)/ { next }
         {
             if (NF != 7) {
                 err(sprintf("expected 7 tab-separated columns, got %d", NF))
                 next
+            }
+            # Padding whitespace is never intended in a tab-separated table and
+            # is invisible in an editor, but it reaches the user verbatim (help
+            # text, completion menus). Reject rather than silently trim: what a
+            # trim should do to `arg-syntax` is a judgement call the table
+            # author should make, not this reader.
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^[[:space:]]/ || $i ~ /[[:space:]]$/) {
+                    err(sprintf("%s: column %d has leading/trailing whitespace: [%s]", $1, i, $i))
+                }
             }
             if ($1 !~ /^[a-z][a-z0-9-]*$/) { err("bad command name: " $1) }
             if ($1 in seen) { err("duplicate command name: " $1) }

@@ -82,6 +82,11 @@ stdenvNoCC.mkDerivation {
     # `devcontainer install-completions` step needed. Generated from the same
     # single source of truth (`devcontainer-completions <shell>`) the runtime
     # command uses, so the two can never drift.
+    #
+    # Unlike dev/install-completions, redirecting straight into the target is
+    # safe here: $out is a fresh empty build output, so there is no installed
+    # file to truncate, and a generator failure fails the derivation and
+    # discards $out wholesale. Do not copy this shape back into the installer.
     gen="$tree/dev/devcontainer-completions"
     mkdir -p "$out/share/bash-completion/completions" \
              "$out/share/zsh/site-functions" \

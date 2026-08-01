@@ -75,11 +75,17 @@ Usage: devcontainer [-w dir] <command>
 
 Commands:
 USAGE
-    usage_commands
+    # An unloadable table stays a hard error (callers exit non-zero, and
+    # command_table_rows has already said why on stderr) — but the usage text
+    # must not simply stop after the "Commands:" header with nothing under it.
+    usage_commands || {
+        echo "  (unavailable — the command table failed to load; see the error above)"
+        return 1
+    }
 }
 
 if [[ "${1:-}" =~ ^(-h|--help|help)$ ]]; then
-    show_usage
+    show_usage || exit 1
     exit 0
 fi
 
