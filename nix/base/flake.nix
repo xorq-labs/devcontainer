@@ -112,26 +112,24 @@
               # infraEnv/cacert references in `config`.
               maxLayers = 64;
 
-              # The one invariant imperative bit from the Dockerfile: the
-              # credentials symlink into the credentials/ bind-mount. UID
-              # remap and the setup-* script copies live in
-              # Dockerfile.nix-default, because they can't (UID) or shouldn't
-              # (per-project scripts) be baked into this shared,
-              # content-addressed base.
+              # The one invariant imperative bit from the root Dockerfile:
+              # pre-create the vscode home dirs. No baked .credentials.json
+              # symlink — ADR-0001 removed the shared credentials bind-mount;
+              # setup-claude seeds a private per-container token into the
+              # claude-home volume at container setup. UID remap and the
+              # setup-* script copies live in Dockerfile.nix-default, because
+              # they can't (UID) or shouldn't (per-project scripts) be baked
+              # into this shared, content-addressed base.
               enableFakechroot = true;
               fakeRootCommands = ''
                 mkdir -p home/vscode/.claude home/vscode/.cache home/vscode/.ssh
-                ln -sf credentials/.credentials.json home/vscode/.claude/.credentials.json
                 chmod 700 home/vscode/.ssh
                 # Match the root Dockerfile's chown: fakeroot records these
                 # paths as uid 0 otherwise, and the layer's home/vscode dir
                 # entry would reset the base's vscode-owned home to root:root
                 # on apply. Numeric ids — vscode is 1000:1000 in the MS base
-                # and there's no passwd in this build environment. -R skips
-                # the dangling credentials symlink; the -h line fixes the
-                # link itself (as in the Dockerfile).
+                # and there's no passwd in this build environment.
                 chown -R 1000:1000 home/vscode
-                chown -h 1000:1000 home/vscode/.claude/.credentials.json
               '';
 
               config = {
