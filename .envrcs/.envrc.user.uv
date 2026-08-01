@@ -6,7 +6,7 @@ PATH_add "${direnv_root}/.tools/bin"
 # lib/git.sh) links each dev/hooks/* file — notably the custom pre-commit
 # wrapper — into .git/hooks. Idempotent: it only touches hooks that are
 # missing or already symlinks, never a real file someone placed there.
-# This is the installation step the README refers to when it says never to
+# This is the installation step CLAUDE.md refers to when it says never to
 # run `pre-commit install` — that would replace the symlinked custom hook
 # with pre-commit's own stub.
 (source "${direnv_root}/lib/git.sh" && symlink_hooks "${direnv_root}")

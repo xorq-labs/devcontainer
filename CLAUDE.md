@@ -79,7 +79,8 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   drives the recreate prompt and can differ from the image tag
   (`tests/test-image-fingerprint.sh`).
 - The nix route builds `nix/base/Dockerfile.nix-default` and never hashes the
-  root Dockerfile — hashing it there over-invalidates nix images (#53) (—).
+  root Dockerfile — hashing it there over-invalidates nix images (#53)
+  (`tests/test-image-fingerprint.sh`).
 - `.dockerignore` denies `lib/` wholesale and re-includes an allowlist; every
   default-context `COPY lib/...` in EITHER Dockerfile needs a matching
   `!lib/...` line (`tests/test-dockerignore-lib-allowlist.sh`).
@@ -88,7 +89,7 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   only breaks the other at runtime (fingerprint + dockerignore guards catch
   most, not all, of this).
 - The classic-arg detection regex in `overlay_sets_classic_args()` in
-  `dev/devcontainer` must match the root `Dockerfile`'s classic-only ARG list
+  `dev/devcontainer` must match the root `Dockerfile`'s classic-routing ARG set
   (`tests/test-classic-args-sync.sh`).
 - The `BASE_IMAGE` pin line in `nix/base/compose.nix-base.yml` must stay
   byte-anchored to the grep in `ensure_nix_base()` in `dev/devcontainer`
@@ -115,9 +116,11 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - Compose file order in `dc()` is load-bearing: the nix-base override is
   appended after the project override so its `build.dockerfile` wins;
   host-mounts override generation must run before the first `dc` call (—).
-- Compose host-dir mounts use `${VAR:?}` with the export guaranteed by
-  `dev/devcontainer`; a `:-/dev/null` default is allowed only where
-  `/dev/null` is a legitimate value (`DEV_DOCKER_SOCK`) (—).
+- Compose host-dir mounts on a `DEV_*` variable use `${VAR:?}`, with the
+  export guaranteed by `dev/devcontainer`; a `:-/dev/null` default is allowed
+  only where `/dev/null` is a legitimate value (`DEV_DOCKER_SOCK`). The
+  `${HOME}`-rooted mounts are the deliberate exception — they read the ambient
+  value, not a `dev/devcontainer` export (—).
 - `sanitize_name()` in `lib/git.sh` has three consumers that must agree:
   `dev/devcontainer`, `dev/init`, and a Python re-implementation in
   `dev/devcontainer-sessions` (`tests/test-sanitize-names.sh`,
@@ -127,8 +130,9 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   `-devcontainer-<compose-project>` — renaming any breaks
   `dev/devcontainer-sessions` (partially tested:
   `tests/test-devcontainer-sessions.sh`).
-- `.claude` is symlinked from every worktree to the main checkout — audit
-  logs and session stubs are shared, so `clean` affects all worktrees (—).
+- `.claude` is symlinked from a worktree to the main checkout when the main
+  checkout has one (`link_from_main` skips a missing source) — audit logs and
+  session stubs are then shared, so `clean` affects all worktrees (—).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).
@@ -145,6 +149,9 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   (`tests/test-init-nix.sh`).
 - Completion command lists (bash/zsh/fish) and `show_usage` must match the
   dispatch case in `dev/devcontainer` (`tests/test-completions-sync.sh`).
+- The worktree manifest format written by `dev/setup-worktree`
+  (`<action>\t<path>`, plus a legacy bare-path form) is parsed by
+  `dev/cleanup-worktree`; the two must change in lockstep (—).
 
 ## Conventions
 
