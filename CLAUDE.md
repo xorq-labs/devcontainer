@@ -62,13 +62,22 @@ agent hits a design fork mid-PR, it drafts the ADR amendment (options,
 trade-offs, recommendation) and pushes it for review rather than blocking on
 an interactive question. Current records: ADR-0001 (private credential
 seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
-`.claude/agents/` in git; per-subdir state symlinks), and nix/base/README.md
+`.claude/agents/` in git; per-subdir state symlinks), ADR-0005 (guard
+taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
+reserved by #81), and nix/base/README.md
 "Design decisions" for the base-image record.
 
 ## Invariants
 
 The load-bearing cross-file facts, one line each, with the drift guard that
-enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
+enforces it in parentheses, typed per ADR-0005: `test:` (hermetic suite check),
+`tool:` (the fact lives outside the tree; a tool that refuses to write a bad
+value is the guard), `ci:` (needs a runner or the network), `structural`
+(generated, cannot drift), or `unguarded: <why>` (deliberate, reason
+mandatory). Annotations compose with `;` when a fact is guarded at two layers
+(`tool: dev/bump-x; test: tests/test-bump-x.sh`). Legacy `—` = not yet typed —
+type it when you touch it; a bare `(tests/test-x.sh)` citation predates the
+taxonomy and reads as `test:`.
 
 - Every Dockerfile `COPY` source from the default context is hashed by
   `image_config_files()` in `dev/devcontainer`, or edits to it silently reuse
@@ -268,3 +277,5 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
 - Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift. hadolint additionally carries two per-arch checksums in `install-system.sh` that no test can verify — bump it with `devcontainer bump-hadolint` rather than by hand, and use `devcontainer bump-hadolint --verify` to confirm the committed checksums really are the release's.
 - Any convention that spans two files gets a drift-guard test when it is introduced (existing examples: `tests/test-claude-code-pin-sync.sh`, `tests/test-lint-config-sync.sh`, `tests/test-classic-args-sync.sh`, `tests/test-completions-sync.sh`, `tests/test-dockerignore-lib-allowlist.sh`). A convention only its author knows about will drift.
+- Guards follow ADR-0005. Type every new invariant's guard (see the Invariants header for the vocabulary). When adding or materially changing a guard, break the invariant once, watch the guard go red, and record the mutation in the test's header comment. Prefer generating the second copy from the first, then deriving the expectation by parsing the source of truth at check time; restate-and-compare is the fallback, not the default.
+- A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume.
