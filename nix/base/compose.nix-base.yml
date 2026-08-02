@@ -35,4 +35,4 @@ services:
         # DEV_NIX_BASE_IMAGE overrides for a locally-built base (see header);
         # ensure_nix_base() greps the pinned default out of this line.
         BASE_IMAGE: >-
-          ${DEV_NIX_BASE_IMAGE:-ghcr.io/xorq-labs/devcontainer-nix-base@sha256:287003b1fe70641b8426e66912633d1310c1cb389583f109a876a07875e35f2c}
+          ${DEV_NIX_BASE_IMAGE:-ghcr.io/xorq-labs/devcontainer-nix-base@sha256:c5362bfed4d6fe6cba40986e6de2364d45011b4802d5e67216daa42c897ba6f7}
