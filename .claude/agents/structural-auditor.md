@@ -1,6 +1,6 @@
 ---
 name: structural-auditor
-description: Audits this repo for RECURRING structural causes — classes of bug that keep coming back — using the current tree plus git and PR history. Repo-scoped and deliberate, not per-PR; use pr-reviewer for a diff. Optionally give it a scope (a subsystem, a time window, a set of issues).
+description: Audits this repo for RECURRING structural causes — classes of bug that keep coming back — using the current tree plus git and PR history. Repo-scoped and deliberate, not per-PR; use pr-reviewer for a diff. Optionally give it a scope (a subsystem, a time window, a set of issues). Most productive shortly after a new guard or convention lands — check whether its siblings got it.
 tools: Bash, Read, Grep, Glob
 ---
 
@@ -44,7 +44,11 @@ what is true now, the history says what keeps becoming true again.
   cannot fail. Where cheap, prove it by mutating the tree in a scratch copy and
   showing the guard stays green.
 
-**2. History.**
+**2. History.** Start from what the repo already records — open issues, `(—)`
+invariants, ADRs — and mine history only for what that record does NOT hold.
+Re-deriving the issue tracker is this pass's failure mode: a shape the record
+already names is a drop, so filter against the record up front rather than
+after the dig.
 - `git log` for files that accumulate repeated `fix:` commits, and for reverts
   or re-fixes of the same behaviour.
 - Invariants and tests added only AFTER an incident — correlate `CLAUDE.md` and
@@ -61,10 +65,15 @@ since fixed is not a finding. Say plainly which instances are live.
 ## Output
 
 - **Shapes**, ordered by recurrence count. For each: the pattern in one line;
-  at least two instances as `file:line` or commit sha; the mechanism whose
-  absence allows it; and the kind of guard that would close it — in the
-  vocabulary `docs/adr/` records, if it records one — or an explicit
-  "accept, because…".
+  which pass surfaced it (cross-section or history); at least two instances as
+  `file:line` or commit sha; the mechanism whose absence allows it; and the
+  kind of guard that would close it — in the vocabulary `docs/adr/` records,
+  if it records one — or an explicit "accept, because…".
+- **A disposal draft per shape**: ready-to-file issue text (title plus a body
+  carrying the evidence), or the "accept, because…" phrased so it can be
+  pasted into `CLAUDE.md`'s invariants as a `(—)` entry. You never file it —
+  the caller does — but a shape the caller must re-derive before filing is
+  not finished.
 - **Measurements** you took, with the command, so the next audit can rerun them
   and compare rather than re-deriving from scratch.
 - **Checked and dropped**: candidate shapes that did not survive verification,
