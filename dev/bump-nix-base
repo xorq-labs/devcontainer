@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bump the pinned Nix base image digest in nix/base/compose.nix-base.yml.
+#
+# Usage:
+#   devcontainer bump-nix-base                 # pin to the published `latest`
+#   devcontainer bump-nix-base sha-51d9c59     # pin to a specific published tag
+#   devcontainer bump-nix-base sha256:c536...  # pin an explicit digest (CI path)
+#   devcontainer bump-nix-base --check         # report committed vs latest
+#   devcontainer bump-nix-base --verify        # gate the committed pin
+#
+# The gap this closes (#83): .github/workflows/nix-base.yml publishes the base,
+# but consumers build on the digest pinned here, and moving that pin was a
+# manual browser round-trip — the manifest digest is written only to
+# $GITHUB_STEP_SUMMARY, so it is not in `gh run view --log` and `imagetools
+# create` never prints it to stdout. Nothing owned the step, so the pin sat on
+# the #41 digest while fixes shipped to the registry and reached nobody.
+#
+# --check and --verify answer different questions and are mutually exclusive:
+#
+#   --check is a REPORT: the committed pin against the current `latest`. Never
+#   edits, and exits 0 whether or not they match — byte-for-byte the shape of
+#   `bump-nix --check` and `bump-claude-code --check`, down to the %-11s label
+#   column. "A newer base has been published" is not something a report fails on.
+#
+#   --verify is a GATE: it resolves the CURRENTLY COMMITTED digest and fails if
+#   it does not exist or is not a multi-arch manifest list. It fails on an
+#   unreachable registry too — a gate that passes because it could not check is
+#   worse than no gate. It deliberately does NOT require the pin to equal
+#   `latest`: pinning an older base on purpose is legitimate, being pinned to
+#   something broken is not.
+#
+# The manifest-list check is the one a human does not reliably do by hand.
+# `docker buildx imagetools inspect` prints the per-arch digests directly
+# beneath the manifest-list digest, and pinning `sha-<short>-amd64` by mistake
+# looks entirely correct on an amd64 laptop while breaking every arm64 consumer
+# at pull time.
+#
+# ghcr serves this package anonymously, so this needs nothing but curl: no
+# docker, no `read:packages` token, and the companion test can stub curl on
+# PATH the way tests/test-bump-hadolint.sh does.
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+compose="$base/nix/base/compose.nix-base.yml"
+
+check_only=false
+verify_only=false
+target=""
+for arg in "$@"; do
+    case "$arg" in
+        --check) check_only=true ;;
+        --verify) verify_only=true ;;
+        -*) echo "error: unknown flag: $arg" >&2; exit 1 ;;
+        *)
+            if [ -n "$target" ]; then
+                echo "error: unexpected extra argument: $arg" >&2
+                exit 1
+            fi
+            target="$arg"
+            ;;
+    esac
+done
+
+if $check_only && $verify_only; then
+    echo "error: --check and --verify are mutually exclusive — --check reports the committed pin against the published latest, --verify validates that the committed pin resolves to a multi-arch manifest" >&2
+    exit 1
+fi
+
+[ -f "$compose" ] || { echo "error: compose.nix-base.yml not found at $compose" >&2; exit 1; }
+
+# Same anchor as ensure_nix_base() in dev/devcontainer and
+# tests/test-nix-base-pin.sh — keep the three in sync by hand.
+pin="$(grep -oP '\$\{DEV_NIX_BASE_IMAGE:-\K[^}]+' "$compose")" || true
+if [ -z "$pin" ]; then
+    echo "error: could not find the BASE_IMAGE default in $compose" >&2
+    exit 1
+fi
+
+if ! [[ "$pin" =~ ^([a-z0-9.:-]+)/(.+)@(sha256:[0-9a-f]{64})$ ]]; then
+    echo "error: the committed pin is not a digest-pinned image reference: $pin" >&2
+    exit 1
+fi
+host="${BASH_REMATCH[1]}"
+repo_path="${BASH_REMATCH[2]}"
+current="${BASH_REMATCH[3]}"
+
+# The pin is a ghcr reference and the anonymous-token dance below is ghcr's.
+# Fail loudly rather than pretending to be a general-purpose registry client.
+if [ "$host" != "ghcr.io" ]; then
+    echo "error: only ghcr.io is supported, but the pin points at $host" >&2
+    exit 1
+fi
+
+ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+
+# Anonymous pull token. Public packages need no credentials; a private one
+# fails here and every caller below reports it as an unreachable registry.
+registry_token() {
+    curl -sf "https://${host}/token?scope=repository:${repo_path}:pull&service=${host}" 2>/dev/null \
+        | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin)["token"])
+except Exception:
+    pass' 2>/dev/null || true
+}
+
+TOKEN="$(registry_token)"
+if [ -z "$TOKEN" ]; then
+    echo "error: could not get an anonymous pull token for ${host}/${repo_path}" >&2
+    exit 1
+fi
+
+# Resolve a tag to the digest the registry reports for it. Empty on any failure;
+# callers turn that into their own message. The trailing `|| true` is load
+# bearing: without it `set -o pipefail` propagates curl's exit status out of the
+# command substitution and `set -e` kills the script before the caller can say
+# which tag was missing (a bare `curl` 404 surfaced as a silent exit 22).
+resolve_digest() {
+    local ref="$1"
+    curl -sfI -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
+        "https://${host}/v2/${repo_path}/manifests/${ref}" 2>/dev/null \
+        | tr -d '\r' \
+        | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest:[[:space:]]*//p' \
+        | tail -n1 || true
+}
+
+# "<mediaType> <os/arch> <os/arch> ..." for a digest, or empty on any failure.
+# Attestation entries carry platform unknown/unknown and are dropped: they are
+# real index members but say nothing about which machines can run the image.
+manifest_summary() {
+    local ref="$1"
+    curl -sf -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
+        "https://${host}/v2/${repo_path}/manifests/${ref}" 2>/dev/null \
+        | python3 -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+out = [d.get("mediaType", "")]
+for m in d.get("manifests", []):
+    p = m.get("platform", {})
+    os_, arch = p.get("os", ""), p.get("architecture", "")
+    if not os_ or os_ == "unknown" or arch == "unknown":
+        continue
+    out.append(f"{os_}/{arch}")
+print(" ".join(out))' 2>/dev/null || true
+}
+
+# A pin is usable only if it is a manifest LIST naming at least two real
+# platforms. A per-arch digest resolves to an image manifest instead, which is
+# the mistake this catches.
+is_multi_arch() {
+    local summary="$1" media
+    media="$(printf '%s' "$summary" | cut -d' ' -f1)"
+    case "$media" in
+        application/vnd.oci.image.index.v1+json | \
+            application/vnd.docker.distribution.manifest.list.v2+json) ;;
+        *) return 1 ;;
+    esac
+    [ "$(printf '%s' "$summary" | wc -w)" -ge 3 ]
+}
+
+# --- --verify: gate the committed pin ---------------------------------------
+#
+# Defaults to the COMMITTED digest, not `latest` — the question is whether what
+# is in the tree is usable, not whether it is current.
+if $verify_only; then
+    subject="${target:-$current}"
+    echo "verifying ${host}/${repo_path}@${subject#*@}"
+    summary="$(manifest_summary "${subject#*@}")"
+    if [ -z "$summary" ]; then
+        echo "error: cannot verify the pin — the manifest could not be fetched (treating an unverifiable pin as a failure)" >&2
+        exit 1
+    fi
+    if ! is_multi_arch "$summary"; then
+        echo "error: the pin is not a multi-arch manifest list: $summary" >&2
+        echo "       a per-arch digest builds fine on its own architecture and breaks every other one" >&2
+        exit 1
+    fi
+    printf '%-11s%s\n' "mediaType:" "$(printf '%s' "$summary" | cut -d' ' -f1)"
+    printf '%-11s%s\n' "platforms:" "$(printf '%s' "$summary" | cut -d' ' -f2-)"
+    echo "pin OK"
+    exit 0
+fi
+
+# --- resolve the target digest ----------------------------------------------
+if [[ "$target" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    # The CI path: the workflow passes the digest it just published, so there is
+    # nothing to look up — but it is still validated below.
+    new="$target"
+else
+    ref="${target:-latest}"
+    new="$(resolve_digest "$ref")"
+    if [ -z "$new" ]; then
+        echo "error: could not resolve ${host}/${repo_path}:${ref} — does that tag exist?" >&2
+        exit 1
+    fi
+fi
+
+if ! [[ "$new" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "error: invalid digest: $new" >&2
+    exit 1
+fi
+
+# --- --check: report, never edit, exit 0 either way -------------------------
+if $check_only; then
+    printf '%-11s%s\n' "current:" "$current"
+    if [ -n "$target" ]; then
+        printf '%-11s%s\n' "requested:" "$new"
+    else
+        printf '%-11s%s\n' "latest:" "$new"
+    fi
+    if [ "$current" = "$new" ]; then
+        echo "already up to date"
+    else
+        echo "run 'devcontainer bump-nix-base' to update nix/base/compose.nix-base.yml"
+    fi
+    exit 0
+fi
+
+if [ "$current" = "$new" ]; then
+    echo "Nix base already pinned to $current${target:+ (requested)}"
+    [ -n "$target" ] || echo "(published latest)"
+    exit 0
+fi
+
+# Validate before writing. An explicit digest reaches this having had no
+# lookup at all, so this is the only thing standing between a mistyped or
+# per-arch digest and a pin nobody can build on.
+summary="$(manifest_summary "$new")"
+if [ -z "$summary" ]; then
+    echo "error: could not fetch the manifest for $new — refusing to pin something unverifiable" >&2
+    exit 1
+fi
+if ! is_multi_arch "$summary"; then
+    echo "error: $new is not a multi-arch manifest list: $summary" >&2
+    echo "       refusing to pin it — a per-arch digest breaks every other architecture" >&2
+    exit 1
+fi
+
+# Rewrite only the digest, in place, on the interpolation line. The surrounding
+# bytes are load-bearing: ensure_nix_base() greps this line at runtime and
+# tests/test-nix-base-pin.sh asserts the anchor still matches. `new` is a
+# validated sha256 by here, so it cannot carry the sed delimiter.
+sed -i "s|\(\${DEV_NIX_BASE_IMAGE:-[^}@]*@\)sha256:[0-9a-f]\{64\}|\1${new}|" "$compose"
+
+echo "Bumped the Nix base pin:"
+echo "  from ${current}"
+echo "  to   ${new}"
+printf '%-11s%s\n' "platforms:" "$(printf '%s' "$summary" | cut -d' ' -f2-)"
+echo "Consumers pick this up through the staleness hash, which prompts a rebuild."
