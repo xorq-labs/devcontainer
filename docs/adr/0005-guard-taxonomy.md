@@ -1,10 +1,14 @@
 # ADR-0005: Guard taxonomy — type the guard, prove it fails, derive over restate
 
-- Status: Proposed
+- Status: Accepted (2026-08-02 — accepted with the baseline audit on #89 and
+  the CLAUDE.md rule landing in this PR)
 - Date: 2026-08-02
-- Implemented by: this PR (docs only); follow-up work tracked separately
+- Implemented by: this PR (the taxonomy, the `CLAUDE.md` rule, and the baseline
+  measurement); the comment sweep is #89, and the retrofit lands as invariants
+  are touched
 - Related: **devcontainer ADR-0003** (introduced `.claude/agents/`, one consumer
-  of the conventions this ADR formalizes). Prompted by #83 and #86, two bugs
+  of the conventions this ADR formalizes; ADR-0004 is reserved by the in-flight
+  host memory bind, #81). Prompted by #83 and #86, two bugs
   that shipped despite the repo's unusually dense guard coverage.
 
 ## Context
@@ -35,13 +39,35 @@ and the guard would have passed green. It failed *open*.
 
 ### What the numbers say
 
+The counts below are the hand measurements that prompted the decision, kept as
+recorded. The acceptance baseline — a per-invariant classification, re-runnable
+commands for every headline number, and three mutation spot-checks — is the
+structural-audit report on #89. Where the two disagree, the baseline is the
+number that can be re-derived.
+
 - 36 invariants: **21** cite a test, **5** are marked `(—)`, **10** cite
   something else in prose (a tool, "routing enforced in `dev/devcontainer`",
-  "partially tested", "structural").
+  "partially tested", "structural"). The 21/10 split was a judgment call with
+  no recorded rule — a mechanical count of the same tree gave 26/5/5, and
+  29/5/2 after #87 — which is itself a small instance of this ADR's point.
+  Classified with this ADR's vocabulary, composed annotations counted once per
+  invariant: `test:` in 30, `tool:` in 4, `ci:` in 1, `structural` in 1, and
+  **6 unguarded — none of the six stating the reason §1 requires**.
 - **58** rule-asserting comments (`must` / `never` / `in sync` / `lockstep`)
   live in non-test sources — a body of stated rules larger than the promoted
-  list, never audited.
+  list, never audited. The 58 was a curated hand count with no recorded
+  instrument; the baseline's recorded grep returns **119** lines, of which
+  **27 assert 15 distinct cross-file facts, 6 of those unguarded** — two
+  existing in no invariant at all.
 - **2 of 25** suites contain anything resembling a check that they would fail.
+  Verified by the baseline under the strict criterion (the suite feeds its own
+  detection logic a broken artifact); counting the four bump suites' tool-refusal
+  negative fixtures it is 6 of 25.
+- Added at acceptance: all three of the baseline's vacuous-pass spot checks
+  stayed green through the full suite — a one-directional anchor check, a
+  fail-open dispatch parser (the #86 shape, recurring), and a textual
+  COPY-coverage match that a comment satisfies. Decision 2's rationale, live
+  in the current tree.
 
 ### The root cause
 
@@ -85,6 +111,12 @@ The point is not more guarding. It is that `(—)` today cannot distinguish
 precisely why the same realization had to be reached twice. `(unguarded)`
 without a reason is a bug in the invariant, not in the code.
 
+Annotations compose. A fact is often guarded at two layers of different kinds,
+and picking one would silently drop the other: the hadolint checksums are
+`(tool: dev/bump-hadolint; test: tests/test-bump-hadolint.sh)` — the tool
+guards the fact that lives outside the tree, the test guards the tool. Separate
+the kinds with `;`, one annotation per layer, still one line.
+
 ### 2. A new guard must be shown to fail
 
 When adding or materially changing a drift guard, break the invariant and
@@ -95,6 +127,11 @@ Rationale: a test written against a fixed tree is written to pass. On the two
 occasions a reviewer hand-mutated a guard in this repo, it found real vacuous
 passes **both times**. Guards that fail open are worse than no guard, because
 their green is mistaken for evidence.
+
+By this ADR's own taxonomy the recorded mutation line is `(unguarded: the
+header claim goes stale as the test evolves, and nothing re-runs it)` — a
+rung-3 restatement, accepted deliberately. Re-verifying it mechanically is the
+CI mutation testing rejected below.
 
 ### 3. Derive over restate
 
@@ -119,12 +156,21 @@ Rung 3 is currently the default by habit. It should be the exception.
   by reading 36 prose bullets.
 - New guards cost slightly more to write (one mutation run) and considerably
   less to trust.
-- The 58 header-stated rules become a finite, auditable backlog rather than
-  ambient folklore. That sweep is tracked separately; its first pass already
+- The header-stated rules become a finite, auditable backlog rather than
+  ambient folklore. That sweep is #89; its first pass already
   found a live four-copy coupling with an explicit "keep the two in sync by
   hand" admission and no guard.
 - This ADR does not require retrofitting existing guards. Annotations land as
   invariants are touched; the sweep handles the rest.
+- Accepting this ADR is itself a doc-and-code-land-together change: the same PR
+  rewrites `CLAUDE.md`'s invariant-list header (the `—` vocabulary this
+  replaces) and adds the rule to Conventions. Legacy `(—)` entries remain valid
+  until touched.
+- The acceptance baseline was produced by a structural-auditor run (#90) — an
+  agent, which in this taxonomy is a `(tool:)`-kind guard: non-hermetic,
+  occasional, and deliberate, never a CI gate. Its judgment calls are recorded
+  per invariant on #89; only the grep-backed counts are mechanically
+  re-derivable.
 
 ## Alternatives considered
 
