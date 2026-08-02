@@ -117,7 +117,16 @@ taxonomy and reads as `test:`.
   pin is current), `--verify` gates (non-zero on a bad pin OR an unreachable
   registry).
 - Nix base image and nix seed volume are mutually exclusive — a `:/nix` mount
-  shadows the baked store (routing enforced in `dev/devcontainer`).
+  shadows the baked store, so `overlay_has_seed_volume()` routes seed overlays
+  to the classic Dockerfile and `ensure_nix_base()` refuses the forced
+  combination (`unguarded`: "routing enforced in `dev/devcontainer`" names the
+  SUT, not a guard, and no suite covers the decision —
+  `tests/test-classic-args-sync.sh` deliberately scopes itself to the sibling
+  helper's body so it cannot validate this regex by accident. A
+  fixture-overlay test of the routing decision is feasible and simply
+  unwritten; the risk is accepted because the forced path fails loudly
+  (`ensure_nix_base` prints an explicit refusal) and the auto path's failure
+  needs a real build to surface at all).
 - `NIX_USER` in `lib/nix-seed.sh` owns the profile path every nix overlay
   repeats as `EXTRA_PATH: "/home/<NIX_USER>/.nix-profile/bin"` (compose can't
   read the bash var), `templates/nix/` included, so a rename there strands the
@@ -155,6 +164,20 @@ taxonomy and reads as `test:`.
   `.dockerignore` (#92), so a deny pattern newly matching a COPY source could
   merge green with no classic build run
   (test: `tests/test-docker-build-trigger-paths.sh`).
+- `nix/base/flake.nix`'s `Env` hand-maintains PATH and no other variable *of
+  the base's* (it also sets `HOME` and `SSL_CERT_FILE`, additions
+  `check-env-drift.sh` explicitly allows):
+  `streamLayeredImage` merges the MS base's config per-variable, so `LANG`,
+  `PYTHON_*`, `PIPX_*` and `NVM_*` track an `msBaseDigest` repin on their own —
+  but a per-variable merge picks a winner rather than concatenating, so the
+  flake's PATH must prepend the infra profile AND keep every base component
+  verbatim behind it or python/pip/pipx fall off PATH in the built image.
+  `nix/base/check-env-drift.sh` catches both rots (a stale hand copy after a
+  repin, and a nixpkgs bump that changes the merge) by inspecting the pinned
+  base's `Config.Env` against the built image's and failing on any lost PATH
+  component or var (ci: nix-base.yml#build, the "Env drift check" step — it
+  needs docker, the loaded image and a pull of the pinned base, so it cannot
+  be hermetic).
 - The Claude Code version is pinned twice: `Dockerfile` ARG
   `CLAUDE_CODE_VERSION` and `nix/base/pkgs/claude-code.nix`; bump via
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
@@ -182,7 +205,22 @@ taxonomy and reads as `test:`.
   (`tests/test-lint-config-sync.sh`).
 - `.github/workflows/lint.yml` must stay a single `pre-commit run --all-files`
   gate: a per-linter job re-introduces a third, hand-kept version set and can
-  disagree with the hooks on identical code (—).
+  disagree with the hooks on identical code (`unguarded`: the consequence with
+  teeth — a second set of pins — is already covered, since
+  `tests/test-lint-config-sync.sh` owns the two remaining pin files and dropped
+  its old three-way `lint.yml` assertions when that job set went away. What is
+  left is a shape rule over a 36-line workflow that only a deliberate edit can
+  break, and the only mechanical form of it (assert the job list) restates the
+  file at rung 3 and would go red on any legitimate step added around the
+  gate).
+- `.github/workflows/test.yml` must likewise stay a single `bash tests/run-all`
+  step — the twin of the rule above, and the reason a newly added suite runs
+  without touching CI: `tests/run-all` globs `tests/*.sh` (and fails on an
+  empty glob), so the enumeration lives there and nowhere else. A CI job that
+  lists suites itself becomes a second, hand-kept list that silently omits new
+  ones (`unguarded`: same shape as `lint.yml` — a ban on adding a second
+  runner, checkable only by restating a 22-line workflow at rung 3; the loss it
+  prevents is bounded because the glob, not the workflow, enumerates suites).
 - Container-side root logic lives in `lib/*.sh` and is INJECTED per run via
   `dc exec ... sh -c "$script" <argv0> <args...>` — a runtime input: no
   rebuild, no fingerprint entry unless it is also COPYed
@@ -194,15 +232,40 @@ taxonomy and reads as `test:`.
   (`tests/test-volume-chown-guard.sh`).
 - Lock discipline: per-worktree lock on fd 9, repo-scoped build lock on fd 8;
   any helper backgrounded inside the locked region must be spawned with
-  `9>&-` or it holds the worktree lock forever (—).
+  `9>&-` or it holds the worktree lock forever (`test:
+  tests/test-image-reuse.sh` covers the fd-8 half — it runs the real
+  `ensure_image()` body with a real `flock` and genuinely races two processes,
+  asserting the lock plus the in-lock double-check collapse them to one build;
+  `unguarded`: the `9>&-` rule on fd 9 has none. The three call sites
+  (`setup_{ssh,gpg,x11}_forward`) each fork a long-lived `socat` against a host
+  socket, so observing the leak needs a real host bridge, and the static form —
+  deciding which source lines are "backgrounded inside the locked region" — is
+  the fail-open shell-parser shape ADR-0005 warns about. Accepted because all
+  three sites sit together in `ensure_up`, inline with the comment stating the
+  rule).
 - Compose file order in `dc()` is load-bearing: the nix-base override is
   appended after the project override so its `build.dockerfile` wins;
-  host-mounts override generation must run before the first `dc` call (—).
+  host-mounts override generation must run before the first `dc` call
+  (`unguarded`: both halves are orderings *within* `dev/devcontainer`, not two
+  files that can disagree, so neither has a cheap hermetic form — which
+  override wins is docker compose's merge semantics, answerable only by a real
+  `docker compose config`, and "no `dc` call above this line" means statically
+  deciding which lines can reach `dc`, the fail-open parser shape again.
+  Asymmetric risk, accepted differently: a wrong file order surfaces at the
+  next build as the wrong Dockerfile, while a `dc` call hoisted above
+  `generate_host_mounts_override` is silent by construction — which is why
+  that one carries its rule as an inline comment at the call site).
 - Compose host-dir mounts on a `DEV_*` variable use `${VAR:?}`, with the
   export guaranteed by `dev/devcontainer`; a `:-/dev/null` default is allowed
   only where `/dev/null` is a legitimate value (`DEV_DOCKER_SOCK`). The
   `${HOME}`-rooted mounts are the deliberate exception — they read the ambient
-  value, not a `dev/devcontainer` export (—).
+  value, not a `dev/devcontainer` export (`unguarded`: mechanically greppable,
+  but only against a hand-kept exception list (`DEV_DOCKER_SOCK`'s legitimate
+  `:-/dev/null`, the two `${HOME}` mounts), which is a second copy of the very
+  judgment being guarded. Accepted because the omission is not silent: compose
+  interpolates the empty string and dies on the spec — `invalid spec: :/x:
+  empty section between colons` — so `:?` buys a named error, not the
+  difference between working and broken).
 - `sanitize_name()` in `lib/git.sh` has three consumers that must agree:
   `dev/devcontainer`, `dev/init`, and a Python re-implementation in
   `dev/devcontainer-sessions` (`tests/test-sanitize-names.sh`,
@@ -280,7 +343,26 @@ taxonomy and reads as `test:`.
   (`tests/test-completions-sync.sh`).
 - The worktree manifest format written by `dev/setup-worktree`
   (`<action>\t<path>`, plus a legacy bare-path form) is parsed by
-  `dev/cleanup-worktree`; the two must change in lockstep (—).
+  `dev/cleanup-worktree`; the two must change in lockstep (`test:
+  tests/test-worktree-claude-layout.sh` round-trips the live format end to end
+  — the real `setup-worktree` writes the manifest, literal `symlink\t<path>`
+  lines are asserted on it, and the real `cleanup-worktree` then replays it on
+  all three layouts; `unguarded`: the legacy bare-path branch, which has no
+  producer left in the tree, so no round-trip can reach it and only a
+  hand-built fixture would).
+- Main-only state (`project.env`, the `dev/` scripts, the hook symlink targets)
+  is resolved with `dev_main_tree()` in `lib/git.sh`, never `git rev-parse
+  --show-toplevel`, which inside a linked worktree returns that worktree.
+  Consumers: `dev/devcontainer`, `dev/init`, `dev/new-worktree`,
+  `dev/setup-worktree`, `dev/cleanup-worktree`, and `install_hooks()` in
+  `lib/git.sh` itself; the surviving `--show-toplevel` calls in `dev/` are
+  deliberate "where am I now" reads, each paired with a `dev_main_tree()` call
+  in the same script (the two git hooks want the current tree by definition)
+  (`unguarded`: which resolver a new call site needs is a judgment about
+  intent, not a fact two files can disagree on — a grep-level guard would have
+  to ban a call that is correct at all six of its current sites. The suites
+  reach it only indirectly, by running the scripts from inside a real
+  worktree).
 
 ## Conventions
 
