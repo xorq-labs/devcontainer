@@ -21,6 +21,7 @@
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/dockerfile.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 dockerignore="$DEV_BASE/.dockerignore"
@@ -34,7 +35,7 @@ for dockerfile in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-defa
     [ -f "$dockerfile" ] || { echo "  FAIL: Dockerfile not found at $dockerfile"; exit 1; }
 
     # Source paths of lib/ files COPYd from the default context (skip `--from=`).
-    mapfile -t copied < <(grep -oP '^COPY (?!--from=)\Klib/\S+' "$dockerfile" || true)
+    mapfile -t copied < <(dockerfile_default_copy_sources "$dockerfile" | grep '^lib/' || true)
 
     if [ "${#copied[@]}" -eq 0 ]; then
         _fail "found lib/ COPYs in $df_name" "none matched — anchor missed? file moved?"

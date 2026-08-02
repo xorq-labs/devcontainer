@@ -16,9 +16,13 @@
 # simply did not run. That is the failure mode this test converts into a red
 # check.
 #
-# Only default-context COPYs are checked. `COPY --from=project ...` reads the
-# additional build context, which CI supplies as ./defaults — covered by the
-# separate `defaults/**` entry, asserted below.
+# Three input classes are checked, because a tail build can break through any of
+# them: default-context COPY sources; the additional build context that
+# `COPY --from=project ...` reads (CI supplies ./defaults, derived here from the
+# workflow's own --build-context flag rather than hardcoded); and .dockerignore,
+# which is not a COPY source at all but filters the repo-root context the tail
+# build uses — a new deny pattern there breaks a COPY with no COPY source
+# touched.
 #
 # Scope note: the ROOT Dockerfile's COPY sources are deliberately NOT required
 # here. This workflow builds the nix tail, not the classic image. The two
@@ -28,6 +32,7 @@
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/dockerfile.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 workflow="$DEV_BASE/.github/workflows/nix-base.yml"
@@ -65,51 +70,76 @@ assert_eq "push and pull_request trigger on the same paths" \
     "$(printf '%s\n' "${push_paths[@]}")" "$(printf '%s\n' "${pr_paths[@]}")"
 
 # Covered = listed literally, or matched by a `dir/**` entry, and not negated by
-# a `!path` exclusion.
+# an exclusion. Exclusions get the SAME literal-or-prefix treatment as
+# inclusions: a future `- '!lib/**'` must not leave `lib/git.sh` reported as
+# covered via the `nix/base/**`-style branch while the trigger really excludes
+# it — that would be a green test over a broken workflow.
+matches_entry() {
+    local entry="$1" needle="$2"
+    [ "$entry" = "$needle" ] && return 0
+    case "$entry" in
+        *'/**') [ "${needle##"${entry%'/**'}"/}" != "$needle" ] && return 0 ;;
+    esac
+    return 1
+}
+
 covered() {
     local needle="$1" entry
     for entry in "${push_paths[@]}"; do
-        [ "$entry" = "!$needle" ] && return 1
+        case "$entry" in
+            '!'*) matches_entry "${entry#!}" "$needle" && return 1 ;;
+        esac
     done
     for entry in "${push_paths[@]}"; do
-        [ "$entry" = "$needle" ] && return 0
         case "$entry" in
-            *'/**') [ "${needle##"${entry%'/**'}"/}" != "$needle" ] && return 0 ;;
+            '!'*) ;;
+            *) matches_entry "$entry" "$needle" && return 0 ;;
         esac
     done
     return 1
 }
 
-# Source paths COPYd from the default context (skip `--from=`). Every argument
-# but the last is a source.
-mapfile -t copy_lines < <(grep -P '^COPY (?!--from=)' "$dockerfile" || true)
+# Default-context COPY sources, via the shared parser (tests/lib/dockerfile.sh)
+# so continuations, mixed case, leading flags and multi-source COPYs are handled
+# in one place rather than three.
+mapfile -t sources < <(dockerfile_default_copy_sources "$dockerfile")
 assert_true "found default-context COPYs in Dockerfile.nix-default" \
-    test "${#copy_lines[@]}" -gt 0
+    test "${#sources[@]}" -gt 0
 
-for line in "${copy_lines[@]}"; do
-    # shellcheck disable=SC2086 # deliberate word splitting of the COPY argv
-    set -- $line
-    shift          # drop "COPY"
-    argc=$#
-    n=1
-    while [ "$n" -lt "$argc" ]; do
-        src="$1"
-        shift
-        n=$((n + 1))
-        if covered "$src"; then
-            _pass "$src is a trigger path"
-        else
-            _fail "$src is a trigger path" \
-                "Dockerfile.nix-default COPYs $src from the default context," \
-                "but nix-base.yml's paths do not match it — a change to that" \
-                "file skips the tail build that exists to verify it."
-        fi
-    done
+for src in "${sources[@]}"; do
+    if covered "$src"; then
+        _pass "$src is a trigger path"
+    else
+        _fail "$src is a trigger path" \
+            "Dockerfile.nix-default COPYs $src from the default context," \
+            "but nix-base.yml's paths do not match it — a change to that" \
+            "file skips the tail build that exists to verify it."
+    fi
 done
 
-# The --from=project COPYs read ./defaults in CI, so that entry is load-bearing
-# even though no repo-root COPY names it.
-assert_true "defaults/** covers the --from=project build context" covered "defaults/x"
+# The additional build context the tail-build step passes. Derived from the
+# workflow rather than hardcoded, so moving ./defaults fails here instead of
+# leaving a stale assertion quietly passing.
+project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1)"
+assert_nonempty "the tail-build step names a project build context" "$project_ctx"
+if covered "${project_ctx}/x"; then
+    _pass "${project_ctx}/** covers the --from=project build context"
+else
+    _fail "${project_ctx}/** covers the --from=project build context" \
+        "the tail build reads ./${project_ctx} as the 'project' context, so a" \
+        "change there must trigger the workflow."
+fi
+
+# Not a COPY source, but it filters the repo-root context the tail build uses:
+# adding a pattern here can break a COPY without any COPY source changing.
+if covered .dockerignore; then
+    _pass ".dockerignore is a trigger path"
+else
+    _fail ".dockerignore is a trigger path" \
+        "the tail build's context is the repo root, so .dockerignore gates" \
+        "every default-context COPY; a new deny pattern breaks the build with" \
+        "no COPY source touched and no workflow run to catch it."
+fi
 
 # The pin is an output of a publish, not an input to one; it must stay excluded
 # or merging a pin bump sets off another two-arch republish.

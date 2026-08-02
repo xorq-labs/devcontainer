@@ -42,6 +42,9 @@ on:
       - lib/claude-code-token-env.sh
       - setup-claude.py
       - audit-hook
+      # Filters the repo-root context the tail build uses, so it can break a
+      # COPY without any COPY source changing.
+      - .dockerignore
       - .github/workflows/nix-base.yml
   pull_request:
     paths:
@@ -55,6 +58,9 @@ on:
       - lib/claude-code-token-env.sh
       - setup-claude.py
       - audit-hook
+      # Filters the repo-root context the tail build uses, so it can break a
+      # COPY without any COPY source changing.
+      - .dockerignore
       - .github/workflows/nix-base.yml
   workflow_dispatch:
 
