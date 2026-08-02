@@ -16,6 +16,7 @@
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/dockerfile.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DC="$DEV_BASE/dev/devcontainer"
@@ -38,7 +39,7 @@ for df in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
             _fail "$(basename "$df"): COPY source NOT hashed: $src" \
                 "add it to config_files() in dev/devcontainer"
         fi
-    done < <(awk '/^COPY/ { if ($2 ~ /^--from=/) print $3; else print $2 }' "$df")
+    done < <(dockerfile_copy_sources "$df")
 done
 
 # ---------- setup: two identical copies of the tooling ----------

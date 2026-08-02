@@ -121,7 +121,19 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
 - `nix/base/compose.nix-base.yml` is excluded from `nix-base.yml`'s trigger
   paths even though `nix/base/**` would match it: the pin is an output of a
   publish, not an input to one, so merging a pin bump must not set off another
-  hour-long two-arch republish of byte-identical layers (—).
+  hour-long two-arch republish of byte-identical layers
+  (`tests/test-nix-base-trigger-paths.sh`).
+- Those same trigger paths must cover every tail-build input — default-context
+  `COPY` sources in `nix/base/Dockerfile.nix-default`, the `--build-context`
+  dir the `--from=project` COPYs read, and `.dockerignore`, which is no COPY
+  source but filters the repo-root context the tail build uses — and `push`
+  must equal `pull_request`. The
+  workflow's own header states this rule and it drifted anyway —
+  `lib/claude-code-token-env.sh` was COPYed, allowlisted in `.dockerignore` and
+  hashed by `image_config_files()`, but unlisted here (#86), so a PR touching
+  only that file skipped the tail build that exists to verify it. Nothing
+  failed; the verification just never ran
+  (`tests/test-nix-base-trigger-paths.sh`).
 - The Claude Code version is pinned twice: `Dockerfile` ARG
   `CLAUDE_CODE_VERSION` and `nix/base/pkgs/claude-code.nix`; bump via
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
