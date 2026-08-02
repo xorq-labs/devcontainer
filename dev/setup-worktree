@@ -96,6 +96,12 @@ if [ -n "$_gitignore_src" ]; then
     fi
     printf 'copy\t%s\n' ".gitignore" >> "$manifest"
 fi
+# The copy above propagates the main checkout's live rules, drift included:
+# warn — never block worktree creation — when the effective rules here break
+# ADR-0003's re-inclusion. The commit-time pre-commit hook is the hard gate;
+# this is the early signal at the moment a stale file would spread (#91).
+"$_base/dev/check-gitignore-agents" "$here" \
+    || echo "WARNING: continuing anyway; commits adding .claude/agents/ files will be blocked here until the live .gitignore is fixed (see above)." >&2
 
 link_from_main() {
     local target="$1"

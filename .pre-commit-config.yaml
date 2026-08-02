@@ -14,7 +14,8 @@ repos:
         name: shellcheck (extensionless)
         args: [--severity=warning]
         types: [file]
-        files: ^dev/(devcontainer|devcontainer-completions|init|new-worktree|setup-worktree|cleanup-worktree|hooks/post-checkout)$
+        files: >-
+          ^dev/(devcontainer|devcontainer-completions|init|new-worktree|setup-worktree|cleanup-worktree|check-gitignore-agents|hooks/post-checkout)$
 
   # These pins are the source of truth for CI (the pre-commit job is the only
   # CI lint gate). Keep ruff/yamllint/hadolint in sync with the in-container
@@ -41,3 +42,16 @@ repos:
     hooks:
       - id: hadolint
         args: [--config, .hadolint.yaml]
+
+  # The live .gitignore is untracked and per-checkout, so no hermetic test
+  # can see it drift from .gitignore.template's ADR-0003 stanza; this
+  # functional probe at commit time is the guard (#91). CI's fresh checkout
+  # has no live file and passes vacuously — the target is dev machines.
+  - repo: local
+    hooks:
+      - id: gitignore-agents-reinclusion
+        name: gitignore re-includes .claude/agents/ (ADR-0003)
+        entry: dev/check-gitignore-agents
+        language: script
+        always_run: true
+        pass_filenames: false

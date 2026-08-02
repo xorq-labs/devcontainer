@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Functional probe of ADR-0003's gitignore re-inclusion: in the checkout at
+# DIR (default: the current directory's repo), a path under .claude/agents/
+# must NOT be ignored — otherwise `git add` on a new agent definition silently
+# stages nothing (#91). The live .gitignore is untracked and per-checkout, so
+# no hermetic test over committed files can see it drift from
+# .gitignore.template; this probe at commit time is the guard. Probing
+# behavior rather than text is deliberate: the incident's stale line was an
+# EXTRA bare `.claude` entry, which a template-subset comparison would miss,
+# and check-ignore also catches global excludes or any future variant that
+# defeats the negation.
+#
+# Consumers: a local hook in .pre-commit-config.yaml (the hard gate, every
+# commit, every checkout) and dev/setup-worktree (a warning at the moment the
+# main checkout's live file propagates into a new worktree).
+#
+# Exit: 0 = re-inclusion works (or nothing ignores the probe at all);
+#       1 = broken; anything else = git itself failed.
+set -euo pipefail
+
+dir="${1:-.}"
+probe=".claude/agents/.adr-0003-probe"
+
+rc=0
+out="$(git -C "$dir" check-ignore -v -- "$probe" 2>&1)" || rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    cat >&2 <<EOF
+ADR-0003 re-inclusion is broken in $(git -C "$dir" rev-parse --show-toplevel):
+  $probe is ignored by:
+  $out
+New files under .claude/agents/ silently fail to stage (#91). Fix the LIVE
+.gitignore to carry .gitignore.template's stanza:
+  .claude/*
+  !.claude/agents/
+and remove any bare '.claude' entry — it matches the directory itself, so no
+negation beneath it can re-include anything. If this is a worktree, fix the
+main checkout too: setup-worktree copies its live file into new worktrees.
+EOF
+    exit 1
+elif [ "$rc" -ne 1 ]; then
+    echo "git check-ignore failed (rc=$rc): $out" >&2
+    exit "$rc"
+fi
