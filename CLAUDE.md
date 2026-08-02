@@ -109,6 +109,19 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   registry).
 - Nix base image and nix seed volume are mutually exclusive — a `:/nix` mount
   shadows the baked store (routing enforced in `dev/devcontainer`).
+- Publishing the Nix base does not deliver it: consumers build on the
+  `BASE_IMAGE` digest in `nix/base/compose.nix-base.yml`, so a publish without
+  a repin reaches nobody. The `pin` job in `.github/workflows/nix-base.yml`
+  proposes that bump after every `main` publish by running `dev/bump-nix-base`
+  — the workflow↔tool coupling (the job invokes the tool; the tool exits 0 when
+  already pinned, which is what makes the job a quiet no-op) is guarded by
+  `tests/test-bump-nix-base.sh`. Nothing owned this step before and it duly
+  went undone: the pin sat on #41's digest through every later publish, leaving
+  #70's fix live on ghcr and unreachable (#83).
+- `nix/base/compose.nix-base.yml` is excluded from `nix-base.yml`'s trigger
+  paths even though `nix/base/**` would match it: the pin is an output of a
+  publish, not an input to one, so merging a pin bump must not set off another
+  hour-long two-arch republish of byte-identical layers (—).
 - The Claude Code version is pinned twice: `Dockerfile` ARG
   `CLAUDE_CODE_VERSION` and `nix/base/pkgs/claude-code.nix`; bump via
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
