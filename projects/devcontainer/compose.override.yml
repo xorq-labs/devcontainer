@@ -5,7 +5,8 @@ services:
       args:
         # Prepend the Nix profile to PATH inside the container. The user here must
         # match NIX_USER in lib/nix-seed.sh (the profile it symlinks); compose
-        # can't read that bash var, so keep the two in sync by hand.
+        # can't read that bash var, so the path is repeated here and guarded by
+        # tests/test-nix-user-sync.sh, which derives it from that default.
         EXTRA_PATH: "/home/vscode/.nix-profile/bin"
     environment:
       - DEV_CONTAINER_WORKSPACE

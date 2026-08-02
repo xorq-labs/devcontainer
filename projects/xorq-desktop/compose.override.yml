@@ -2,7 +2,9 @@ services:
   app:
     build:
       args:
-        # Prepended to PATH inside the container (project venv + cargo + nix profile)
+        # Prepended to PATH inside the container (project venv + cargo + nix profile).
+        # The nix-profile home must match NIX_USER in lib/nix-seed.sh
+        # (guarded by tests/test-nix-user-sync.sh).
         EXTRA_PATH: "${DEV_CONTAINER_WORKSPACE:?DEV_CONTAINER_WORKSPACE is required}/.venv/bin:/home/vscode/.cargo/bin:/home/vscode/.nix-profile/bin"
     volumes:
       # cached build/dependency volumes

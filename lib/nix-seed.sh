@@ -26,7 +26,9 @@ NIX_SEED_SHA_FILE="${NIX_SEED_SHA_FILE:-/nix-seed.sha256}"
 NIX_SEED_ROOT="${NIX_SEED_ROOT:-}"
 # The user Nix is installed under at build time; the runtime profile symlink must
 # target the same per-user path. Single source of truth for both phases — keep it
-# in sync with the container user if you change USER_UID/username.
+# in sync with the container user if you change USER_UID/username. The compose
+# overlays repeat the resolved /home/<user>/.nix-profile/bin in EXTRA_PATH;
+# tests/test-nix-user-sync.sh parses the default below and checks every copy.
 NIX_USER="${NIX_USER:-vscode}"
 
 # build time (root, during docker build): single-user install, tar a seed,
