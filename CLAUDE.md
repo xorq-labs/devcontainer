@@ -134,6 +134,13 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   only that file skipped the tail build that exists to verify it. Nothing
   failed; the verification just never ran
   (`tests/test-nix-base-trigger-paths.sh`).
+- `docker-build.yml`'s trigger paths hand-mirror the same input classes for
+  the classic build — the root `Dockerfile`'s default-context `COPY` sources,
+  the `--build-context` dir the `--from=project` COPYs read, and
+  `.dockerignore` — with `push` equal to `pull_request`. The list omitted
+  `.dockerignore` (#92), so a deny pattern newly matching a COPY source could
+  merge green with no classic build run
+  (`tests/test-docker-build-trigger-paths.sh`).
 - The Claude Code version is pinned twice: `Dockerfile` ARG
   `CLAUDE_CODE_VERSION` and `nix/base/pkgs/claude-code.nix`; bump via
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
