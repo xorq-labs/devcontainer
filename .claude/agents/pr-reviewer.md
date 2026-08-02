@@ -32,6 +32,25 @@ and any ADR the PR references or edits (`docs/adr/`).
    regression test the harness could support?
 4. Run `tests/run-all` on the head tree when the PR touches shell/python.
 
+## Repeat offenders (always run the log; report only on a hit)
+
+Run `git log --oneline origin/main -- <changed paths>` over the files this PR
+modifies. Anchor on `origin/main`, not the checkout's HEAD: HEAD may be a stale
+branch, and if it is the PR branch itself the PR's own commits would self-trigger
+"patched before". Batching every path into one invocation is fine; do NOT add
+`--follow`, which is a hard error with more than one pathspec. Read any commit
+that looks like a fix to the same coupling.
+
+Report only when there is something to report: this area patched before for the
+same underlying reason, or an earlier fix reverted. Then the finding is usually
+that a guard is missing, not that this patch is wrong — "third fix here" changes
+what good looks like.
+
+Keep this DIFF-SCOPED. Repo-wide pattern analysis belongs to the
+`structural-auditor` agent; a per-PR verdict is not the place to raise
+repo-level debt, and doing it here means every parallel review redoes the same
+scan for findings its author cannot act on.
+
 ## Credential-handling code (extra rubric)
 
 When the PR moves credentials, tokens, or auth config:
