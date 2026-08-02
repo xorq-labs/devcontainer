@@ -372,4 +372,29 @@ real="$(grep -oP '\$\{DEV_NIX_BASE_IMAGE:-\K[^}]+' "$DEV_BASE/nix/base/compose.n
 assert_true "the committed pin matches the tool's expected reference shape" \
     bash -c "[[ '$real' =~ ^[a-z0-9.:-]+/.+@sha256:[0-9a-f]{64}$ ]]"
 
+echo "--- the workflow drives this tool ---"
+# CI is what makes the publish -> pin step owned (#83), and it owns it by
+# calling this script. Renaming or relocating the tool without updating the
+# workflow would leave the publish green and the pin unmoved again — the exact
+# regression, back in a new costume. Guard the coupling in both directions.
+WF="$DEV_BASE/.github/workflows/nix-base.yml"
+assert_true "the publish workflow exists" test -f "$WF"
+wf="$(cat "$WF")"
+assert_contains "the pin job invokes dev/bump-nix-base" "dev/bump-nix-base" "$wf"
+assert_contains "it passes the per-commit sha- tag" 'dev/bump-nix-base "sha-${short}"' "$wf"
+assert_contains "the pin job is main-only" "github.ref == 'refs/heads/main'" "$wf"
+# The no-op path depends on the tool exiting 0 when the pin is already current;
+# if that ever became non-zero, every republish would redden the publish run.
+# Drive it here rather than trusting $RC from an unrelated case above.
+write_compose "$NEW"
+run_with bin "$NEW"
+assert_eq "already-pinned exits 0, which is what makes the job a quiet no-op" \
+    0 "$RC"
+assert_eq "and leaves the file byte-identical, so git diff --quiet holds" \
+    "$NEW" "$(pinned)"
+# The pin file is an output of a publish, not an input: leaving it in the
+# trigger paths means merging a bump sets off another two-arch republish.
+assert_contains "the pin file is excluded from the publish triggers" \
+    "'!nix/base/compose.nix-base.yml'" "$wf"
+
 finish

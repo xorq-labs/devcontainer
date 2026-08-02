@@ -180,18 +180,47 @@ The build is reproducible: independent CI runs from different commits produce
 byte-identical layer and manifest digests, so the pinned digest is stable
 across republishes of the same content.
 
-**After a publish that should reach consumers**, move `compose.nix-base.yml`'s
-`BASE_IMAGE` default onto the new manifest digest:
+Publishing alone delivers nothing: consumers build on the `BASE_IMAGE` digest
+pinned in `compose.nix-base.yml`, so a base that is published but not pinned
+reaches no one. That is not theoretical — the pin sat on the digest from #41
+while every later publish went unclaimed (#83).
+
+So the workflow's `pin` job proposes the bump itself after a `main` publish,
+running the same `dev/bump-nix-base` a human would. It force-pushes one
+long-lived `auto/nix-base-pin` branch, so repeated publishes update a single
+open PR rather than opening one each, and it is a no-op when the pin is already
+current (a republish of unchanged content is digest-stable).
+
+It proposes rather than pushes: the pin stays deliberate — an upstream retag
+must never silently change what anyone builds on — and merging is what prompts
+a rebuild on every consumer, through `dev/devcontainer`'s staleness check.
+
+To move the pin by hand (a base other than the newest, or a stale open PR):
 
     dev/bump-nix-base                # or: devcontainer bump-nix-base
 
-The pin is deliberate — an upstream retag never silently changes what anyone
-builds on. `dev/devcontainer`'s staleness check picks the change up and
-prompts a rebuild.
+Two things the automation depends on, in order of how loudly they fail:
 
-Publishing alone delivers nothing: consumers build on the pinned digest, so a
-fix that is published but not pinned reaches no one. That is not theoretical —
-the pin sat on the digest from #41 while later publishes went unclaimed (#83).
+**It must be allowed to open a PR at all.** `GITHUB_TOKEN` can only do that
+with *Settings → Actions → General → "Allow GitHub Actions to create and
+approve pull requests"*, and that repo toggle is itself settable only if org
+policy permits it — an org that forbids it wins, and the repo checkbox cannot
+be turned on. Without either, `gh pr create` 403s with a message naming neither
+knob, so the job translates it: the bumped `auto/nix-base-pin` branch is
+already pushed, and the annotation says to flip the setting, set a
+`PIN_BUMP_TOKEN`, or open the PR from that branch by hand. The job fails rather
+than skipping — a delivery step that quietly does nothing is the bug this whole
+mechanism exists to remove.
+
+**Checks are a separate question.** A PR opened *or updated* by `GITHUB_TOKEN`
+does not trigger workflows, so the bump PR carries no checks unless a
+`PIN_BUMP_TOKEN` secret (a PAT with `repo` scope) is set — it is used for the
+`checkout` too, so updates are covered and not just the initial create. Going
+without is defensible here: the digest being pinned was built, smoke-tested,
+tail-built and published by the very run opening the PR, and re-checking a
+one-line digest edit mostly re-runs that same hour-long build. The generated
+body says plainly when it is unchecked, so an unchecked PR never passes for a
+checked one.
 
 ## Building locally (fallback)
 

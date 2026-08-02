@@ -33,6 +33,9 @@ on:
     branches: [main]
     paths:
       - nix/base/**
+      # An output of a publish, not an input to one: merging a pin bump must
+      # not set off another two-arch republish of byte-identical layers.
+      - '!nix/base/compose.nix-base.yml'
       - defaults/**
       - lib/nix-seed.sh
       - lib/git.sh
@@ -42,6 +45,9 @@ on:
   pull_request:
     paths:
       - nix/base/**
+      # An output of a publish, not an input to one: merging a pin bump must
+      # not set off another two-arch republish of byte-identical layers.
+      - '!nix/base/compose.nix-base.yml'
       - defaults/**
       - lib/nix-seed.sh
       - lib/git.sh
@@ -152,7 +158,8 @@ jobs:
             "$IMAGE:sha-${short}-amd64" "$IMAGE:sha-${short}-arm64"
 
       # The manifest digest printed here is what compose.nix-base.yml pins as
-      # BASE_IMAGE (bumped deliberately after a publish, not auto-tracked).
+      # BASE_IMAGE. The `pin` job below opens the PR that moves it; this
+      # summary stays because it is the human-readable record of the publish.
       - name: Report the published digest
         run: |
           short="${GITHUB_SHA::7}"
@@ -162,3 +169,124 @@ jobs:
             docker buildx imagetools inspect "$IMAGE:sha-${short}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Publishing alone delivers nothing: consumers build on the BASE_IMAGE digest
+  # pinned in nix/base/compose.nix-base.yml, so a base that is published but not
+  # pinned reaches no one. That step was owned by nobody and duly went undone —
+  # the pin sat on the #41 digest through every later publish (#83).
+  #
+  # So CI proposes the bump itself, via the same dev/bump-nix-base a human would
+  # run. One rewrite path means the manifest-list check and the byte-anchored
+  # line format cannot drift between the tool and this workflow.
+  #
+  # It PROPOSES rather than pushes: the pin stays a deliberate, reviewable act
+  # (an upstream retag must never silently change what anyone builds on), and a
+  # rebuild prompt lands on every consumer when it merges.
+  pin:
+    name: Open the pin-bump PR
+    if: github.ref == 'refs/heads/main'
+    needs: manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Checkout persists this token as http.extraheader, so it is what the
+      # `git push -f` below authenticates as. That matters: a push made with
+      # GITHUB_TOKEN does not start workflow runs, so without the PAT here an
+      # UPDATE to an existing bump PR would silently carry no checks even when
+      # PIN_BUMP_TOKEN is set and the original creation was checked.
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PIN_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Resolve the tag rather than plumbing a digest through job outputs:
+      # sha-<short> is immutable per commit, and letting the tool do the lookup
+      # keeps resolution — and the manifest-list gate — on the one code path
+      # tests/test-bump-nix-base.sh covers. A per-arch digest cannot be written
+      # here even if the publish above somehow produced one.
+      - name: Bump the pin
+        id: bump
+        run: |
+          short="${GITHUB_SHA::7}"
+          dev/bump-nix-base "sha-${short}"
+          if git diff --quiet nix/base/compose.nix-base.yml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Pin already current — nothing to propose."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A republish of unchanged content is digest-stable (the build is
+      # reproducible), so the common case is changed=false and this job is a
+      # no-op. When it does change, force-pushing one long-lived branch means
+      # repeated publishes update a single open PR instead of opening one each.
+      - name: Open or update the pin-bump PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          # A PR opened with GITHUB_TOKEN does not trigger workflows, so the
+          # bump PR would arrive with no checks at all. Set PIN_BUMP_TOKEN (a
+          # PAT with repo scope) to get them; without it the PR is still opened,
+          # and the step says plainly that it is unchecked.
+          GH_TOKEN: ${{ secrets.PIN_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+          BRANCH: auto/nix-base-pin
+          # A boolean, not the secret: never interpolate a secret into the
+          # script body, where it would be one quoting slip from executing.
+          HAS_PAT: ${{ secrets.PIN_BUMP_TOKEN != '' }}
+        run: |
+          short="${GITHUB_SHA::7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git commit -am "chore(nix-base): pin the base published by ${short}"
+          git push -f origin "$BRANCH"
+
+          title="chore(nix-base): pin the base published by ${short}"
+
+          # Regenerated on BOTH paths. On an update the branch now pins a
+          # different commit's digest, so reusing the original title and body
+          # would describe commit A while the diff pins commit B's base.
+          {
+            echo "Opened automatically after the Nix base publish for \`${GITHUB_SHA}\`."
+            echo
+            echo "Consumers build on the \`BASE_IMAGE\` digest in"
+            echo "\`nix/base/compose.nix-base.yml\`, not on \`latest\`, so the base"
+            echo "published by that commit reaches nobody until this merges."
+            echo
+            echo "Written by \`dev/bump-nix-base\`, which refuses any digest that is"
+            echo "not a multi-arch manifest list. Merging prompts a rebuild on every"
+            echo "consumer through the staleness hash."
+            if [ "$HAS_PAT" != "true" ]; then
+              echo
+              echo "> Opened with \`GITHUB_TOKEN\`, so **no checks ran on this PR**."
+              echo "> That is survivable here — the digest was just built, smoke"
+              echo "> tested, tail built and published by the run that opened this"
+              echo "> — but set a \`PIN_BUMP_TOKEN\` secret (a PAT with \`repo\`"
+              echo "> scope) if you want them. Pushing to this branch by hand also"
+              echo "> works, but the next publish force-pushes over it."
+            fi
+          } > "$RUNNER_TEMP/pin-pr-body.md"
+
+          existing="$(gh pr list --head "$BRANCH" --state open --json number -q '.[].number')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/pin-pr-body.md"
+            echo "Updated the open pin-bump PR (#${existing}) onto ${short}."
+            exit 0
+          fi
+
+          # Opening a PR as GITHUB_TOKEN needs "Allow GitHub Actions to create
+          # and approve pull requests", which is settable per-repo only if org
+          # policy permits it. Without it this 403s with a message that names
+          # neither knob, so translate it — the branch is already pushed, and a
+          # human seeing this can either flip the setting or run
+          # `dev/bump-nix-base` locally and open the PR themselves.
+          if ! gh pr create --base main --head "$BRANCH" \
+              --title "$title" --body-file "$RUNNER_TEMP/pin-pr-body.md"; then
+            echo "::error::Could not open the pin-bump PR. The bumped branch" \
+              "'$BRANCH' is pushed and ready. If this was a 403, enable" \
+              "Settings > Actions > General > 'Allow GitHub Actions to create" \
+              "and approve pull requests' (org policy must permit it), or set" \
+              "a PIN_BUMP_TOKEN secret, or open the PR from '$BRANCH' by hand."
+            exit 1
+          fi
