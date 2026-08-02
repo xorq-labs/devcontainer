@@ -62,7 +62,8 @@ agent hits a design fork mid-PR, it drafts the ADR amendment (options,
 trade-offs, recommendation) and pushes it for review rather than blocking on
 an interactive question. Current records: ADR-0001 (private credential
 seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
-`.claude/agents/` in git; per-subdir state symlinks), and nix/base/README.md
+`.claude/agents/` in git; per-subdir state symlinks), ADR-0004 (durable
+memory carve-outs: bind, don't copy), and nix/base/README.md
 "Design decisions" for the base-image record.
 
 ## Invariants
@@ -195,6 +196,15 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   entries, so it must ask for `--untracked-files=all`: git's default collapses
   a wholly-untracked `.claude/` to one entry that matches no manifest path
   (`tests/test-worktree-claude-layout.sh`).
+- Claude memory is bind-mounted from the host, never copied (ADR-0004): the
+  global store and a per-project store keyed by the MAIN checkout path, shared
+  by all worktree containers. `ensure_claude_memory` pre-creates the sources
+  and migrates any legacy `$DEV_CLAUDE_LOGS/memory` before compose mounts —
+  the nested bind would otherwise shadow it. The `setup-claude.py` copy paths
+  are a mountless fallback only, and any surviving copy must UNION `MEMORY.md`
+  by link target (container line wins) and keep every memory file indexed — an
+  unindexed memory is invisible to every session
+  (`tests/test-claude-memory.sh`).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).

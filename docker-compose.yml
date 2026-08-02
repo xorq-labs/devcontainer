@@ -47,6 +47,17 @@ services:
       - type: bind
         source: ${DEV_CLAUDE_LOGS:?DEV_CLAUDE_LOGS is required}
         target: /home/vscode/.claude/projects/${DEV_CONTAINER_PROJECT_KEY:?DEV_CONTAINER_PROJECT_KEY is required}
+      # Claude: durable memory carve-outs (ADR-0004). Like transcripts, memory
+      # cannot be rebuilt, so both stores live on the host and are bind-mounted
+      # over the volume (the old copy-in clobbered the MEMORY.md index on every
+      # entry). The per-project store nests inside the transcript bind above —
+      # compose orders nested binds by target depth — and is keyed by the MAIN
+      # checkout path so every worktree container shares one store. Sources are
+      # pre-created by ensure_claude_memory in dev/devcontainer.
+      - ${DEV_CLAUDE_GLOBAL_MEMORY:?DEV_CLAUDE_GLOBAL_MEMORY is required (exported by dev/devcontainer)}:/home/vscode/.claude/memory
+      - type: bind
+        source: ${DEV_CLAUDE_MEMORY:?DEV_CLAUDE_MEMORY is required (exported by dev/devcontainer)}
+        target: /home/vscode/.claude/projects/${DEV_CONTAINER_PROJECT_KEY}/memory
     tmpfs:
       - /home/vscode/.claude/shell-snapshots
       # SSH agent forwarding: socat bridges host agent over TCP via host.docker.internal

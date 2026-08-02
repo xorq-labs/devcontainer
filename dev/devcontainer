@@ -342,6 +342,17 @@ export DEV_HOST_PROJECT_KEY DEV_CONTAINER_PROJECT_KEY
 DEV_CLAUDE_LOGS="${DEV_CLAUDE_LOGS:-$HOME/.claude/projects/-devcontainer-${DEV_CONTAINER_NAME}}"
 export DEV_CLAUDE_LOGS
 
+# Memory carve-outs (ADR-0004): like transcripts, memory cannot be rebuilt, so
+# both stores are bind-mounted from the host instead of copied into the
+# claude-home volume (the copy clobbered the MEMORY.md index on every entry).
+# The per-project store is keyed by the MAIN checkout's path, so every worktree
+# container and a host session in the main checkout share one memory; the
+# global store is the host's own ~/.claude/memory.
+DEV_SHARED_PROJECT_KEY="$(echo "$DEV_MAIN_TREE" | sed 's|[^a-zA-Z0-9]|-|g')"
+DEV_CLAUDE_MEMORY="${DEV_CLAUDE_MEMORY:-$HOME/.claude/projects/${DEV_SHARED_PROJECT_KEY}/memory}"
+DEV_CLAUDE_GLOBAL_MEMORY="${DEV_CLAUDE_GLOBAL_MEMORY:-$HOME/.claude/memory}"
+export DEV_CLAUDE_MEMORY DEV_CLAUDE_GLOBAL_MEMORY
+
 write_resolved_env() {
     local dest="$1"
     mkdir -p "$(dirname "$dest")"
@@ -772,6 +783,7 @@ require_tty() {
 . "$DEV_BASE_DIR/lib/host-bridge.sh"
 . "$DEV_BASE_DIR/lib/list-file.sh"
 . "$DEV_BASE_DIR/lib/host-mounts.sh"
+. "$DEV_BASE_DIR/lib/claude-memory.sh"
 
 # Ordering: this must run before the FIRST `dc` invocation. dc's compose file
 # list includes the generated host-mounts override, so a dc call placed above
@@ -866,6 +878,18 @@ ensure_claude_logs() {
     mkdir -p "$DEV_CLAUDE_LOGS"
 }
 
+# Memory carve-outs (ADR-0004): create the bind sources before compose does
+# (same root-ownership hazard as ensure_claude_logs), and merge any legacy
+# per-container memory (written inside the DEV_CLAUDE_LOGS bind before the
+# shared store existed) into the shared per-project store — mounting over it
+# would silently shadow those memories. The old dir is then kept as an empty,
+# vscode-owned mountpoint stub so the nested bind doesn't recreate it as root.
+ensure_claude_memory() {
+    mkdir -p "$DEV_CLAUDE_MEMORY" "$DEV_CLAUDE_GLOBAL_MEMORY"
+    migrate_project_memory "$DEV_CLAUDE_LOGS/memory" "$DEV_CLAUDE_MEMORY"
+    mkdir -p "$DEV_CLAUDE_LOGS/memory"
+}
+
 # Disconnect networks whose stored ID no longer matches the live network.
 # This happens when Docker recreates a network with the same name after an
 # ungraceful shutdown — the container still references the old (deleted) ID.
@@ -945,6 +969,7 @@ ensure_up() {
         install_hooks
         ensure_external_volumes
         ensure_claude_logs
+        ensure_claude_memory
         if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then
             (cd "$DEV_WORKSPACE" && "$DEV_BASE_DIR/dev/setup-worktree")
             printf 'copy\t%s\n' ".envrcs/.resolved-env" >> "$DEV_WORKSPACE/.envrcs/.worktree-manifest"
