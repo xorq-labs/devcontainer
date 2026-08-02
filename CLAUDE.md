@@ -93,8 +93,20 @@ enforces it in parentheses (`—` = unenforced; add a guard if you touch it).
   `dev/devcontainer` must match the root `Dockerfile`'s classic-routing ARG set
   (`tests/test-classic-args-sync.sh`).
 - The `BASE_IMAGE` pin line in `nix/base/compose.nix-base.yml` must stay
-  byte-anchored to the grep in `ensure_nix_base()` in `dev/devcontainer`
-  (`tests/test-nix-base-pin.sh`).
+  byte-anchored to the grep in `ensure_nix_base()` in `dev/devcontainer`. That
+  anchor now has FOUR encodings: that grep, the same grep plus the sed rewrite
+  pattern in `dev/bump-nix-base`, and a fourth copy in
+  `tests/test-bump-nix-base.sh` — reformat the line and two of the four go
+  stale (`tests/test-nix-base-pin.sh`, `tests/test-bump-nix-base.sh`).
+- Move the pinned base digest with `dev/bump-nix-base`, never by hand: it is
+  the only thing checking that the digest is a manifest LIST. A per-arch digest
+  (`sha-<short>-amd64`, printed by `imagetools inspect` directly beneath the
+  list digest) builds fine on its own arch and breaks every other one. No
+  offline test can catch that — it needs the registry — so the tool is the
+  guard, and `tests/test-bump-nix-base.sh` guards the tool. Its read-only flags
+  differ like `bump-hadolint`'s: `--check` reports (exit 0 whether or not the
+  pin is current), `--verify` gates (non-zero on a bad pin OR an unreachable
+  registry).
 - Nix base image and nix seed volume are mutually exclusive — a `:/nix` mount
   shadows the baked store (routing enforced in `dev/devcontainer`).
 - The Claude Code version is pinned twice: `Dockerfile` ARG

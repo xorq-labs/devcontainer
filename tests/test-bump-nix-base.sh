@@ -40,7 +40,8 @@ ARCH="sha256:$(printf 'c%.0s' {1..64})"  # a per-arch image manifest
 SANDBOX="$(mktemp -d)"
 _cleanup_dirs+=("$SANDBOX")
 mkdir -p "$SANDBOX/dev" "$SANDBOX/nix/base" \
-    "$SANDBOX/bin" "$SANDBOX/bin-badnet" "$SANDBOX/bin-notoken" "$SANDBOX/bin-singlearch"
+    "$SANDBOX/bin" "$SANDBOX/bin-badnet" "$SANDBOX/bin-notoken" "$SANDBOX/bin-singlearch" \
+    "$SANDBOX/bin-onearch" "$SANDBOX/bin-nomanifest" "$SANDBOX/bin-badmedia"
 cp "$SRC" "$SANDBOX/dev/bump-nix-base"
 BUMP="$SANDBOX/dev/bump-nix-base"
 COMPOSE="$SANDBOX/nix/base/compose.nix-base.yml"
@@ -126,8 +127,77 @@ if \$head; then echo "docker-content-digest: ${ARCH}"; exit 0; fi
 echo '{"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{}}'
 EOF
 
+# An index that IS a manifest list but names only one real platform — the shape
+# a publish leaves behind when one arch's leg failed to attach, or when
+# `imagetools create` is handed a single source. This is the headline scenario
+# the tool exists to catch, and it is the one the media-type check alone does
+# NOT catch: without a platform count, `is_multi_arch` would wave it through.
+cat > "$SANDBOX/bin-onearch/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+head=false
+for a in "\$@"; do
+    case "\$a" in
+        https://*) url="\$a" ;;
+        -*I*) head=true ;;
+    esac
+done
+case "\$url" in
+    *"/token?"*) echo '{"token":"stub-token"}'; exit 0 ;;
+esac
+if \$head; then echo "docker-content-digest: ${NEW}"; exit 0; fi
+cat <<'JSON'
+{"mediaType":"application/vnd.oci.image.index.v1+json",
+ "manifests":[
+   {"digest":"sha256:1","platform":{"os":"linux","architecture":"amd64"}},
+   {"digest":"sha256:3","platform":{"os":"unknown","architecture":"unknown"}}]}
+JSON
+EOF
+
+# A non-list media type that nonetheless carries two real platforms. No registry
+# produces this — a per-arch manifest has no `manifests` array at all, which is
+# why the platform count alone already refuses every realistic per-arch image.
+# That redundancy is the point: without this fixture the media-type arm is dead
+# code by test, and deleting it leaves the suite green. Keep it honest instead.
+cat > "$SANDBOX/bin-badmedia/curl" <<EOF
+#!/usr/bin/env bash
+url=""
+head=false
+for a in "\$@"; do
+    case "\$a" in
+        https://*) url="\$a" ;;
+        -*I*) head=true ;;
+    esac
+done
+case "\$url" in
+    *"/token?"*) echo '{"token":"stub-token"}'; exit 0 ;;
+esac
+if \$head; then echo "docker-content-digest: ${NEW}"; exit 0; fi
+cat <<'JSON'
+{"mediaType":"application/vnd.docker.distribution.manifest.v2+json",
+ "manifests":[
+   {"digest":"sha256:1","platform":{"os":"linux","architecture":"amd64"}},
+   {"digest":"sha256:2","platform":{"os":"linux","architecture":"arm64"}}]}
+JSON
+EOF
+
+# Token endpoint works, every manifest request fails: a transient 5xx, a package
+# flipped private, a deleted digest. Distinct from bin-badnet, which dies at the
+# token and so never reaches the fetch-failure branches at all.
+cat > "$SANDBOX/bin-nomanifest/curl" <<'EOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        *"/token?"*) echo '{"token":"stub-token"}'; exit 0 ;;
+    esac
+done
+exit 22
+EOF
+
 chmod +x "$SANDBOX/bin/curl" "$SANDBOX/bin-badnet/curl" \
-    "$SANDBOX/bin-notoken/curl" "$SANDBOX/bin-singlearch/curl"
+    "$SANDBOX/bin-notoken/curl" "$SANDBOX/bin-singlearch/curl" \
+    "$SANDBOX/bin-onearch/curl" "$SANDBOX/bin-nomanifest/curl" \
+    "$SANDBOX/bin-badmedia/curl"
 
 # Run the script with a given curl stub on PATH, capturing output and exit code.
 OUT=""
@@ -233,6 +303,47 @@ write_compose "$OLD"
 run_with bin-singlearch
 assert_eq "a per-arch latest is refused" 1 "$RC"
 assert_eq "that refusal wrote nothing" "$OLD" "$(pinned)"
+
+# A manifest LIST naming one real platform. The media-type check passes here, so
+# only the platform count can catch it — without these four assertions, relaxing
+# `-ge 3` to `-ge 1` leaves the whole suite green.
+write_compose "$OLD"
+run_with bin-onearch
+assert_eq "a single-platform index is refused" 1 "$RC"
+assert_contains "the refusal names the cause" "not a multi-arch manifest list" "$OUT"
+assert_eq "the single-platform refusal wrote nothing" "$OLD" "$(pinned)"
+write_compose "$NEW"
+run_with bin-onearch --verify
+assert_eq "--verify also refuses a single-platform index" 1 "$RC"
+
+write_compose "$OLD"
+run_with bin-badmedia
+assert_eq "a non-list media type is refused even with two platforms" 1 "$RC"
+assert_eq "the media-type refusal wrote nothing" "$OLD" "$(pinned)"
+
+# Token works, manifest fetch fails. bin-badnet dies at the token, so without
+# this stub the "could not fetch" branches never execute and deleting them
+# leaves the suite green — the user would get a manifest-list complaint with an
+# empty media type instead of an accurate "unverifiable" message.
+# Via an explicit digest, which skips tag resolution and lands directly on the
+# validation fetch — also exactly the CI shape, where the workflow supplies a
+# digest and a transient 5xx must not be mistaken for a malformed manifest.
+write_compose "$OLD"
+run_with bin-nomanifest "$NEW"
+assert_eq "an unfetchable manifest fails the bump" 1 "$RC"
+assert_contains "the bump says it could not fetch, not that it is single-arch" \
+    "could not fetch the manifest" "$OUT"
+assert_eq "the unfetchable bump wrote nothing" "$OLD" "$(pinned)"
+
+# The tag-resolution failure is a different message, and must stay that way.
+write_compose "$OLD"
+run_with bin-nomanifest
+assert_eq "an unresolvable tag also fails" 1 "$RC"
+assert_contains "but reports resolution, not fetching" "could not resolve" "$OUT"
+write_compose "$NEW"
+run_with bin-nomanifest --verify
+assert_eq "--verify fails on an unfetchable manifest" 1 "$RC"
+assert_contains "--verify calls it unverifiable" "treating an unverifiable pin as a failure" "$OUT"
 
 run_with bin-notoken --check
 assert_true "an unusable token endpoint fails" test "$RC" -ne 0

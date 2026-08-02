@@ -23,13 +23,17 @@ set -euo pipefail
 #   edits, and exits 0 whether or not they match — byte-for-byte the shape of
 #   `bump-nix --check` and `bump-claude-code --check`, down to the %-11s label
 #   column. "A newer base has been published" is not something a report fails on.
+#   It still fails when it cannot produce a report at all (unreachable registry,
+#   a named tag that does not resolve); "always exits 0" is about the comparison,
+#   not about the network.
 #
-#   --verify is a GATE: it resolves the CURRENTLY COMMITTED digest and fails if
-#   it does not exist or is not a multi-arch manifest list. It fails on an
-#   unreachable registry too — a gate that passes because it could not check is
-#   worse than no gate. It deliberately does NOT require the pin to equal
-#   `latest`: pinning an older base on purpose is legitimate, being pinned to
-#   something broken is not.
+#   --verify is a GATE: it resolves the CURRENTLY COMMITTED digest — or an
+#   explicit tag/digest argument, which is how you check a candidate before
+#   pinning it — and fails if it does not exist or is not a multi-arch manifest
+#   list. It fails on an unreachable registry too: a gate that passes because it
+#   could not check is worse than no gate. It deliberately does NOT require the
+#   pin to equal `latest`: pinning an older base on purpose is legitimate, being
+#   pinned to something broken is not.
 #
 # The manifest-list check is the one a human does not reliably do by hand.
 # `docker buildx imagetools inspect` prints the per-arch digests directly
@@ -166,9 +170,14 @@ is_multi_arch() {
 # Defaults to the COMMITTED digest, not `latest` — the question is whether what
 # is in the tree is usable, not whether it is current.
 if $verify_only; then
+    # Defaults to the committed digest; an explicit tag or digest is also
+    # accepted, which is how you check a candidate before pinning it.
     subject="${target:-$current}"
-    echo "verifying ${host}/${repo_path}@${subject#*@}"
-    summary="$(manifest_summary "${subject#*@}")"
+    case "$subject" in
+        sha256:*) echo "verifying ${host}/${repo_path}@${subject}" ;;
+        *) echo "verifying ${host}/${repo_path}:${subject}" ;;
+    esac
+    summary="$(manifest_summary "$subject")"
     if [ -z "$summary" ]; then
         echo "error: cannot verify the pin — the manifest could not be fetched (treating an unverifiable pin as a failure)" >&2
         exit 1
