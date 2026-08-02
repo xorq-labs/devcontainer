@@ -39,6 +39,7 @@ on:
       - defaults/**
       - lib/nix-seed.sh
       - lib/git.sh
+      - lib/claude-code-token-env.sh
       - setup-claude.py
       - audit-hook
       - .github/workflows/nix-base.yml
@@ -51,6 +52,7 @@ on:
       - defaults/**
       - lib/nix-seed.sh
       - lib/git.sh
+      - lib/claude-code-token-env.sh
       - setup-claude.py
       - audit-hook
       - .github/workflows/nix-base.yml
