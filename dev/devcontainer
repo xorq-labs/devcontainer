@@ -37,6 +37,11 @@ if [ "${1:-}" = "bump-hadolint" ]; then
     exec "$(dirname "$(readlink -f "$0")")/bump-hadolint" "$@"
 fi
 
+if [ "${1:-}" = "bump-nix-base" ]; then
+    shift
+    exec "$(dirname "$(readlink -f "$0")")/bump-nix-base" "$@"
+fi
+
 # Resolve through symlinks and PATH to find the base repo. Done here (rather
 # than after option parsing) because show_usage below needs the command table.
 _SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"

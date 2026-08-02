@@ -180,11 +180,18 @@ The build is reproducible: independent CI runs from different commits produce
 byte-identical layer and manifest digests, so the pinned digest is stable
 across republishes of the same content.
 
-**After a publish that should reach consumers**, copy the manifest digest
-from the workflow's job summary into `compose.nix-base.yml`'s `BASE_IMAGE`
-default. The pin is deliberate — an upstream retag never silently changes
-what anyone builds on. `dev/devcontainer`'s staleness check picks the change
-up and prompts a rebuild.
+**After a publish that should reach consumers**, move `compose.nix-base.yml`'s
+`BASE_IMAGE` default onto the new manifest digest:
+
+    dev/bump-nix-base                # or: devcontainer bump-nix-base
+
+The pin is deliberate — an upstream retag never silently changes what anyone
+builds on. `dev/devcontainer`'s staleness check picks the change up and
+prompts a rebuild.
+
+Publishing alone delivers nothing: consumers build on the pinned digest, so a
+fix that is published but not pinned reaches no one. That is not theoretical —
+the pin sat on the digest from #41 while later publishes went unclaimed (#83).
 
 ## Building locally (fallback)
 
@@ -225,6 +232,28 @@ live next to the version — and `tests/test-claude-code-pin-sync.sh` fails CI i
 the two **versions** drift. It does not inspect the hashes; a sentinel that
 reaches a commit is caught by this base's build in the Nix Base workflow, per
 arch.
+
+**Published base digest** (`BASE_IMAGE` in `compose.nix-base.yml`) — the pin
+consumers actually build on:
+
+    dev/bump-nix-base                  # pin to the published `latest`
+    dev/bump-nix-base sha-51d9c59      # pin to a specific published tag
+    dev/bump-nix-base sha256:c536...   # pin an explicit digest (the CI path)
+    dev/bump-nix-base --check          # committed vs latest, never edits
+    dev/bump-nix-base --verify         # gate the committed pin
+
+ghcr serves this package anonymously, so the tool needs only `curl` — no
+docker, no `read:packages`. Like `bump-hadolint`, its two read-only flags
+answer different questions: `--check` is a report (always exits 0 — "a newer
+base exists" is not a failure), `--verify` is a gate that fails unless the
+committed pin resolves to a multi-arch **manifest list**, and fails on an
+unreachable registry rather than passing unchecked.
+
+That manifest-list check is the reason to prefer the tool over a hand edit.
+`imagetools inspect` prints the per-arch digests directly beneath the
+manifest-list digest, and pinning `sha-<short>-amd64` by mistake looks
+entirely correct on an amd64 laptop while breaking every arm64 consumer at
+pull time. The tool refuses to write one.
 
 **MS base digest** — pinned, so an MS repush of `3.12-bookworm` changes
 nothing here. To deliberately adopt a newer base, re-derive per arch:
