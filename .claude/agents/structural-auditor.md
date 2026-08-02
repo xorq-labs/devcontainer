@@ -77,7 +77,8 @@ since fixed is not a finding. Say plainly which instances are live.
   if it records one — or an explicit "accept, because…".
 - **A disposal draft per shape**: ready-to-file issue text (title plus a body
   carrying the evidence), or the "accept, because…" phrased so it can be
-  pasted into `CLAUDE.md`'s invariants as a `(—)` entry. You never file it —
+  pasted into `CLAUDE.md`'s invariants in the annotation vocabulary
+  `docs/adr/` records (an accepted risk states its reason). You never file it —
   the caller does — but a shape the caller must re-derive before filing is
   not finished.
 - **Measurements** you took, with the command, so the next audit can rerun them

@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Guard: .github/workflows/nix-base.yml's trigger paths must cover every
+# default-context COPY source of nix/base/Dockerfile.nix-default.
+#
+# The workflow states the rule in its own header:
+#
+#   Paths beyond nix/base/** are the tail-build inputs (Dockerfile.nix-default
+#   COPYs them): a change there must prove the default consumer image still
+#   builds.
+#
+# ...and then drifted from it. lib/claude-code-token-env.sh was COPYd by both
+# Dockerfiles, allowlisted in .dockerignore and hashed by image_config_files(),
+# yet missing from these lists (#86) — so a PR touching only that file skipped
+# the "Build the project tail on the base" step, which is the one step that
+# exists to prove exactly that change is safe. Nothing failed; the verification
+# simply did not run. That is the failure mode this test converts into a red
+# check.
+#
+# Three input classes are checked, because a tail build can break through any of
+# them: default-context COPY sources; the additional build context that
+# `COPY --from=project ...` reads (CI supplies ./defaults, derived here from the
+# workflow's own --build-context flag rather than hardcoded); and .dockerignore,
+# which is not a COPY source at all but filters the repo-root context the tail
+# build uses — a new deny pattern there breaks a COPY with no COPY source
+# touched.
+#
+# Scope note: the ROOT Dockerfile's COPY sources are deliberately NOT required
+# here. This workflow builds the nix tail, not the classic image. The two
+# Dockerfiles must mirror each other's COPY block (a CLAUDE.md invariant), and
+# tests/test-dockerignore-lib-allowlist.sh checks both against .dockerignore, so
+# a shared lib added to one and not the other is already caught elsewhere.
+set -euo pipefail
+
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/dockerfile.sh"
+
+DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+workflow="$DEV_BASE/.github/workflows/nix-base.yml"
+dockerfile="$DEV_BASE/nix/base/Dockerfile.nix-default"
+
+echo "--- nix-base.yml trigger paths cover the tail-build inputs ---"
+
+[ -f "$workflow" ] || { echo "  FAIL: workflow not found at $workflow"; exit 1; }
+[ -f "$dockerfile" ] || { echo "  FAIL: Dockerfile not found at $dockerfile"; exit 1; }
+
+# Extract one event's `paths:` list. Deliberately not a YAML parse: PyYAML is
+# not stdlib, and this file's shape is fixed (two-space event indent, four-space
+# key, six-space list items). Comment lines inside the block are skipped.
+extract_paths() {
+    local event="$1"
+    awk -v event="  ${event}:" '
+        $0 == event { in_event = 1; next }
+        in_event && /^  [a-z_]+:/ { in_event = 0 }
+        in_event && /^    paths:/ { in_paths = 1; next }
+        in_paths && /^      #/ { next }
+        in_paths && /^      - / { sub(/^      - /, ""); gsub(/^'"'"'|'"'"'$/, ""); print; next }
+        in_paths { in_paths = 0 }
+    ' "$workflow"
+}
+
+mapfile -t push_paths < <(extract_paths push)
+mapfile -t pr_paths < <(extract_paths pull_request)
+
+assert_true "the push paths list was found" test "${#push_paths[@]}" -gt 0
+assert_true "the pull_request paths list was found" test "${#pr_paths[@]}" -gt 0
+
+# The two lists must stay identical. A path added to push but not pull_request
+# means the tail build runs only after merge, which is the wrong end.
+assert_eq "push and pull_request trigger on the same paths" \
+    "$(printf '%s\n' "${push_paths[@]}")" "$(printf '%s\n' "${pr_paths[@]}")"
+
+# Covered = listed literally, or matched by a `dir/**` entry, and not negated by
+# an exclusion. Exclusions get the SAME literal-or-prefix treatment as
+# inclusions: a future `- '!lib/**'` must not leave `lib/git.sh` reported as
+# covered via the `nix/base/**`-style branch while the trigger really excludes
+# it — that would be a green test over a broken workflow.
+matches_entry() {
+    local entry="$1" needle="$2"
+    [ "$entry" = "$needle" ] && return 0
+    case "$entry" in
+        *'/**') [ "${needle##"${entry%'/**'}"/}" != "$needle" ] && return 0 ;;
+    esac
+    return 1
+}
+
+covered() {
+    local needle="$1" entry
+    for entry in "${push_paths[@]}"; do
+        case "$entry" in
+            '!'*) matches_entry "${entry#!}" "$needle" && return 1 ;;
+        esac
+    done
+    for entry in "${push_paths[@]}"; do
+        case "$entry" in
+            '!'*) ;;
+            *) matches_entry "$entry" "$needle" && return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Default-context COPY sources, via the shared parser (tests/lib/dockerfile.sh)
+# so continuations, mixed case, leading flags and multi-source COPYs are handled
+# in one place rather than three.
+mapfile -t sources < <(dockerfile_default_copy_sources "$dockerfile")
+assert_true "found default-context COPYs in Dockerfile.nix-default" \
+    test "${#sources[@]}" -gt 0
+
+for src in "${sources[@]}"; do
+    if covered "$src"; then
+        _pass "$src is a trigger path"
+    else
+        _fail "$src is a trigger path" \
+            "Dockerfile.nix-default COPYs $src from the default context," \
+            "but nix-base.yml's paths do not match it — a change to that" \
+            "file skips the tail build that exists to verify it."
+    fi
+done
+
+# The additional build context the tail-build step passes. Derived from the
+# workflow rather than hardcoded, so moving ./defaults fails here instead of
+# leaving a stale assertion quietly passing.
+project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1)"
+assert_nonempty "the tail-build step names a project build context" "$project_ctx"
+if covered "${project_ctx}/x"; then
+    _pass "${project_ctx}/** covers the --from=project build context"
+else
+    _fail "${project_ctx}/** covers the --from=project build context" \
+        "the tail build reads ./${project_ctx} as the 'project' context, so a" \
+        "change there must trigger the workflow."
+fi
+
+# Not a COPY source, but it filters the repo-root context the tail build uses:
+# adding a pattern here can break a COPY without any COPY source changing.
+if covered .dockerignore; then
+    _pass ".dockerignore is a trigger path"
+else
+    _fail ".dockerignore is a trigger path" \
+        "the tail build's context is the repo root, so .dockerignore gates" \
+        "every default-context COPY; a new deny pattern breaks the build with" \
+        "no COPY source touched and no workflow run to catch it."
+fi
+
+# The pin is an output of a publish, not an input to one; it must stay excluded
+# or merging a pin bump sets off another two-arch republish.
+if covered nix/base/compose.nix-base.yml; then
+    _fail "the pin file is excluded from the triggers" \
+        "compose.nix-base.yml is an output of a publish, not an input to one;" \
+        "while it matches, merging a pin bump sets off another two-arch" \
+        "republish of byte-identical layers."
+else
+    _pass "the pin file is excluded from the triggers"
+fi
+
+echo ""
+finish

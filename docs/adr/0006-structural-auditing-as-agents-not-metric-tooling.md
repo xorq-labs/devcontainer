@@ -5,10 +5,11 @@
 - Implemented by: PR #90 (`.claude/agents/structural-auditor.md`, the
   `pr-reviewer` "repeat offenders" section, the audit-closure convention in
   CLAUDE.md) plus this ADR, which names the report home.
-- Related: ADR-0003 (why agent definitions are tracked at all); #88 / ADR-0005
-  (guard taxonomy — the auditor consumes it if it lands, and works without
-  it); #92 (the first audit finding, disposed as an issue). Numbered 0006
-  because #88 holds 0005 in an open PR; if #88 dies, the gap stays.
+- Related: ADR-0003 (why agent definitions are tracked at all); ADR-0005
+  (guard taxonomy, accepted 2026-08-02 — the vocabulary this ADR's agents now
+  hold findings to; the agent prompts reference it conditionally because they
+  were written while it was in flight, and that conditionality is harmless to
+  keep); #92 (the first audit finding, disposed as an issue).
 
 ## Context
 
