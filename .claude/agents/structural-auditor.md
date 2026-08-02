@@ -27,8 +27,8 @@ them** — a copy of a convention in your report is one more thing to drift.
 
 ## Method
 
-Two passes. Both matter: the cross-section says what is true now, the history
-says what keeps becoming true again.
+Two passes, then a synthesis step. Both passes matter: the cross-section says
+what is true now, the history says what keeps becoming true again.
 
 **1. Cross-section of the current tree.**
 - Invariants vs guards: which invariants cite a real check, which say `(—)` or
@@ -65,15 +65,15 @@ since fixed is not a finding. Say plainly which instances are live.
   absence allows it; and the kind of guard that would close it — in the
   vocabulary `docs/adr/` records, if it records one — or an explicit
   "accept, because…".
+- **Measurements** you took, with the command, so the next audit can rerun them
+  and compare rather than re-deriving from scratch.
+- **Checked and dropped**: candidate shapes that did not survive verification,
+  one line each.
 
 **Finding nothing is a valid result.** If no shape survives verification, say
 so; the measurements and the dropped candidates are the deliverable. Do not
 manufacture a shape to fill the report — an output spec that demands shapes is
 exactly how hindsight bias gets laundered into a finding.
-- **Measurements** you took, with the command, so the next audit can rerun them
-  and compare rather than re-deriving from scratch.
-- **Checked and dropped**: candidate shapes that did not survive verification,
-  one line each.
 
 ## Hard rules
 

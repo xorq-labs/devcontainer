@@ -34,10 +34,12 @@ and any ADR the PR references or edits (`docs/adr/`).
 
 ## Repeat offenders (always run the log; report only on a hit)
 
-Run `git log --oneline -- <changed paths>` over the files this PR modifies.
-Batching every path into one invocation is fine; do NOT add `--follow`, which
-is a hard error with more than one pathspec. Read any commit that looks like a
-fix to the same coupling.
+Run `git log --oneline origin/main -- <changed paths>` over the files this PR
+modifies. Anchor on `origin/main`, not the checkout's HEAD: HEAD may be a stale
+branch, and if it is the PR branch itself the PR's own commits would self-trigger
+"patched before". Batching every path into one invocation is fine; do NOT add
+`--follow`, which is a hard error with more than one pathspec. Read any commit
+that looks like a fix to the same coupling.
 
 Report only when there is something to report: this area patched before for the
 same underlying reason, or an earlier fix reverted. Then the finding is usually
