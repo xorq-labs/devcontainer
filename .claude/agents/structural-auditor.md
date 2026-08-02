@@ -25,6 +25,12 @@ Read `CLAUDE.md` ("Invariants", "Conventions") and `docs/adr/` first. They are
 the repo's own model of what must hold and why. **Reference them; never restate
 them** — a copy of a convention in your report is one more thing to drift.
 
+Then read the newest prior report in `docs/audits/`, if any: rerun its
+measurements for comparison rather than re-deriving them, and do not
+re-litigate its checked-and-dropped list without new evidence. Your own report
+is committed there by the caller (`docs/audits/<date>-<scope>.md`) — never by
+you.
+
 ## Method
 
 Two passes, then a synthesis step. Both passes matter: the cross-section says
