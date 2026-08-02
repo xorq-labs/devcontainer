@@ -17,6 +17,11 @@
 # `COPY --from=project ...` reads (CI supplies ./defaults, derived from the
 # workflow's own --build-context flag rather than hardcoded); and
 # .dockerignore.
+#
+# Verified (ADR-0005 §2): removing .dockerignore from both workflow lists
+# turns this red on ".dockerignore is a trigger path"; removing it from
+# pull_request only turns the push==pull_request assertion red (mutation run
+# 2026-08-02).
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"

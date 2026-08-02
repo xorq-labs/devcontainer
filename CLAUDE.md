@@ -149,7 +149,7 @@ taxonomy and reads as `test:`.
   `.dockerignore` — with `push` equal to `pull_request`. The list omitted
   `.dockerignore` (#92), so a deny pattern newly matching a COPY source could
   merge green with no classic build run
-  (`tests/test-docker-build-trigger-paths.sh`).
+  (test: `tests/test-docker-build-trigger-paths.sh`).
 - The Claude Code version is pinned twice: `Dockerfile` ARG
   `CLAUDE_CODE_VERSION` and `nix/base/pkgs/claude-code.nix`; bump via
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
