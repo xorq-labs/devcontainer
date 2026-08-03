@@ -106,7 +106,11 @@ taxonomy and reads as `test:`.
   anchor now has FOUR encodings: that grep, the same grep plus the sed rewrite
   pattern in `dev/bump-nix-base`, and a fourth copy in
   `tests/test-bump-nix-base.sh` — reformat the line and two of the four go
-  stale (`tests/test-nix-base-pin.sh`, `tests/test-bump-nix-base.sh`).
+  stale. The guard extracts each production pattern from its own source and
+  runs it against the real pin line; it used to restate the grep and check
+  only the compose side, so drift in `ensure_nix_base()` broke the runtime
+  pull path with every suite green (#95)
+  (`test: tests/test-nix-base-pin.sh; test: tests/test-bump-nix-base.sh`).
 - Move the pinned base digest with `dev/bump-nix-base`, never by hand: it is
   the only thing checking that the digest is a manifest LIST. A per-arch digest
   (`sha-<short>-amd64`, printed by `imagetools inspect` directly beneath the
