@@ -13,6 +13,13 @@
 # rebuild), and the root Dockerfile must not feed the image hash on the nix
 # route (over-invalidation nit).
 # Runs against a disposable git repo and copies of the tooling — no docker.
+#
+# Verified (ADR-0005 §2): deleting "$DEV_BASE_DIR/lib/claude-code-token-env.sh"
+# from image_config_files()'s emitted list and adding a comment naming that path
+# in the function body — the #97 mutation, which the previous textual
+# containment check passed — turns the COPY-source coverage block red on both
+# routes with "COPY source NOT hashed: lib/claude-code-token-env.sh"
+# (mutation run 2026-08-03).
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -25,22 +32,6 @@ TMPDIR_ROOT="$(mktemp -d)"
 _cleanup_dirs+=("$TMPDIR_ROOT")
 
 MAIN_TREE="$(new_repo "$TMPDIR_ROOT/fakerepo")"
-
-# ---------- test: every Dockerfile COPY source is hashed by image_config_files ----------
-# image_config_hash decides whether a build runs, so a COPY'd file it doesn't
-# cover can change without ever reaching the image.
-echo "--- COPY-source coverage in image_config_files ---"
-config_files_body="$(sed -n '/^image_config_files()/,/^}$/p' "$DC")"
-for df in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
-    while IFS= read -r src; do
-        if grep -qF "$src" <<< "$config_files_body"; then
-            _pass "$(basename "$df"): COPY source hashed: $src"
-        else
-            _fail "$(basename "$df"): COPY source NOT hashed: $src" \
-                "add it to config_files() in dev/devcontainer"
-        fi
-    done < <(dockerfile_copy_sources "$df")
-done
 
 # ---------- setup: two identical copies of the tooling ----------
 # resolve is driven from each copy so DEV_BASE_DIR (and with it every
@@ -73,6 +64,83 @@ staleness_of() {
     (cd "$MAIN_TREE" && env "$@" "$tool/dev/devcontainer" resolve 2>/dev/null) \
         | grep -oE 'STALENESS=\S+'
 }
+
+# ---------- test: every Dockerfile COPY source is hashed by image_config_files ----------
+# image_config_hash decides whether a build runs, so a COPY'd file it doesn't
+# cover can change without ever reaching the image.
+#
+# This was textual containment until #97: `grep -qF "$src"` against the SOURCE
+# TEXT of image_config_files(), which a comment naming the path satisfies while
+# the file is genuinely unhashed. It now proves the property the invariant
+# actually states — edit the source, the fingerprint must move. The source set
+# is derived per Dockerfile by the shared parser, and the overlay dir that
+# `COPY --from=project` reads is read back from resolve, so nothing here
+# restates the hashed set.
+echo "--- COPY-source coverage in image_config_files ---"
+
+# `COPY --from=project` sources resolve against the overlay dir, not the repo
+# root. Ask resolve where that is rather than restating overlay lookup.
+project_dir_of() {
+    local tool="$1"
+    shift
+    (cd "$MAIN_TREE" && env "$@" "$tool/dev/devcontainer" resolve 2>/dev/null) \
+        | sed -n 's/^  from:[[:space:]]*//p'
+}
+
+# Edit each COPY source in turn; the fingerprint must move every time. Driven on
+# the route that actually builds the given Dockerfile — the two routes hash
+# different sets, so each is probed against its own tool copy.
+assert_copy_sources_hashed() {
+    local df="$1" nixflag="$2" tool="$3"
+    local dfname all default project_dir src path prev cur
+    dfname="$(basename "$df")"
+
+    all="$(dockerfile_copy_sources "$df")"
+    default="$(dockerfile_default_copy_sources "$df")"
+    assert_nonempty "$dfname: COPY sources extracted" "$all"
+
+    project_dir="$(project_dir_of "$tool" "DEV_NIX_BASE=$nixflag")"
+    assert_nonempty "$dfname: overlay dir resolved" "$project_dir"
+
+    prev="$(image_of "$tool" "DEV_NIX_BASE=$nixflag")"
+    assert_nonempty "$dfname: baseline fingerprint" "$prev"
+
+    while IFS= read -r src; do
+        [ -n "$src" ] || continue
+        if grep -qxF "$src" <<< "$default"; then
+            path="$tool/$src"
+        else
+            path="$project_dir/$src"
+        fi
+        # An unresolvable source (a glob, a context this mapping doesn't know)
+        # FAILS rather than being skipped: silently dropping a source is the
+        # exact fail-open shape this rewrite exists to remove.
+        if [ ! -f "$path" ]; then
+            _fail "$dfname: COPY source resolvable: $src" "no such file: $path"
+            continue
+        fi
+        printf '\n# copy-coverage probe: %s\n' "$src" >> "$path"
+        cur="$(image_of "$tool" "DEV_NIX_BASE=$nixflag")"
+        if [ -z "$cur" ] || [ "${cur##*:}" = "unresolved" ]; then
+            _fail "$dfname: COPY source hashed: $src" \
+                "editing $path made the fingerprint unresolvable: ${cur:-<empty>}"
+        elif [ "$cur" = "$prev" ]; then
+            _fail "$dfname: COPY source NOT hashed: $src" \
+                "editing $path left the fingerprint at $prev" \
+                "add it to image_config_files() in dev/devcontainer"
+        else
+            _pass "$dfname: COPY source hashed: $src"
+        fi
+        prev="$cur"
+    done <<< "$all"
+}
+
+COV_CLASSIC="$TMPDIR_ROOT/tool-cov-classic"
+COV_NIX="$TMPDIR_ROOT/tool-cov-nix"
+make_toolcopy "$COV_CLASSIC"
+make_toolcopy "$COV_NIX"
+assert_copy_sources_hashed "$DEV_BASE/Dockerfile" 0 "$COV_CLASSIC"
+assert_copy_sources_hashed "$DEV_BASE/nix/base/Dockerfile.nix-default" 1 "$COV_NIX"
 
 # ---------- test: resolve prints a fingerprint-tagged image ----------
 echo "--- resolve prints IMAGE ---"

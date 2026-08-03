@@ -79,9 +79,13 @@ mandatory). Annotations compose with `;` when a fact is guarded at two layers
 type it when you touch it; a bare `(tests/test-x.sh)` citation predates the
 taxonomy and reads as `test:`.
 
-- Every Dockerfile `COPY` source from the default context is hashed by
-  `image_config_files()` in `dev/devcontainer`, or edits to it silently reuse
-  a stale image (`tests/test-image-fingerprint.sh`).
+- Every Dockerfile `COPY` source — default context AND the `--from=project`
+  overlay context — is hashed by `image_config_files()` in `dev/devcontainer`,
+  or edits to it silently reuse a stale image. The guard proves this per
+  source by editing the file and requiring a new fingerprint; it used to be
+  textual containment against the function's source text, which a comment
+  naming the path satisfied while the file went genuinely unhashed (#97)
+  (`test: tests/test-image-fingerprint.sh`).
 - Compose-interpolated build args must go through `emit_build_args()` and
   never encode paths-as-identity, or identical worktrees stop sharing images
   (`tests/test-image-fingerprint.sh`).
