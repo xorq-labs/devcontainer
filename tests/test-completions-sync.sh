@@ -37,6 +37,24 @@
 #   matches the [a-z-]-only pattern class). Every extraction is
 #   anchor-guarded: an empty set fails loudly.
 #
+# Strict-shape parsing is only sound if an unrecognised shape FAILS, which it
+# did not until #96 — a dispatch arm written any other way silently left the
+# set and its command bypassed the table with this suite green. Both halves are
+# now accounted for rather than best-effort:
+#   - early region: every top-level $1 test is either a command delegation in
+#     the strict shape or an EARLY_NON_COMMAND entry carrying its reason;
+#     anything else fails, and a stale allowlist entry fails too.
+#   - case block: parsed arms are cross-checked against the `;;` terminators at
+#     the same depth, so an arm the pattern class misses diverges the counts.
+#
+# Verified (ADR-0005 §2), two mutations, both previously green:
+#   1. #96's mutation — a live `if [[ "${1:-}" == "phantom-cmd" ]]; then` arm
+#      inserted before the bump-nix-base delegation — now fails with
+#      "early dispatch: $1 test at line 40 is classified".
+#   2. A case arm in an unmatched shape (`"quoted-cmd")` … `;;`) now fails
+#      "every case arm is parsed (arms == `;;` terminators)", expected 28 got 27.
+#   (mutation runs 2026-08-03)
+#
 # HIDDEN_OK below allowlists dispatch arms deliberately absent from the table.
 # It is currently empty: `help` (with -h/--help) is handled before the
 # dispatch case and appears in no list, so it never enters the set at all.
@@ -65,28 +83,106 @@ echo "--- dispatch vs command table ---"
 # table. None today; add sparingly, with a reason.
 HIDDEN_OK=()
 
-# Canonical set: early string-equality delegations...
-early_cmds="$(grep -oP '^if \[ "\$\{1:-\}" = "\K[a-z][a-z0-9-]*(?=" \]; then$)' "$devcontainer" || true)"
+# Both halves of the dispatch are parsed by STRICT SHAPE, which is only sound
+# if a shape the parser doesn't understand is a FAILURE rather than a silent
+# skip. Until #96 it was a skip: a live, reachable
+# `if [[ "${1:-}" == "phantom-cmd" ]]; then` arm simply dropped out of the
+# derived set, so a command could bypass the table — no table row, no usage
+# line, no completions — with this suite green. That is the #86 parser shape
+# recurring inside a guard. Each half is now accounted for:
+#   early region — every top-level $1 test must be classified;
+#   case block   — every arm must be matched by a `;;` terminator.
+
+# --- early region: every top-level $1 test is classified ---
+early_region="$(awk '/^case "\$\{1:-up\}" in$/ { exit } { print }' "$devcontainer")"
+early_tests="$(grep -nE '^(if|elif|while|until|case)[[:space:]].*\$\{1:-' <<< "$early_region" || true)"
+assert_nonempty "early-region \$1 tests found" "$early_tests"
+
+# $1 tests in the early region that are deliberately NOT command delegations.
+# Whole-line matches, each with its reason. A stale entry fails too (checked
+# below), so this cannot rot into a blanket skip.
+EARLY_NON_COMMAND=(
+    # global help — handled before dispatch, deliberately in no list
+    'if [[ "${1:-}" =~ ^(-h|--help|help)$ ]]; then'
+    # global option loop — consumes flags, dispatches nothing
+    'while [[ "${1:-}" == -* ]]; do'
+    # pre-dispatch grouping for teardown commands; each also has a case arm
+    'if [[ "${1:-up}" =~ ^(down|reset|clean|clean-caches|clean-images|status|logs|list|resolve)$ ]]; then'
+)
+early_nc_used=()
+for ((i = 0; i < ${#EARLY_NON_COMMAND[@]}; i++)); do early_nc_used[i]=0; done
+
+early_cmds=""
+while IFS= read -r numbered; do
+    [ -n "$numbered" ] || continue
+    lineno="${numbered%%:*}"
+    line="${numbered#*:}"
+    if [[ "$line" =~ ^if\ \[\ \"\$\{1:-\}\"\ =\ \"([a-z][a-z0-9-]*)\"\ \]\;\ then$ ]]; then
+        early_cmds+="${BASH_REMATCH[1]}"$'\n'
+        continue
+    fi
+    _early_matched=0
+    for ((i = 0; i < ${#EARLY_NON_COMMAND[@]}; i++)); do
+        if [ "$line" = "${EARLY_NON_COMMAND[i]}" ]; then
+            early_nc_used[i]=1
+            _early_matched=1
+            break
+        fi
+    done
+    if [ "$_early_matched" -eq 0 ]; then
+        _fail "early dispatch: \$1 test at line $lineno is classified" \
+            "unrecognised: $line" \
+            "write it as \`if [ \"\${1:-}\" = \"<cmd>\" ]; then\` so it reaches the table check," \
+            "or add the exact line to EARLY_NON_COMMAND with a reason"
+    fi
+done <<< "$early_tests"
+
+early_cmds="$(printf '%s' "$early_cmds" | sort -u)"
 assert_nonempty "early-dispatch delegations extracted" "$early_cmds"
 
-# ...plus the main dispatch case's top-level arm patterns. Depth-tracked so
-# nested `case ... in`/`esac` inside arm bodies (e.g. the worktree porcelain
-# parser under `list)`) don't contribute arms; `[a-z-]`-shaped patterns only,
-# so the `*)` error arm and function definitions `name() {` never match.
-case_cmds="$(awk '
+# A non-command entry that no longer matches anything is dead weight that would
+# quietly widen the allowlist for the next reader.
+for ((i = 0; i < ${#EARLY_NON_COMMAND[@]}; i++)); do
+    if [ "${early_nc_used[i]}" -eq 1 ]; then
+        _pass "EARLY_NON_COMMAND entry $((i + 1)) still matches the dispatch"
+    else
+        _fail "EARLY_NON_COMMAND entry $((i + 1)) is stale" \
+            "matches no line: ${EARLY_NON_COMMAND[i]}"
+    fi
+done
+
+# --- case block: every arm is parsed ---
+# Depth-tracked so nested `case ... in`/`esac` inside arm bodies (e.g. the
+# worktree porcelain parser under `list)`) don't contribute arms. Arm patterns
+# are `[a-z-]`-shaped; the `*)` error arm is counted but contributes no command.
+# The arm count is cross-checked against the `;;` terminators at the same depth:
+# an arm written in a shape the pattern doesn't match still terminates, so the
+# counts diverge and this goes red instead of silently dropping the command.
+case_parse="$(awk '
     /^case "\$\{1:-up\}" in$/ { depth = 1; next }
     depth >= 1 {
         if ($0 ~ /(^|[[:space:]])case[[:space:]].*[[:space:]]in[[:space:]]*$/) { depth++; next }
         if ($0 ~ /^[[:space:]]*esac/) { depth--; if (depth == 0) exit; next }
-        if (depth == 1 && $0 ~ /^[[:space:]]*[a-z][a-z0-9|-]*\)/) {
+        if (depth != 1) next
+        if ($0 ~ /^[[:space:]]*;;[[:space:]]*$/) { term++ }
+        if ($0 ~ /^[[:space:]]*[a-z][a-z0-9|-]*\)/) {
+            arms++
             pat = $0
             sub(/^[[:space:]]*/, "", pat); sub(/\).*$/, "", pat)
-            gsub(/\|/, "\n", pat)
-            print pat
+            n = split(pat, parts, "|")
+            for (j = 1; j <= n; j++) print "CMD " parts[j]
+        } else if ($0 ~ /^[[:space:]]*\*\)/) {
+            arms++
         }
     }
+    END { print "COUNT " arms+0 " " term+0 }
 ' "$devcontainer" || true)"
+
+case_cmds="$(sed -n 's/^CMD //p' <<< "$case_parse" | sort -u)"
 assert_nonempty "dispatch case arms extracted" "$case_cmds"
+_counts="$(sed -n 's/^COUNT //p' <<< "$case_parse")"
+assert_eq "every case arm is parsed (arms == \`;;\` terminators)" \
+    "${_counts##* }" "${_counts%% *}"
 
 dispatch="$(printf '%s\n%s\n' "$early_cmds" "$case_cmds" | sort -u)"
 # Visible surface = dispatch minus the allowlisted hidden arms.
