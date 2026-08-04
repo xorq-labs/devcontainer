@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# mutation-coverage <suite.sh> <mutation-cmd>... — report which of a suite's
+# assertions any of the given mutations actually turns red.
+#
+# ADR-0005 §2 requires a new guard to be shown failing once. That proves the
+# SUITE has teeth; it says nothing about the individual assertions, and the gap
+# is not small. Measured on tests/test-volume-chown-guard.sh with its five
+# recorded mutations: 9 of 46 assertions ever went red. Most of the other 37 are
+# fine — they pin things the mutations do not touch, or properties of coreutils
+# — but the ONE assertion that turned out to be fail-open was in that set, and
+# nothing pointed at it. This turns "which claims has anyone actually tested"
+# from a manual afternoon into a command.
+#
+# Read the output as a WORKLIST, not a verdict. A never-red assertion is a
+# question ("what would break this?"), not a defect. The two honest answers are
+# "add a mutation that reds it" and "it pins an external fact, leave it".
+#
+# Each <mutation-cmd> is run by `sh -c` from the root of a THROWAWAY COPY of the
+# repo, so mutations edit files freely and the real tree is never touched. A
+# mutation that changes nothing is reported as such — a silently no-op sed is
+# the classic way a mutation run "passes" without having tested anything.
+#
+# Usage:
+#   tests/mutation-coverage tests/test-volume-chown-guard.sh \
+#       "sed -i 's/foo/bar/' lib/volume-perms.sh" \
+#       "sed -i '/baz/d' dev/devcontainer"
+set -euo pipefail
+
+[ $# -ge 2 ] || {
+    echo "usage: $0 <suite.sh> <mutation-cmd>..." >&2
+    echo "  each mutation-cmd is run via sh -c at the root of a scratch copy" >&2
+    exit 2
+}
+
+suite="$1"
+shift
+repo="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+[ -f "$repo/$suite" ] || { echo "no such suite: $suite" >&2; exit 2; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# Labels are read from PASS/FAIL lines, the harness's only machine-readable
+# surface. A suite that dies mid-run yields a short list, which would silently
+# understate coverage — so the baseline is required to be green.
+labels_of() { sed -n 's/^  \(PASS\|FAIL\): //p'; }
+reds_of() { sed -n 's/^  FAIL: //p'; }
+
+baseline_out="$(cd "$repo" && bash "$suite" 2>&1)" || {
+    echo "baseline suite is not green — fix that before measuring coverage" >&2
+    printf '%s\n' "$baseline_out" | grep -E '^  FAIL|^Results:' >&2
+    exit 1
+}
+printf '%s\n' "$baseline_out" | labels_of | sort -u >"$work/all"
+
+: >"$work/red"
+i=0
+for mutation in "$@"; do
+    i=$((i + 1))
+    copy="$work/m$i"
+    mkdir -p "$copy"
+    # `git archive HEAD` would miss uncommitted work, which is exactly what is
+    # usually being measured; copy the tree instead.
+    tar -C "$repo" -cf - --exclude=.git . | tar -C "$copy" -xf -
+
+    if ! (cd "$copy" && sh -c "$mutation") >/dev/null 2>&1; then
+        printf 'mutation %d: COMMAND FAILED — %s\n' "$i" "$mutation"
+        continue
+    fi
+    if diff -rq --exclude=.git "$repo" "$copy" >/dev/null 2>&1; then
+        printf 'mutation %d: NO-OP (changed nothing) — %s\n' "$i" "$mutation"
+        continue
+    fi
+
+    out="$(cd "$copy" && bash "$suite" 2>&1)" || true
+    n="$(printf '%s\n' "$out" | reds_of | wc -l)"
+    printf 'mutation %d: %s red — %s\n' "$i" "$n" "$mutation"
+    printf '%s\n' "$out" | reds_of | sed 's/^/    /'
+    printf '%s\n' "$out" | reds_of >>"$work/red"
+done
+
+sort -u "$work/red" >"$work/red-uniq"
+total="$(wc -l <"$work/all")"
+covered="$(wc -l <"$work/red-uniq")"
+
+echo
+echo "=== $suite: $covered of $total assertions red under at least one mutation ==="
+echo
+echo "never red under any mutation given (a worklist, not a verdict):"
+comm -23 "$work/all" "$work/red-uniq" | sed 's/^/  /'

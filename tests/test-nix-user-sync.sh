@@ -79,9 +79,9 @@ assert_true "compose files carrying .nix-profile discovered" \
 # Sentinel: the scaffold every `init --nix` overlay inherits must be in the set.
 # If it is not, the discovery above broke (moved, renamed, glob too narrow) and
 # the rest of this suite would pass vacuously.
-assert_true "discovery includes templates/nix/compose.override.yml" \
-    grep -qxF "$DEV_BASE/templates/nix/compose.override.yml" \
-    <(printf '%s\n' "${compose_files[@]}")
+assert_line "discovery includes templates/nix/compose.override.yml" \
+    "$DEV_BASE/templates/nix/compose.override.yml" \
+    "$(printf '%s\n' "${compose_files[@]}")"
 
 for f in "${compose_files[@]}"; do
     rel="${f#"$DEV_BASE"/}"

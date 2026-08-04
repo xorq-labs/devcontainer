@@ -90,6 +90,41 @@ assert_not_contains() {
     fi
 }
 
+# assert_line / assert_no_line — like assert_contains/assert_not_contains, but
+# the needle must be a WHOLE LINE of the haystack.
+#
+# Reach for these whenever the haystack is line-structured (a captured log, a
+# command's output). `assert_contains` matches across line boundaries and, more
+# dangerously, matches a needle that is a PREFIX of a longer line — so an
+# assertion about `<owner> /a/b` is satisfied by an unrelated line reading
+# `-R <owner> /a/b/c`, and passes when the behaviour it names has stopped.
+#
+# That is not hypothetical: it shipped in tests/test-volume-chown-guard.sh and
+# was caught in review, in a file that already documented the trap. Suites that
+# needed line anchoring were reaching for `grep -qxF` wrapped in
+# assert_true/assert_false — workable, but it loses the expected/got diagnostic
+# on failure and leaves the safe form as the one each author has to rediscover.
+# (Note `grep -qxF` as a plain loop CONDITION, as in
+# tests/test-dockerignore-lib-allowlist.sh and tests/test-image-fingerprint.sh,
+# is not that shape and wants no migration.)
+assert_line() {
+    local label="$1" needle="$2" haystack="$3"
+    if printf '%s\n' "$haystack" | grep -qxF -- "$needle"; then
+        _pass "$label"
+    else
+        _fail "$label" "expected a line equal to: $needle" "got: $haystack"
+    fi
+}
+
+assert_no_line() {
+    local label="$1" needle="$2" haystack="$3"
+    if printf '%s\n' "$haystack" | grep -qxF -- "$needle"; then
+        _fail "$label" "expected NO line equal to: $needle" "got: $haystack"
+    else
+        _pass "$label"
+    fi
+}
+
 assert_files_eq() {
     local label="$1" a="$2" b="$3"
     if cmp -s "$a" "$b"; then
