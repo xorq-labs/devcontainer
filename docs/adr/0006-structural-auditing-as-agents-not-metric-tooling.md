@@ -90,7 +90,7 @@ re-litigated from scratch each run.
 
 - `docs/audits/` is the durable home for audit reports; an audit is closed
   (per the CLAUDE.md convention) when each shape is filed, landed, or
-  recorded as an accepted `(—)` — committing the report is how the
+  recorded as an accepted `unguarded:` invariant — committing the report is how the
   measurements and drop-list persist. *(Amended 2026-08-04: the commit is
   optional. Closure is unchanged — filed, landed, or recorded — and is now
   the only durable trace an audit is required to leave.)*
