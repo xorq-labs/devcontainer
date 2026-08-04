@@ -25,11 +25,13 @@ Read `CLAUDE.md` ("Invariants", "Conventions") and `docs/adr/` first. They are
 the repo's own model of what must hold and why. **Reference them; never restate
 them** — a copy of a convention in your report is one more thing to drift.
 
-Then read the newest prior report in `docs/audits/`, if any: rerun its
+Then read the newest prior report in `docs/audits/`, if one is there: rerun its
 measurements for comparison rather than re-deriving them, and do not
-re-litigate its checked-and-dropped list without new evidence. Your own report
-is committed there by the caller (`docs/audits/<date>-<scope>.md`) — never by
-you.
+re-litigate its checked-and-dropped list without new evidence. Keeping a report
+is optional (ADR-0006 as amended), so most audits leave no file — expect no
+baseline, and say you had none rather than assuming an earlier audit covered
+something. Your report goes to the caller, who may or may not commit it there;
+you never write it yourself.
 
 ## Method
 
@@ -81,8 +83,9 @@ since fixed is not a finding. Say plainly which instances are live.
   `docs/adr/` records (an accepted risk states its reason). You never file it —
   the caller does — but a shape the caller must re-derive before filing is
   not finished.
-- **Measurements** you took, with the command, so the next audit can rerun them
-  and compare rather than re-deriving from scratch.
+- **Measurements** you took, always with the command that produced them, so
+  the next audit can rerun them rather than re-derive them. The command is the
+  part that survives — the report itself may not be kept.
 - **Checked and dropped**: candidate shapes that did not survive verification,
   one line each.
 

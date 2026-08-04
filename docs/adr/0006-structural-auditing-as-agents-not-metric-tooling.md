@@ -54,7 +54,10 @@ close one.
   repo-level debt never blocks a PR verdict; per-PR verdicts never carry
   repo-wide scans.
 
-**Closed by this ADR — audits get a baseline:**
+**Closed by this ADR — audits get a baseline** (reversed by the 2026-08-04
+amendment below: committing a report is now optional. The original text is
+kept unedited so the requirement, and its reversal, both read as decisions
+rather than as an absence):
 
 CodeScene's real advantage is not its metrics but its memory: trend against a
 stored baseline. The auditor's output spec promises measurements "so the next
@@ -88,12 +91,78 @@ re-litigated from scratch each run.
 - `docs/audits/` is the durable home for audit reports; an audit is closed
   (per the CLAUDE.md convention) when each shape is filed, landed, or
   recorded as an accepted `(—)` — committing the report is how the
-  measurements and drop-list persist.
+  measurements and drop-list persist. *(Amended 2026-08-04: the commit is
+  optional. Closure is unchanged — filed, landed, or recorded — and is now
+  the only durable trace an audit is required to leave.)*
 - The first audit (2026-08-02, repo-wide) predates this ADR; its one shape is
   disposed as #92 and its report ships as the first entry in `docs/audits/`
-  so the baseline starts now, not at the second audit.
+  so the baseline starts now, not at the second audit. *(Amended 2026-08-04:
+  that report and its sibling are kept; see the amendment.)*
 - The accepted-gaps list is the contract for future "should we adopt
   CodeScene/code-maat?" discussions: reopen by amending this ADR, not ad hoc.
+
+## Amendment (2026-08-04): committing an audit report is optional
+
+**Status: Accepted.** Reverses the "Closed by this ADR — audits get a
+baseline" requirement in §Decision. Everything else — the two adopted lessons,
+the three accepted gaps, the recorded no to a metric layer — is unchanged.
+
+The rule was: **the caller commits each audit report to
+`docs/audits/<date>-<scope>.md`.** It is now: the caller **may** commit a
+report there when it is worth keeping. Closure is untouched — each surviving
+shape is still filed as an issue, landed in a PR, or recorded as an accepted
+`unguarded:` invariant (CLAUDE.md) — and the agent still must not write files
+itself.
+
+Why the reversal:
+
+- **The report is the second copy, and the weaker one.** A finding's durable
+  form is an issue, a landed guard, or an `unguarded:` invariant; the closure
+  rule already demands one of the three, and all three live where the next
+  reader is already looking. A committed report restates that record in prose
+  that nothing keeps true — a snapshot of a tree that changes under it, with
+  no guard and no way to write one. That is the restate-over-derive shape
+  ADR-0005 rejects, and it is the auditor prompt's own warning ("a copy of a
+  convention is one more thing to drift") applied to the auditor's output.
+- **A mandatory artifact taxes the run that was already easiest to skip.**
+  Audits here are deliberate and occasional. Requiring a committed,
+  reviewable document per run prices the audit above what an average one
+  returns, and the failure mode is not a missing file — it is a skipped
+  audit.
+- **The baseline it bought was thinner than it looked.** Of the two reports
+  filed, the part that got reused was the *commands* under §Measurements, not
+  the numbers they produced; the commands are already in the agent definition
+  and reproduce without a prior report.
+
+**What this costs.** Option B's objection comes back, and this amendment does
+not pretend otherwise: with no guaranteed prior report, the auditor's "rerun
+and compare" promise has no guaranteed baseline. An audit that leaves no file
+makes the next one re-derive its negative space, and measurements do not
+accumulate into a time series. Nothing replaces that; it is accepted, in
+ADR-0005's `unguarded:` form:
+
+> `unguarded:` audit-to-audit continuity. No mechanism guarantees a prior
+> report exists, so measurements may not form a time series and a
+> checked-and-dropped list may be re-litigated. Accepted because the disposal
+> record (issues, landed guards, `unguarded:` invariants) already carries the
+> findings that matter; the measurement commands are reproducible from the
+> agent definition without a prior report; and re-deriving negative space on
+> an occasional audit is cheaper than a standing documentation obligation on
+> every one. Revisit if two consecutive audits are seen re-filing the same
+> dropped candidate, or if a measurement trend is wanted for its own sake.
+
+**The existing reports stay.** `docs/audits/2026-08-02-repo-wide.md` and
+`docs/audits/2026-08-02-adr-0005-acceptance.md` are kept as historical record,
+and `docs/audits/` is kept with them: dropping the requirement is not a reason
+to destroy what it produced. The auditor still reads the newest report there
+when one exists — the directory is an optional baseline now, not a guaranteed
+one, and the agent definition says so.
+
+Rejected: making the commit conditional on a surviving shape (the reports with
+the most reuse value are often the ones that found nothing, which this would
+suppress); keeping the requirement plus a freshness guard (a guard can check a
+date, not whether the prose is still true — the vacuous-check shape ADR-0005
+names).
 
 ## Options considered
 
@@ -103,7 +172,12 @@ re-litigated from scratch each run.
   Rejected for now; reopening is an amendment here.
 - **B — agents with no persistence (status quo before this ADR).** Zero
   ceremony, but the "rerun and compare" promise is unfulfillable and every
-  audit re-derives the last one's negative space. Rejected.
+  audit re-derives the last one's negative space. Rejected. *(The 2026-08-04
+  amendment accepts this cost after all, with the disposal record — not the
+  report — as what persists; see the amendment for why the trade flipped.)*
 - **C — agents + committed reports under `docs/audits/` (chosen).** Keeps the
   LLM-judged approach, closes the baseline gap for the cost of one `git add`
   per audit, and leaves the metric layer as a recorded, revisitable no.
+  *(Amended 2026-08-04 to C′ — the same directory, the same agents, but the
+  commit is optional rather than required; the cost was not one `git add`, it
+  was a reviewable document per audit.)*
