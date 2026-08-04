@@ -331,7 +331,13 @@ taxonomy and reads as `test:`.
   (dispatch arms == table rows), plus table well-formedness, the generated
   scripts parsing in their target shell, and every table name actually
   reaching all three of them — generation makes the lists agree with each
-  other, not with the table (`tests/test-completions-sync.sh`).
+  other, not with the table (`structural`; `test:
+  tests/test-completions-sync.sh` for the hand-written pair). That dispatch
+  parse must fail closed: it reads arms by strict shape, and until #96 an arm
+  in any other shape (`[[ ... == ... ]]`, a quoted case pattern) silently left
+  the set, so a command could bypass the table with the suite green — the #86
+  parser shape recurring inside a guard. Unclassified early-region `$1` tests
+  and a case-arm/`;;` count mismatch are now failures.
   The table is read at generation time only: `install-completions` and the
   Nix package redirect the generator's stdout to a file, so an installed
   completion script has no runtime dependency on the repo.
