@@ -32,6 +32,59 @@ and any ADR the PR references or edits (`docs/adr/`).
    regression test the harness could support?
 4. Run `tests/run-all` on the head tree when the PR touches shell/python.
 
+## The PR's own claims are findings-bearing (always apply)
+
+A PR states things about itself: in its body, in code comments, in CLAUDE.md
+invariant lines, in assertion labels, and in `Verified (ADR-0005 §2)` mutation
+records. Treat every one as an UNVERIFIED ASSERTION to check against the code
+— never as context you can lean on. Where a PR has been amended after an
+earlier review, its "review round" notes describe fixes whose correctness is
+exactly what you are judging; the amendments are usually the least-reviewed
+code in the diff.
+
+Both directions are findings. An OVER-claim ("a bind is never recursed into")
+is one; so is an UNDER-claim, or a true sentence scoped to the wrong mechanism,
+because the next reader acts on what the ledger says. For a mutation record,
+reproduce the mutations and check the counts and assertion names — a record
+that misdirects is worse than none, since ADR-0005 makes it the thing a reader
+checks INSTEAD of re-running the mutations.
+
+## Vacuity of new assertions (apply whenever a PR adds or edits tests)
+
+An assertion that cannot fail is worse than no assertion: it reports coverage
+that does not exist. For each one the PR adds, ask whether it would still pass
+if the behaviour it names stopped happening entirely. Verify by mutation where
+it is cheap — break the named behaviour, confirm THAT assertion goes red.
+
+Known shapes in this repo, all of which have shipped at least once:
+- a substring needle (`assert_contains`) that is also a substring of some
+  OTHER logged line — classically an ancestor-shaped path matching a longer
+  recursive line. The line-anchored `assert_line`/`assert_no_line` helpers
+  exist for this; a bare `assert_contains` on line-structured output is a
+  smell.
+- a negative assertion (`assert_not_contains`, `assert_false`) with no paired
+  positive, which passes on empty output — i.e. it also passes when the code
+  under test did nothing at all.
+- an extraction step (`awk`/`sed`/`grep -oE` lifting a pattern out of a source
+  file) that can silently yield nothing, making every downstream comparison
+  trivially true. Check the anti-vacuity anchor is real and sufficient.
+
+## Guard coverage: does it read all of its substrate?
+
+When a PR adds a guard, identify the SUBSTRATE it claims to check and
+enumerate that substrate's channels and fields. Then ask which the guard
+actually reads. Report only when the guard, an invariant line, or the PR body
+CLAIMS coverage it does not have — a guard that reads a subset and says so is
+fine, and this rubric must not become a licence to demand more scope.
+
+This has bitten here twice. A guard over the compose mount graph read
+`docker-compose.yml` but not `projects/*/host-mounts.txt`, a second committed
+channel feeding the same `services.app.volumes` — so the mount it existed to
+forbid was allowed one file over. The same guard dropped the mount-options
+field, leaving half of an ADR's decision (`:ro` on a credential-store mount)
+uncheckable. Both were the very class the guard was written to close,
+reproduced inside the fix for it.
+
 ## Repeat offenders (always run the log; report only on a hit)
 
 Run `git log --oneline origin/main -- <changed paths>` over the files this PR
