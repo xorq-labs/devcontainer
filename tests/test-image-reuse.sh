@@ -15,9 +15,24 @@
 # suite does for config_files) with docker/dc stubbed. No real docker: `docker
 # image inspect` reads a marker file, `dc build` simulates a slow build. flock
 # is real — the concurrency test genuinely races two processes on one lock.
+# Verified (ADR-0005 §2, amended: a mutation PAIR):
+#   SEMANTIC, in a form not written here — comment out BOTH `ensure_image` call
+#     sites in ensure_up() (there are two, and disabling one leaves the other
+#     genuinely calling it). On main's version of this suite that is 14 passed /
+#     0 failed: `assert_contains` matched the commented-out text and no image
+#     would be built before `dc up`. Now 15/1, FAIL "ensure_up makes the image
+#     present via ensure_image".
+#   FORM-ONLY — reformat `ensure_up()` to `ensure_up ()`, and separately
+#     `dc_up()` to `dc_up ()` (both valid bash, both shellcheck-clean). The
+#     suite stays green at 16 assertions, unchanged. Against the old hand-rolled
+#     `sed -n '/^ensure_up()/,/^}$/p'` each reformat emptied the body and turned
+#     an assertion red for the wrong reason (13/1).
+#   (mutation runs 2026-08-04)
+#
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/shellsrc.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DC="$DEV_BASE/dev/devcontainer"
@@ -128,9 +143,16 @@ assert_true "race leaves the ref present" [ -f "$st/present" ]
 # Guards the exact refactor: the image is made present before the container
 # starts, and `up` itself no longer builds.
 echo "--- wiring: ensure_image before dc_up, no --build in up ---"
-ensure_up_body="$(sed -n '/^ensure_up()/,/^}$/p' "$DC")"
-assert_contains "ensure_up makes the image present via ensure_image" "ensure_image" "$ensure_up_body"
-dc_up_body="$(sed -n '/^dc_up()/,/^}$/p' "$DC")"
+# Comment-stripped, and via the shared extractor: `assert_contains` on the raw
+# body matched a COMMENTED-OUT call, so `# ensure_image (disabled)` passed at
+# 14/0 with no image built before `dc up` on a cold start.
+ensure_up_body="$(shell_function_body "$DC" ensure_up || true)"
+assert_nonempty "ensure_up() body extracted from dev/devcontainer" "$ensure_up_body"
+ensure_up_live="$(shell_strip_comments <<<"$ensure_up_body")"
+assert_contains "ensure_up makes the image present via ensure_image" "ensure_image" "$ensure_up_live"
+dc_up_body="$(shell_function_body "$DC" dc_up || true)"
+assert_nonempty "dc_up() body extracted from dev/devcontainer" "$dc_up_body"
+dc_up_body="$(shell_strip_comments <<<"$dc_up_body")"
 if grep -q 'dc up -d' <<< "$dc_up_body"; then
     _pass "dc_up starts the container with 'dc up -d'"
 else
