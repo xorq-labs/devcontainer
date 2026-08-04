@@ -6,6 +6,17 @@
 # warning). The live file is untracked, so the probe is the guard for a fact
 # no hermetic test over committed files can see; this suite guards the probe.
 #
+# Verified (ADR-0005 §2), third round: the parser tokenized YAML COMMENTS.
+#     stages: [manual]  # run via pre-commit run --hook-stage manual
+# passed at 16/0 with the gate fully disabled, because "pre-commit" from the
+# comment landed in the value set — and that sentence is the natural comment to
+# write when moving a hook to manual. Same for the block form. Also
+# `stages: [pre-commit,manual]` (legitimate, fires on commit) was glued into one
+# token by `tr -d ','` and spuriously FAILed. Ten spellings now verified:
+# [manual], [commit-msg], block -manual, bare `stages:`, and either form with a
+# pre-commit-naming comment all FAIL; [pre-commit], [commit], block -pre-commit
+# and [pre-commit,manual] all pass (mutation runs 2026-08-04).
+#
 # Verified (ADR-0005 §2), review round: the first cut of the stage check parsed
 # only the FLOW spelling, so the YAML block form
 #     stages:
@@ -122,6 +133,11 @@ assert_true "the hook runs even when no files match" \
 if ! grep -qE '^[[:space:]]*stages:' <<<"$hook_block"; then
     _pass "the hook is not restricted off the commit stage (no stages: key)"
 else
+    # The pipeline matters: strip YAML comments FIRST (an inline comment on a
+    # `stages:` line naturally mentions pre-commit — "run via pre-commit run
+    # --hook-stage manual" — and tokenizing it re-enabled the pass), and map
+    # commas to newlines rather than deleting them (deleting glued
+    # `[pre-commit,manual]` into one token and failed a legitimate config).
     stage_vals="$(awk '
         /^[[:space:]]*stages:/ {
             v = $0; sub(/^[[:space:]]*stages:[[:space:]]*/, "", v)
@@ -134,7 +150,11 @@ else
             }
             blk = 0
         }
-    ' <<<"$hook_block" | tr -d "[],\"'" | tr ' ' '\n' | grep -v '^$' || true)"
+    ' <<<"$hook_block" \
+        | sed 's/[[:space:]]#.*$//' \
+        | tr -d "[]\"'" \
+        | tr ', ' '\n\n' \
+        | grep -v '^$' || true)"
     if [ -z "$stage_vals" ]; then
         _fail "the hook runs at the commit stage" \
             "a stages: key is present but no values could be parsed —" \
