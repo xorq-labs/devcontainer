@@ -6,6 +6,17 @@
 # warning). The live file is untracked, so the probe is the guard for a fact
 # no hermetic test over committed files can see; this suite guards the probe.
 #
+# Verified (ADR-0005 §2), review round: the first cut of the stage check parsed
+# only the FLOW spelling, so the YAML block form
+#     stages:
+#       - manual
+# yielded an empty match and took the "no stages: key" pass — the ADR-0003 gate
+# still silently disabled, suite green. All seven spellings now behave:
+# [manual]/[commit-msg]/block -manual/bare `stages:` FAIL; [pre-commit]/[commit]/
+# block -pre-commit PASS. Also replaced a fixed `grep -A5` window for
+# always_run, which produced a spurious FAIL whenever the hook block grew by two
+# lines (mutation runs 2026-08-04).
+#
 # Verified (ADR-0005 §2), audit round: adding `stages: [manual]` to the hook in
 # .pre-commit-config.yaml left this suite at 14 passed / 0 failed while a commit
 # with a broken live .gitignore went through clean (rc 0; rc 1 with the hook
@@ -89,8 +100,6 @@ assert_false "a directory outside any repo is not reported green" \
 # Wiring: a probe only guards if its consumers run it.
 assert_true "the pre-commit local hook runs the probe" \
     grep -q 'entry: dev/check-gitignore-agents' "$DEV_BASE/.pre-commit-config.yaml"
-assert_true "the hook runs even when no files match" \
-    bash -c "grep -A5 'id: gitignore-agents-reinclusion' '$DEV_BASE/.pre-commit-config.yaml' | grep -q 'always_run: true'"
 # ...and runs at the COMMIT stage. Greps for `entry:` and `always_run:` say
 # nothing about when the hook fires: adding `stages: [manual]` left this suite
 # at 14/0 while a commit with a broken live .gitignore went through clean (rc 0
@@ -100,15 +109,43 @@ assert_true "the hook runs even when no files match" \
 hook_block="$(awk '/id: gitignore-agents-reinclusion/{f=1} f&&/^      - id: /&&!/gitignore-agents-reinclusion/{exit} f' \
     "$DEV_BASE/.pre-commit-config.yaml")"
 assert_nonempty "the hook block was found in .pre-commit-config.yaml" "$hook_block"
-hook_stages="$(grep -oP '^\s*stages:\s*\K.*' <<<"$hook_block" || true)"
-if [ -z "$hook_stages" ]; then
+# Against the extracted block, not a fixed `grep -A5` window: adding two lines
+# to the hook pushed always_run out of that window and produced a spurious FAIL
+# on an unrelated edit.
+assert_true "the hook runs even when no files match" \
+    grep -qE '^[[:space:]]*always_run:[[:space:]]*true' <<<"$hook_block"
+# A `stages:` key can be written flow-style (`stages: [manual]`) or block-style
+# (`stages:` then indented `- manual` lines). The first cut parsed only the flow
+# form, so the block form yielded an EMPTY match and took the "no stages: key"
+# pass — the gate still silently disabled, suite green. Distinguish "no key"
+# from "key present, values unreadable", and fail closed on the latter.
+if ! grep -qE '^[[:space:]]*stages:' <<<"$hook_block"; then
     _pass "the hook is not restricted off the commit stage (no stages: key)"
-elif grep -qE '(^|[^a-z-])(pre-commit|commit)([^a-z-]|$)' <<<"$hook_stages"; then
-    _pass "the hook's stages include the commit stage: $hook_stages"
 else
-    _fail "the hook runs at the commit stage" \
-        "stages: $hook_stages excludes pre-commit, so the ADR-0003 gate never" \
-        "fires on a real commit — silently, with this suite green."
+    stage_vals="$(awk '
+        /^[[:space:]]*stages:/ {
+            v = $0; sub(/^[[:space:]]*stages:[[:space:]]*/, "", v)
+            if (v != "") print v
+            blk = 1; next
+        }
+        blk {
+            if ($0 ~ /^[[:space:]]*-[[:space:]]*/) {
+                v = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", v); print v; next
+            }
+            blk = 0
+        }
+    ' <<<"$hook_block" | tr -d "[],\"'" | tr ' ' '\n' | grep -v '^$' || true)"
+    if [ -z "$stage_vals" ]; then
+        _fail "the hook runs at the commit stage" \
+            "a stages: key is present but no values could be parsed —" \
+            "failing closed rather than assuming it is harmless."
+    elif grep -qxE '(pre-commit|commit)' <<<"$stage_vals"; then
+        _pass "the hook's stages include the commit stage: $(tr '\n' ' ' <<<"$stage_vals")"
+    else
+        _fail "the hook runs at the commit stage" \
+            "stages: $(tr '\n' ' ' <<<"$stage_vals") excludes pre-commit, so the" \
+            "ADR-0003 gate never fires on a real commit — silently, suite green."
+    fi
 fi
 assert_true "setup-worktree warns through the same probe" \
     grep -q 'check-gitignore-agents' "$DEV_BASE/dev/setup-worktree"

@@ -21,6 +21,11 @@
 #   5. `chown -R` is post-order, the invariant the guard rests on: an interrupted
 #      run leaves the mount point unchowned, so it can't be read as completed
 #   6. the dev/devcontainer driver line still matches the lib's function
+# Verified (ADR-0005 §2), review round: `grep -q` on the setup() body matched
+# COMMENT text, so `# chown_named_volume_targets (disabled)` — the most common
+# way code gets turned off — passed at 25/0. Now anchored to a real call at the
+# start of a line (mutation run 2026-08-04).
+#
 # Verified (ADR-0005 §2), audit round — two mutations, BOTH 21 passed / 0 failed
 # before these assertions existed (and `tests/run-all` exit 0):
 #   - deleting `chown_named_volume_targets` from setup() (dev/devcontainer:835)
@@ -180,7 +185,7 @@ assert_true "dev/devcontainer drives the lib's function with (vscode, vscode, /h
 setup_body="$(awk '/^setup\(\) \{/,/^\}/' "$DEV_BASE/dev/devcontainer")"
 assert_nonempty "setup() body extracted from dev/devcontainer" "$setup_body"
 assert_true "setup() calls chown_named_volume_targets on every cold start" \
-    grep -q 'chown_named_volume_targets' <<<"$setup_body"
+    grep -qE '^[[:space:]]*chown_named_volume_targets\b' <<<"$setup_body"
 
 # The executed injection line, read rather than restated: `sh -c <script> <argv0>
 # <args...>` puts the first operand in $0, so without it the first mount point
