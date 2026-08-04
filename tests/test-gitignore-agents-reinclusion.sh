@@ -51,6 +51,18 @@
 # — passed too. Rounds two and three anchored the hook-block assertions and left
 # these. Now via tests/lib/shellsrc.sh (mutation runs 2026-08-04).
 #
+# Verified (ADR-0005 §2 pair), sixth round — three more, all previously 16/0:
+#   the whole `shellcheck (extensionless)` hook commented out, files: pattern
+#     included, left "the extensionless shellcheck hook covers the probe
+#     script" PASSING while the probe was linted by nothing;
+#   a QUOTED key, `"stages": [manual]` — pre-commit honours it, yamllint is
+#     clean, and the bare `stages:` match never saw it. The parser failed
+#     closed on unreadable VALUES and open on unreadable KEYS;
+#   top-level `default_stages: [manual]`, which moves the hook off the commit
+#     stage from OUTSIDE the block this suite parses, so "no stages: key"
+#     passed while the gate was off.
+#   (mutation runs 2026-08-04)
+#
 # Verified (ADR-0005 §2 pair), fifth round:
 #   SEMANTIC — a comment on the `stages:` KEY line, `stages: # run via
 #     pre-commit run --hook-stage manual` over a block `- manual`, was 16/0
@@ -155,8 +167,22 @@ assert_true "the hook runs even when no files match" \
 # form, so the block form yielded an EMPTY match and took the "no stages: key"
 # pass — the gate still silently disabled, suite green. Distinguish "no key"
 # from "key present, values unreadable", and fail closed on the latter.
-if ! grep -qE '^[[:space:]]*stages:' <<<"$hook_block"; then
-    _pass "the hook is not restricted off the commit stage (no stages: key)"
+# The key may be quoted (`"stages":`), which pre-commit honours and a bare
+# `stages:` match does not see — the parser failed closed on unreadable VALUES
+# and open on unreadable KEYS. And with no hook-level key at all, a top-level
+# `default_stages:` still moves the hook off the commit stage from outside the
+# block this suite parses.
+if ! grep -qE '^[[:space:]]*"?stages"?[[:space:]]*:' <<<"$hook_block"; then
+    _default_stages="$(grep -oP '^default_stages[[:space:]]*:[[:space:]]*\K.*' <<<"$_precommit_live" || true)"
+    if [ -z "$_default_stages" ]; then
+        _pass "the hook is not restricted off the commit stage (no stages: key)"
+    elif grep -qE '(^|[^a-z-])(pre-commit|commit)([^a-z-]|$)' <<<"$_default_stages"; then
+        _pass "no hook stages:; top-level default_stages includes commit: $_default_stages"
+    else
+        _fail "the hook runs at the commit stage" \
+            "no hook-level stages:, but top-level default_stages: $_default_stages" \
+            "excludes pre-commit, so the ADR-0003 gate never fires on a commit."
+    fi
 else
     # The pipeline matters: strip YAML comments FIRST (an inline comment on a
     # `stages:` line naturally mentions pre-commit — "run via pre-commit run
@@ -203,8 +229,14 @@ assert_shell_wired "setup-worktree warns through the same probe" \
 # but a guard that reddens on a no-op reformat trains people to edit the test.
 assert_shell_wired "the setup-worktree warning is gated on the repo tracking .claude/agents" \
     "$DEV_BASE/dev/setup-worktree" "ls-files -- [\"']?\.claude/agents[\"']?" -E
+# Read from the stripped config, and in THIS shell: a `bash -c` subshell does
+# not inherit $_precommit_live. Commenting out the whole shellcheck hook — its
+# files: pattern included — used to leave this PASSING while the probe script
+# was no longer linted at all.
+_shellcheck_files="$(grep -F '^dev/(' <<<"$_precommit_live" || true)"
+assert_nonempty "the extensionless shellcheck hook has a files: pattern" "$_shellcheck_files"
 assert_true "the extensionless shellcheck hook covers the probe script" \
-    bash -c "grep -F '^dev/(' '$DEV_BASE/.pre-commit-config.yaml' | grep -q 'check-gitignore-agents'"
+    grep -q 'check-gitignore-agents' <<<"$_shellcheck_files"
 
 echo ""
 finish

@@ -24,7 +24,13 @@
 
 # shell_strip_comments <file>...
 #
-# Emit the file with comments removed, so a match means live code.
+# Emit the file with `#` comments removed, so a match means the text is not in a
+# comment. NOT that it is live code — see the scope note above.
+#
+# Strips only `#` at line start or after whitespace. Bash actually begins a
+# comment at any word-initial `#`, so `:;#real_call args` is dead code this
+# leaves intact; that spelling is unnatural but it is a genuine false-pass
+# direction, not merely the fail-closed truncation documented above.
 shell_strip_comments() {
     sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$@"
 }
