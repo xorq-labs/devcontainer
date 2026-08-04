@@ -398,19 +398,25 @@ taxonomy and reads as `test:`.
   shipped `tests/test-token-env-snippet.sh` with the strip-list coupling, #74
   shipped `tests/test-worktree-claude-layout.sh` with the layout, #57 shipped
   `tests/test-devcontainer-sessions.sh` with the Python re-implementation.
-  What escapes is the coupling nobody recognised AS one — hand-mirrored CI
-  trigger paths (#86, #92, and a third found by the 2026-08-04 audit), the two
-  linter-pin files (#35), `NIX_USER`↔`EXTRA_PATH` (#89), dispatch↔completions,
-  the live `.gitignore` (#91). For those the guard arrived only after the fact,
+  What escapes is the coupling where PROSE STOOD IN FOR A GUARD. These were
+  not unrecognised — they were written down and left untested. `EXTRA_PATH`
+  shipped carrying `# match NIX_USER in lib/nix-seed.sh`; #33 added reciprocal
+  "keep in sync" comments at both pin sites plus a Conventions note, and no
+  test; `nix-base.yml`'s own header states the tail-build rule it then drifted
+  from. So the judgment that fails is not "is this a coupling" — the authors
+  knew — it is "will a comment do", and it never does. The list: hand-mirrored
+  CI trigger paths (#86, #92, and a third found by the 2026-08-04 audit), the
+  two linter-pin files (#35), `NIX_USER`↔`EXTRA_PATH` (#89),
+  dispatch↔completions, the live `.gitignore` (#91). For those the guard arrived only after the fact,
   and by three different routes: with an incident's fix (#86→#87, #91→#94,
   dispatch↔completions→#72); only on the SECOND fix, because the first shipped
   guardless (#33 aligned the linter pins with no guard, #35 then sat open and
   was independently re-solved, and the guard came with #71); and once with no
   incident at all, from an audit sweep (#89→#99, before `NIX_USER` had ever
   drifted). So: the rule binds at authoring time and demonstrably fires there;
-  the review→issue→guard loop is the backstop for couplings that were never
-  seen as couplings, not the mechanism. A mechanical "every PR adds a test"
-  gate would be over-guarding — the judgment is which facts are couplings, and
-  that is what review adds.
+  the review→issue→guard loop is the backstop for couplings whose author
+  settled for a comment, not the mechanism. A mechanical "every PR adds a test"
+  gate would be over-guarding; what review actually adds is the second opinion
+  on whether prose was enough.
 - Guards follow ADR-0005. Type every new invariant's guard (see the Invariants header for the vocabulary). When adding or materially changing a guard, break the invariant once, watch the guard go red, and record the mutation in the test's header comment. Prefer generating the second copy from the first, then deriving the expectation by parsing the source of truth at check time; restate-and-compare is the fallback, not the default.
 - A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume.
