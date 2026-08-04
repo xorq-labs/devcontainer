@@ -133,7 +133,51 @@ header claim goes stale as the test evolves, and nothing re-runs it)` — a
 rung-3 restatement, accepted deliberately. Re-verifying it mechanically is the
 CI mutation testing rejected below.
 
+#### Amendment (2026-08-04): record a mutation PAIR, one aimed at the input
+
+**Status: Accepted.**
+
+One mutation is not enough, and the record says so. Of 19 `Verified (ADR-0005`
+blocks across `main` and the open branches, **12 carry a later-round marker**
+(`review round`, `audit round`, `second`, `third`) — 63% of this repo's
+mutation records document a hole a *reviewer or auditor* found, not the author.
+
+The reason is structural, not a lapse: "break the invariant" aims the mutation
+at the thing the author is already thinking about. It reliably confirms the
+hole they just closed and reliably misses the parsing assumption they did not
+know they had made. Every input-shape hole in this repo — a `[[ ]]` dispatch
+arm, a YAML block spelling, a comment matched as code — was found by someone
+else, after the §2 run passed.
+
+So record **two** mutations:
+
+1. **Form-only.** Reformat the source the guard parses without changing its
+   meaning: wrap a line, requote, swap YAML flow spelling for block, change
+   case, add a comment that mentions the identifier. The guard must stay
+   **green** *and its assertion count must not fall*. A silent drop is the
+   fail-open — this is what an evaporating `mapfile` looks like.
+2. **Semantic, expressed in a form you did not write.** Disable the thing by
+   commenting it out rather than deleting it; set the key in block form rather
+   than flow. The guard must go **red**.
+
+Cost: two extra runs per new or materially-changed guard. Against that, these
+two would have caught every fail-open this repo has shipped since ADR-0005
+landed, each of which instead cost a review round.
+
+Not proposed: a new rung, and a new annotation kind for coverage or wiring.
+Coverage is already rung-2-able — §3's own rung-2 example (parsing a
+Dockerfile's COPYs rather than listing them) *is* set-derivation. Wiring is a
+fact to state in the invariant, not a kind of guard; mixing it into
+`test:`/`tool:`/`ci:`/`structural`/`unguarded` would confuse the guard-kind
+axis with the fact axis.
+
 ### 3. Derive over restate
+
+**The rung is a property of an ASSERTION, not of a suite** (added 2026-08-04).
+A suite can be rung 2 on the fact and rung 3 on the call:
+`tests/test-volume-chown-guard.sh` derives the chown semantics from the real
+lib while pinning the driver line as a literal. Read the ladder per assertion,
+or a single derived check will vouch for its restated neighbours.
 
 Three rungs, in order of preference. Choose consciously and say which in the
 guard's header:
