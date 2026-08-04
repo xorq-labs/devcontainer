@@ -399,10 +399,15 @@ taxonomy and reads as `test:`.
   shipped `tests/test-worktree-claude-layout.sh` with the layout, #57 shipped
   `tests/test-devcontainer-sessions.sh` with the Python re-implementation.
   What escapes is the coupling nobody recognised AS one — hand-mirrored CI
-  trigger paths (#86, #92, and again in #109), the two linter-pin files (#35),
-  `NIX_USER`↔`EXTRA_PATH` (#89), dispatch↔completions, the live `.gitignore`
-  (#91). For those the guard has always arrived with the fix for the first
-  incident. So: the rule binds at authoring time and demonstrably fires there;
+  trigger paths (#86, #92, and a third found by the 2026-08-04 audit), the two
+  linter-pin files (#35), `NIX_USER`↔`EXTRA_PATH` (#89), dispatch↔completions,
+  the live `.gitignore` (#91). For those the guard arrived only after the fact,
+  and by three different routes: with an incident's fix (#86→#87, #91→#94,
+  dispatch↔completions→#72); only on the SECOND fix, because the first shipped
+  guardless (#33 aligned the linter pins with no guard, #35 then sat open and
+  was independently re-solved, and the guard came with #71); and once with no
+  incident at all, from an audit sweep (#89→#99, before `NIX_USER` had ever
+  drifted). So: the rule binds at authoring time and demonstrably fires there;
   the review→issue→guard loop is the backstop for couplings that were never
   seen as couplings, not the mechanism. A mechanical "every PR adds a test"
   gate would be over-guarding — the judgment is which facts are couplings, and
