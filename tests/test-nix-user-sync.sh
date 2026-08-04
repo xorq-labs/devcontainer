@@ -22,6 +22,13 @@
 # in those same compose files (cache/config mounts) are coupled to the image's
 # container user in the Dockerfile, a different fact with a different owner.
 #
+# Verified (ADR-0005 §2), second review round: the pattern had no LEFT boundary,
+# so it matched inside longer tokens — a comment reading "the claude-home/agents
+# dir" produced FAIL "home/agents" against this repo's own `_claude-home` naming
+# contract. Anchoring it clears that fixture (25/0) while all four real
+# mutations still fire, and a genuine `/home/node` in a comment still FAILs as
+# documented above (mutation runs 2026-08-04).
+#
 # Verified (ADR-0005 §2), review round — four more, ALL green on the first cut
 # of this upstream block:
 #   - the alias guard reformatted so the grep misses it (single-quoted RHS, or
@@ -159,8 +166,12 @@ echo "--- NIX_USER matches the container user the image actually creates ---"
 # The cost is that a legitimate non-container path in a comment (say a note
 # mentioning /home/node) would FAIL here — if you hit that, exclude it
 # explicitly rather than narrowing the pattern.
+#
+# The left boundary is load-bearing: without it the pattern matched INSIDE
+# longer tokens, so this repo's own `_claude-home` naming contract turned a
+# comment like "the claude-home/agents dir" into FAIL "home/agents".
 user_paths_in() {
-    grep -oE 'home/[A-Za-z0-9._-]+' "$1" | sed 's|^home/||' | sort -u
+    grep -oP '(^|[^A-Za-z0-9._-])\Khome/[A-Za-z0-9._-]+' "$1" | sed 's|^home/||' | sort -u
 }
 
 # The classic route's own declaration must exist and name NIX_USER. Globbing
