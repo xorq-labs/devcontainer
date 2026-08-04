@@ -10,6 +10,9 @@ on:
       - projects/**
       - setup-claude.py
       - audit-hook
+      # Filters the repo-root build context, so it can break a COPY without
+      # any COPY source changing.
+      - .dockerignore
   pull_request:
     branches: [main]
     paths:
@@ -19,6 +22,9 @@ on:
       - projects/**
       - setup-claude.py
       - audit-hook
+      # Filters the repo-root build context, so it can break a COPY without
+      # any COPY source changing.
+      - .dockerignore
 
 jobs:
   build:

@@ -24,42 +24,44 @@
 # build uses — a new deny pattern there breaks a COPY with no COPY source
 # touched.
 #
-# Scope note: the ROOT Dockerfile's COPY sources are deliberately NOT required
-# here. This workflow builds the nix tail, not the classic image. The two
-# Dockerfiles must mirror each other's COPY block (a CLAUDE.md invariant), and
-# tests/test-dockerignore-lib-allowlist.sh checks both against .dockerignore, so
-# a shared lib added to one and not the other is already caught elsewhere.
+# Verified (ADR-0005 §2), review round: deleting `- nix/base/**` from both paths
+# lists turns this red on "nix/base/Dockerfile.nix-default is itself a trigger
+# path" (14 passed, 1 failed) — 13/13 green before that assertion existed.
+# Reordering the lists so `- '!nix/base/compose.nix-base.yml'` PRECEDES
+# `- nix/base/**` turns it red on "the pin file is excluded from the triggers"
+# (14 passed, 1 failed): GitHub's matcher is last-match-wins, so that order
+# re-includes the pin file and restarts the two-arch republish, which the old
+# order-independent exclusion scan reported as excluded (mutation runs
+# 2026-08-04).
+#
+# Scope note: the ROOT Dockerfile's COPY sources are still not required here —
+# this workflow builds the nix tail, not the classic image. The classic build's
+# workflow (docker-build.yml) hand-mirrors the same input classes and has its
+# own copy of this guard, tests/test-docker-build-trigger-paths.sh (#92); the
+# parsing both share lives in tests/lib/workflow-paths.sh.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
 . "$(dirname "$(readlink -f "$0")")/lib/dockerfile.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/workflow-paths.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 workflow="$DEV_BASE/.github/workflows/nix-base.yml"
-dockerfile="$DEV_BASE/nix/base/Dockerfile.nix-default"
 
 echo "--- nix-base.yml trigger paths cover the tail-build inputs ---"
 
 [ -f "$workflow" ] || { echo "  FAIL: workflow not found at $workflow"; exit 1; }
+
+# Read the built Dockerfile out of the build step rather than assuming it, and
+# require its own path to be a trigger — the sibling guard had the same hole
+# (removing `- nix/base/**` here left it 13/13 green).
+dockerfile_rel="$(workflow_build_dockerfile "$workflow" || true)"
+assert_nonempty "the tail-build step names the Dockerfile it builds" "$dockerfile_rel"
+dockerfile="$DEV_BASE/$dockerfile_rel"
 [ -f "$dockerfile" ] || { echo "  FAIL: Dockerfile not found at $dockerfile"; exit 1; }
 
-# Extract one event's `paths:` list. Deliberately not a YAML parse: PyYAML is
-# not stdlib, and this file's shape is fixed (two-space event indent, four-space
-# key, six-space list items). Comment lines inside the block are skipped.
-extract_paths() {
-    local event="$1"
-    awk -v event="  ${event}:" '
-        $0 == event { in_event = 1; next }
-        in_event && /^  [a-z_]+:/ { in_event = 0 }
-        in_event && /^    paths:/ { in_paths = 1; next }
-        in_paths && /^      #/ { next }
-        in_paths && /^      - / { sub(/^      - /, ""); gsub(/^'"'"'|'"'"'$/, ""); print; next }
-        in_paths { in_paths = 0 }
-    ' "$workflow"
-}
-
-mapfile -t push_paths < <(extract_paths push)
-mapfile -t pr_paths < <(extract_paths pull_request)
+mapfile -t push_paths < <(workflow_event_paths "$workflow" push)
+mapfile -t pr_paths < <(workflow_event_paths "$workflow" pull_request)
 
 assert_true "the push paths list was found" test "${#push_paths[@]}" -gt 0
 assert_true "the pull_request paths list was found" test "${#pr_paths[@]}" -gt 0
@@ -69,35 +71,17 @@ assert_true "the pull_request paths list was found" test "${#pr_paths[@]}" -gt 0
 assert_eq "push and pull_request trigger on the same paths" \
     "$(printf '%s\n' "${push_paths[@]}")" "$(printf '%s\n' "${pr_paths[@]}")"
 
-# Covered = listed literally, or matched by a `dir/**` entry, and not negated by
-# an exclusion. Exclusions get the SAME literal-or-prefix treatment as
-# inclusions: a future `- '!lib/**'` must not leave `lib/git.sh` reported as
-# covered via the `nix/base/**`-style branch while the trigger really excludes
-# it — that would be a green test over a broken workflow.
-matches_entry() {
-    local entry="$1" needle="$2"
-    [ "$entry" = "$needle" ] && return 0
-    case "$entry" in
-        *'/**') [ "${needle##"${entry%'/**'}"/}" != "$needle" ] && return 0 ;;
-    esac
-    return 1
+covered() {
+    workflow_path_covered "$1" "${push_paths[@]}"
 }
 
-covered() {
-    local needle="$1" entry
-    for entry in "${push_paths[@]}"; do
-        case "$entry" in
-            '!'*) matches_entry "${entry#!}" "$needle" && return 1 ;;
-        esac
-    done
-    for entry in "${push_paths[@]}"; do
-        case "$entry" in
-            '!'*) ;;
-            *) matches_entry "$entry" "$needle" && return 0 ;;
-        esac
-    done
-    return 1
-}
+if covered "$dockerfile_rel"; then
+    _pass "$dockerfile_rel is itself a trigger path"
+else
+    _fail "$dockerfile_rel is itself a trigger path" \
+        "the tail build builds $dockerfile_rel, so a change to it must" \
+        "trigger the build that exists to verify it."
+fi
 
 # Default-context COPY sources, via the shared parser (tests/lib/dockerfile.sh)
 # so continuations, mixed case, leading flags and multi-source COPYs are handled
@@ -120,7 +104,7 @@ done
 # The additional build context the tail-build step passes. Derived from the
 # workflow rather than hardcoded, so moving ./defaults fails here instead of
 # leaving a stale assertion quietly passing.
-project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1)"
+project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1 || true)"
 assert_nonempty "the tail-build step names a project build context" "$project_ctx"
 if covered "${project_ctx}/x"; then
     _pass "${project_ctx}/** covers the --from=project build context"
