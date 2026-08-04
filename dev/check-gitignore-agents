@@ -18,8 +18,20 @@
 #       1 = broken; anything else = git itself failed.
 set -euo pipefail
 
-dir="${1:-.}"
-probe=".claude/agents/.adr-0003-probe"
+# Resolve to the repo root before probing. check-ignore matches a RELATIVE path
+# against the rules in force at that path, so probing from a subdirectory asks
+# about `<subdir>/.claude/agents/...` — which a root-anchored `.claude/*` does
+# not match. Run from dev/ that way, a broken repo reported exit 0.
+if ! dir="$(git -C "${1:-.}" rev-parse --show-toplevel 2>&1)"; then
+    echo "git rev-parse failed in ${1:-.}: $dir" >&2
+    exit 128
+fi
+
+# NOT a dotfile: the probe has to be representative of the content it stands
+# for. As `.adr-0003-probe` it was covered by a personal `.claude/agents/.*`
+# extra while real `.claude/agents/foo.md` staged fine — the hook then blocked
+# every commit in the repo over a file that was never at risk.
+probe=".claude/agents/adr-0003-probe.md"
 
 rc=0
 out="$(git -C "$dir" check-ignore -v -- "$probe" 2>&1)" || rc=$?
@@ -36,6 +48,9 @@ New files under .claude/agents/ silently fail to stage (#91). Fix the LIVE
 and remove any bare '.claude' entry — it matches the directory itself, so no
 negation beneath it can re-include anything. If this is a worktree, fix the
 main checkout too: setup-worktree copies its live file into new worktrees.
+If the source named above is NOT .gitignore (a global core.excludesFile, or
+.git/info/exclude), the stanza above will not clear it — add '!.claude' to the
+live .gitignore as well, or drop the rule at its source.
 EOF
     exit 1
 elif [ "$rc" -ne 1 ]; then

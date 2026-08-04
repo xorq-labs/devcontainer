@@ -100,8 +100,16 @@ fi
 # warn — never block worktree creation — when the effective rules here break
 # ADR-0003's re-inclusion. The commit-time pre-commit hook is the hard gate;
 # this is the early signal at the moment a stale file would spread (#91).
-"$_base/dev/check-gitignore-agents" "$here" \
-    || echo "WARNING: continuing anyway; commits adding .claude/agents/ files will be blocked here until the live .gitignore is fixed (see above)." >&2
+# Only in repos where ADR-0003's convention is actually in force. setup-worktree
+# runs on every `devcontainer up` in a non-main worktree for ANY project, and a
+# consumer repo that simply ignores .claude/ is not broken — it made a different
+# choice. Warning there was per-start noise, and its "commits will be blocked"
+# line was false: the hard gate is this repo's .pre-commit-config.yaml, which
+# consumer repos do not have.
+if [ -n "$(git -C "$here" ls-files -- .claude/agents 2>/dev/null)" ]; then
+    "$_base/dev/check-gitignore-agents" "$here" \
+        || echo "WARNING: continuing anyway; commits adding .claude/agents/ files will be blocked here until the live .gitignore is fixed (see above)." >&2
+fi
 
 link_from_main() {
     local target="$1"
