@@ -118,6 +118,11 @@ taxonomy and reads as `test:`.
   registry).
 - Nix base image and nix seed volume are mutually exclusive — a `:/nix` mount
   shadows the baked store (routing enforced in `dev/devcontainer`).
+- `NIX_USER` in `lib/nix-seed.sh` owns the profile path every nix overlay
+  repeats as `EXTRA_PATH: "/home/<NIX_USER>/.nix-profile/bin"` (compose can't
+  read the bash var), `templates/nix/` included, so a rename there strands the
+  copies and nix-seeded containers lose their tools from `PATH`
+  (test: tests/test-nix-user-sync.sh).
 - Publishing the Nix base does not deliver it: consumers build on the
   `BASE_IMAGE` digest in `nix/base/compose.nix-base.yml`, so a publish without
   a repin reaches nobody. The `pin` job in `.github/workflows/nix-base.yml`

@@ -92,7 +92,9 @@ you've customized without `--force`):
   (build time, root).
 - `setup-env.sh` — calls `nix_seed_volume` in `first-run` (runtime, vscode).
 - `compose.override.yml` — the `nix:/nix` external volume, the host `nix.conf`
-  read-only mount, and `EXTRA_PATH=/home/vscode/.nix-profile/bin`.
+  read-only mount, and `EXTRA_PATH=/home/vscode/.nix-profile/bin` (the user is
+  `NIX_USER` from `lib/nix-seed.sh`; this literal is checked against it by
+  `tests/test-nix-user-sync.sh`).
 - `external-volumes.txt` — lists `nix` so `dev/devcontainer` pre-creates it as
   `${DEV_PROJECT_NAME}-nix`.
 
