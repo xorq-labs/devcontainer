@@ -51,6 +51,16 @@
 # — passed too. Rounds two and three anchored the hook-block assertions and left
 # these. Now via tests/lib/shellsrc.sh (mutation runs 2026-08-04).
 #
+# Verified (ADR-0005 §2 pair), fifth round:
+#   SEMANTIC — a comment on the `stages:` KEY line, `stages: # run via
+#     pre-commit run --hook-stage manual` over a block `- manual`, was 16/0
+#     GREEN: the parser's own sed needed whitespace BEFORE the `#`, and the awk
+#     had already eaten it. One stripper now (shell_strip_comments carries the
+#     line-start rule). Also: commenting the setup-worktree gate out => red.
+#   FORM-ONLY — requoting to `ls-files -- '.claude/agents'` was a false FAIL
+#     against the fixed-string pin; the pattern is quoting-tolerant now and the
+#     suite holds at 16. (mutation runs 2026-08-04)
+#
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -116,16 +126,24 @@ assert_false "a directory outside any repo is not reported green" \
     bash -c "'$check' /tmp 2>/dev/null"
 
 # Wiring: a probe only guards if its consumers run it.
+# Read once, comment-stripped, and reused: a raw grep here matches a commented
+# hook just as happily as a live one.
+_precommit_live="$(shell_strip_comments "$DEV_BASE/.pre-commit-config.yaml")"
+
 assert_true "the pre-commit local hook runs the probe" \
-    grep -q 'entry: dev/check-gitignore-agents' "$DEV_BASE/.pre-commit-config.yaml"
+    grep -q 'entry: dev/check-gitignore-agents' <<<"$_precommit_live"
 # ...and runs at the COMMIT stage. Greps for `entry:` and `always_run:` say
 # nothing about when the hook fires: adding `stages: [manual]` left this suite
 # at 14/0 while a commit with a broken live .gitignore went through clean (rc 0
 # vs rc 1 with the hook restored). The gate #91/#94 exists to provide was off,
 # silently. Checked hermetically — pre-commit is not installed in the Bash-tests
 # CI job, and a skip there is the same "verification never ran" shape.
-hook_block="$(awk '/id: gitignore-agents-reinclusion/{f=1} f&&/^      - id: /&&!/gitignore-agents-reinclusion/{exit} f' \
-    "$DEV_BASE/.pre-commit-config.yaml")"
+# ONE comment-stripper for this file too. YAML and shell both use `#`, and the
+# stage parser's own `sed 's/[[:space:]]#.*$//'` required whitespace BEFORE the
+# `#` — so a comment on the `stages:` KEY line survived, because the awk had
+# already eaten the whitespace. shell_strip_comments carries the line-start rule.
+hook_block="$(shell_strip_comments "$DEV_BASE/.pre-commit-config.yaml" | awk '/id: gitignore-agents-reinclusion/{f=1} f&&/^      - id: /&&!/gitignore-agents-reinclusion/{exit} f' \
+    )"
 assert_nonempty "the hook block was found in .pre-commit-config.yaml" "$hook_block"
 # Against the extracted block, not a fixed `grep -A5` window: adding two lines
 # to the hook pushed always_run out of that window and produced a spurious FAIL
@@ -158,7 +176,6 @@ else
             blk = 0
         }
     ' <<<"$hook_block" \
-        | sed 's/[[:space:]]#.*$//' \
         | tr -d "[]\"'" \
         | tr ', ' '\n\n' \
         | grep -v '^$' || true)"
@@ -181,8 +198,11 @@ assert_shell_wired "setup-worktree warns through the same probe" \
 # ungated warning is per-start noise in consumer repos that simply ignore
 # .claude/ — and its "commits will be blocked" claim is false there, since the
 # hard gate is this repo's .pre-commit-config.yaml.
+# Quoting-tolerant: pinning the unquoted spelling as a fixed string made an
+# ordinary requote (`ls-files -- '.claude/agents'`) a false FAIL. Fail-closed,
+# but a guard that reddens on a no-op reformat trains people to edit the test.
 assert_shell_wired "the setup-worktree warning is gated on the repo tracking .claude/agents" \
-    "$DEV_BASE/dev/setup-worktree" "ls-files -- .claude/agents"
+    "$DEV_BASE/dev/setup-worktree" "ls-files -- [\"']?\.claude/agents[\"']?" -E
 assert_true "the extensionless shellcheck hook covers the probe script" \
     bash -c "grep -F '^dev/(' '$DEV_BASE/.pre-commit-config.yaml' | grep -q 'check-gitignore-agents'"
 

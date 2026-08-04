@@ -39,6 +39,18 @@ assert_shell_wired() {
         _fail "$label" "no such file: $file"
         return
     fi
+    # An empty pattern matches every line, so `grep -qF -- ""` is an
+    # unconditional PASS — the fail-open this helper exists to remove. A
+    # multi-line pattern degrades to grep's OR semantics, so a garbage first
+    # line would pass on the second. Both are what an extracted-from-elsewhere
+    # pattern looks like when its extraction broke.
+    if [ -z "$pattern" ]; then
+        _fail "$label" "empty pattern — the extraction that produced it failed"
+        return
+    fi
+    case "$pattern" in
+        *$'\n'*) _fail "$label" "multi-line pattern would match as an OR: $pattern"; return ;;
+    esac
     # Capture first rather than piping into `grep -q`: -q exits on the first
     # match, `sed` then dies of SIGPIPE, and `pipefail` reports 141 for the whole
     # pipeline — so a SUCCESSFUL match read as a failure. Fail-closed, but wrong.
@@ -52,4 +64,33 @@ assert_shell_wired() {
             "  $pattern" \
             "a commented-out call is not wiring."
     fi
+}
+
+# shell_function_body <file> <name>
+#
+# The body of a shell function, in ONE spelling. Matches `name()` and `name ()`,
+# with the brace on that line or the next. Returns 1 — not an empty string —
+# when the function is absent, so a rename fails CLOSED instead of yielding an
+# empty body that vacuously satisfies a "does not contain X" assertion.
+#
+# The repo had six hand-rolled versions of this range in three incompatible
+# spellings (`awk '/^f\(\) \{/,/^\}/'`, `sed -n '/^f()/,/^}$/p'`, and the same
+# without the `$`). They disagree about `f ()` and about a brace on the next
+# line: reformatting `dc_up()` to `dc_up ()` — valid bash, shellcheck-clean —
+# emptied three of them and false-FAILed the assertions built on them.
+#
+# Two known edges, neither reachable in this repo today. It stops at the FIRST
+# column-0 `}`, so a body containing one inside a heredoc is truncated there;
+# and a one-liner definition captures on through the next function's closer.
+# Truncation is the unsafe direction — a NEGATIVE assertion over a truncated
+# body can pass for the wrong reason — so guard negative assertions with a
+# non-empty check on the body.
+shell_function_body() {
+    local file="$1" name="$2" body
+    body="$(awk -v fn="$name" '
+        !inb && $0 ~ "^"fn"[[:space:]]*\\([[:space:]]*\\)" { inb = 1; print; next }
+        inb { print; if ($0 ~ /^\}/) exit }
+    ' "$file")"
+    [ -n "$body" ] || return 1
+    printf '%s\n' "$body"
 }

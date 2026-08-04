@@ -42,6 +42,15 @@
 # three lines away and left this one — the per-assertion fix that caused four
 # rounds. Now via tests/lib/shellsrc.sh (mutation run 2026-08-04).
 #
+# Verified (ADR-0005 §2 pair), fifth round:
+#   SEMANTIC — prefixing the ONE `dc exec ... sh -c "$script"` line with
+#     `# disabled while debugging: ` was 25/0 GREEN. That bare grep read the raw
+#     file, so the argv0 was then extracted out of the comment text while the
+#     injected script never ran. Now stripped first => 23/2.
+#   FORM-ONLY — `setup() {` -> `setup () {` (valid bash, shellcheck-clean) was
+#     23/2 FALSE-FAIL against the hand-rolled awk range; via
+#     shell_function_body it holds at 25. (mutation runs 2026-08-04)
+#
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -189,7 +198,8 @@ assert_shell_wired "dev/devcontainer drives the lib's function with (vscode, vsc
 # 21/0 and `tests/run-all` at exit 0 while every named volume stayed root-owned.
 # Same one-directional shape as #95 — the suite composed its own invocation
 # instead of reading the executed one.
-setup_body="$(awk '/^setup\(\) \{/,/^\}/' "$DEV_BASE/dev/devcontainer")"
+setup_body="$(shell_function_body "$DEV_BASE/dev/devcontainer" setup || true)"
+setup_body="$(shell_strip_comments <<<"$setup_body")"
 assert_nonempty "setup() body extracted from dev/devcontainer" "$setup_body"
 assert_true "setup() calls chown_named_volume_targets on every cold start" \
     grep -qE '^[[:space:]]*chown_named_volume_targets\b' <<<"$setup_body"
@@ -197,7 +207,11 @@ assert_true "setup() calls chown_named_volume_targets on every cold start" \
 # The executed injection line, read rather than restated: `sh -c <script> <argv0>
 # <args...>` puts the first operand in $0, so without it the first mount point
 # is swallowed and silently never chowned.
-exec_line="$(grep -oP 'dc exec .*sh -c "\$script".*' "$DEV_BASE/dev/devcontainer" | head -1 || true)"
+# Comment-stripped: this bare grep read the raw file, so prefixing the ONE line
+# that executes the injected script with `# disabled while debugging: ` left the
+# suite at 25/0 — the argv0 was then extracted out of the comment text.
+_dc_live="$(shell_strip_comments "$DEV_BASE/dev/devcontainer")"
+exec_line="$(grep -oP 'dc exec .*sh -c "\$script".*' <<<"$_dc_live" | head -1 || true)"
 assert_nonempty "the injection line was found in dev/devcontainer" "$exec_line"
 argv0="$(grep -oP 'sh -c "\$script"\s+\K[^"\s$]+' <<<"$exec_line" || true)"
 assert_nonempty "the injection passes an argv0 before the mount points" "$argv0"
