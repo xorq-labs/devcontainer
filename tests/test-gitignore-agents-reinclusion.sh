@@ -45,9 +45,16 @@
 # .gitignore, dev/check-gitignore-agents exits 1 and
 # `pre-commit run gitignore-agents-reinclusion` fails; restoring the template
 # stanza turns both green (mutation run 2026-08-02).
+# Verified (ADR-0005 §2), fourth round: BOTH setup-worktree wiring greps matched
+# commented-out code. Commenting the probe call passed at 16/0 (ADR-0003's
+# worktree probe never runs); commenting the ls-files gate — never tested before
+# — passed too. Rounds two and three anchored the hook-block assertions and left
+# these. Now via tests/lib/shellsrc.sh (mutation runs 2026-08-04).
+#
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/shellsrc.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 check="$DEV_BASE/dev/check-gitignore-agents"
@@ -167,15 +174,15 @@ else
             "ADR-0003 gate never fires on a real commit — silently, suite green."
     fi
 fi
-assert_true "setup-worktree warns through the same probe" \
-    grep -q 'check-gitignore-agents' "$DEV_BASE/dev/setup-worktree"
+assert_shell_wired "setup-worktree warns through the same probe" \
+    "$DEV_BASE/dev/setup-worktree" "check-gitignore-agents"
 # ...but only where ADR-0003's convention is in force. setup-worktree runs on
 # every `devcontainer up` in a non-main worktree for ANY project, so an
 # ungated warning is per-start noise in consumer repos that simply ignore
 # .claude/ — and its "commits will be blocked" claim is false there, since the
 # hard gate is this repo's .pre-commit-config.yaml.
-assert_true "the setup-worktree warning is gated on the repo tracking .claude/agents" \
-    grep -q 'ls-files -- .claude/agents' "$DEV_BASE/dev/setup-worktree"
+assert_shell_wired "the setup-worktree warning is gated on the repo tracking .claude/agents" \
+    "$DEV_BASE/dev/setup-worktree" "ls-files -- .claude/agents"
 assert_true "the extensionless shellcheck hook covers the probe script" \
     bash -c "grep -F '^dev/(' '$DEV_BASE/.pre-commit-config.yaml' | grep -q 'check-gitignore-agents'"
 

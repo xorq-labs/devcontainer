@@ -36,9 +36,16 @@
 #     mount point becomes $0 and is silently never chowned.
 #   (mutation runs 2026-08-04)
 #
+# Verified (ADR-0005 §2), fourth round: `grep -qF` on the driver line matched
+# THROUGH a comment, so prefixing it with `# disabled for now: ` passed at 25/0
+# with the chown never running. Round two had anchored the sibling assertion
+# three lines away and left this one — the per-assertion fix that caused four
+# rounds. Now via tests/lib/shellsrc.sh (mutation run 2026-08-04).
+#
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/shellsrc.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 
@@ -172,8 +179,8 @@ fi
 # chown_named_volume_targets injects the lib into the container and appends this
 # exact line; a rename on either side would otherwise fail only at runtime.
 driver='dev_chown_volume_targets vscode vscode /home/vscode "$@"'
-assert_true "dev/devcontainer drives the lib's function with (vscode, vscode, /home/vscode, \$@)" \
-    grep -qF "$driver" "$DEV_BASE/dev/devcontainer"
+assert_shell_wired "dev/devcontainer drives the lib's function with (vscode, vscode, /home/vscode, \$@)" \
+    "$DEV_BASE/dev/devcontainer" "$driver"
 
 # ---- 6a. the wiring: setup() actually calls it, with the argv0 operand ----
 # Pinning the driver line proves the lib is driven correctly IF it runs. It does
