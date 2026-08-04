@@ -229,6 +229,22 @@ taxonomy and reads as `test:`.
   ones (`unguarded`: same shape as `lint.yml` — a ban on adding a second
   runner, checkable only by restating a 22-line workflow at rung 3; the loss it
   prevents is bounded because the glob, not the workflow, enumerates suites).
+- The merged compose MOUNT GRAPH is a source of truth, not prose: facts about
+  it (what nests under what, what is absent) are read by
+  `tests/lib/compose-topology.sh`, never restated in a comment. Two rules ride
+  on it — ADR-0001's "no shared credentials mount" and "a recursive chown must
+  not cross into a bind" (#115) — and both were green under mutation until this
+  existed, because the suite could only grep `docker-compose.yml` as text:
+  existence was assertable, nesting and absence were not (#116). A guard on the
+  graph is the only one that fails from the side that CHANGES, i.e. in the PR
+  editing the compose file (test: `tests/test-compose-topology.sh`).
+- The topology reader re-implements Compose's short-form rules (a source with
+  no `/` is a named volume), so it is itself a restatement and is cross-checked
+  against real `docker compose config` output whenever a docker CLI exists —
+  `config` needs no daemon, but `tests/run-all` must stay hermetic, so the
+  check is conditional and skips loudly (test:
+  `tests/test-compose-topology.sh`; `unguarded` on a runner with no docker CLI
+  at all, where only the hermetic half runs).
 - Container-side root logic lives in `lib/*.sh` and is INJECTED per run via
   `dc exec ... sh -c "$script" <argv0> <args...>` — a runtime input: no
   rebuild, no fingerprint entry unless it is also COPYed
