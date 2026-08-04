@@ -22,6 +22,16 @@
 # in those same compose files (cache/config mounts) are coupled to the image's
 # container user in the Dockerfile, a different fact with a different owner.
 #
+# Verified (ADR-0005 §2), upstream half — three mutations, ALL green on the
+# suite before it existed (11 passed, 0 failed each):
+#   - renaming the container user throughout both Dockerfiles
+#     (s/vscode/devuser/g) with NIX_USER left stale => 4 FAILs;
+#   - a PARTIAL rename, only `ENV HOME=/home/vscode` in the root Dockerfile
+#     => FAIL "Dockerfile: /home/devuser";
+#   - only nix/base/flake.nix's Env HOME renamed, so the nix route drifts
+#     alone => FAIL "nix/base/flake.nix: Env HOME=/home/devuser"
+#   (mutation runs 2026-08-04).
+#
 # Verified (ADR-0005 §2), five mutations, each red on the named assertion:
 #   - templates/nix/compose.override.yml EXTRA_PATH -> /home/nixuser/... =>
 #     FAIL "templates/nix/compose.override.yml: /home/nixuser/.nix-profile/bin"
@@ -109,5 +119,56 @@ else
 fi
 
 echo ""
-echo "NIX_USER: $nix_user    files checked: ${#compose_files[@]} compose + README"
+echo "--- NIX_USER matches the container user the image actually creates ---"
+# Everything above is the DOWNSTREAM half: every EXTRA_PATH copy tracks
+# NIX_USER. This is the upstream half, and without it the coupling is guarded
+# from only one end. `vscode` is a bare literal in both Dockerfiles — 9x and 6x,
+# with no ARG USERNAME — so renaming the container user there leaves NIX_USER
+# stale, every assertion above still passes, and the nix seed symlinks a profile
+# into a home that no longer belongs to the container user. Nothing fails until
+# a nix-seeded container starts and its tools are missing from PATH.
+#
+# Derived from each route's own declaration, never restated:
+#   classic route  -> Dockerfile's `ENV HOME=/home/<user>`
+#   nix base       -> nix/base/flake.nix's Env `HOME=/home/<user>` (whose own
+#                     comment says it mirrors the Dockerfile's ENV HOME)
+# plus every other literal /home/<user> path in either Dockerfile, so a PARTIAL
+# rename is caught too. Paths interpolating a variable (`/home/$HOST_USER`, the
+# host-user alias symlink) are legitimately a different value and excluded.
+user_paths_in() {
+    grep -oE '/home/[A-Za-z0-9._-]+' "$1" | sed 's|^/home/||' | sort -u
+}
+
+for f in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
+    rel="${f#"$DEV_BASE"/}"
+    mapfile -t users < <(user_paths_in "$f")
+    assert_true "$rel: literal /home/<user> paths found" test "${#users[@]}" -gt 0
+    for u in "${users[@]}"; do
+        assert_eq "$rel: /home/$u" "$nix_user" "$u"
+    done
+done
+
+# The flake bakes HOME into the nix base's image config; the tail Dockerfile
+# inherits it rather than restating ENV HOME.
+flake="$DEV_BASE/nix/base/flake.nix"
+mapfile -t flake_users < <(grep -oE '"HOME=/home/[A-Za-z0-9._-]+"' "$flake" \
+    | sed -E 's|^"HOME=/home/||; s|"$||' | sort -u)
+assert_true "nix/base/flake.nix: Env HOME declared" test "${#flake_users[@]}" -gt 0
+for u in "${flake_users[@]}"; do
+    assert_eq "nix/base/flake.nix: Env HOME=/home/$u" "$nix_user" "$u"
+done
+
+# The host-user alias symlink is skipped when HOST_USER already IS the container
+# user; that comparison is a fourth copy of the name.
+for f in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
+    rel="${f#"$DEV_BASE"/}"
+    mapfile -t cmp_users < <(grep -oE '"\$HOST_USER" != "[A-Za-z0-9._-]+"' "$f" \
+        | sed -E 's|.* != "||; s|"$||' | sort -u)
+    for u in "${cmp_users[@]}"; do
+        assert_eq "$rel: HOST_USER alias guard compares against $u" "$nix_user" "$u"
+    done
+done
+
+echo ""
+echo "NIX_USER: $nix_user    files checked: ${#compose_files[@]} compose + README + 2 Dockerfiles + flake"
 finish

@@ -138,8 +138,14 @@ taxonomy and reads as `test:`.
 - `NIX_USER` in `lib/nix-seed.sh` owns the profile path every nix overlay
   repeats as `EXTRA_PATH: "/home/<NIX_USER>/.nix-profile/bin"` (compose can't
   read the bash var), `templates/nix/` included, so a rename there strands the
-  copies and nix-seeded containers lose their tools from `PATH`
-  (test: tests/test-nix-user-sync.sh).
+  copies and nix-seeded containers lose their tools from `PATH`. `NIX_USER`
+  must ALSO equal the container user the image creates, which is a bare
+  literal in both Dockerfiles (no `ARG USERNAME`) plus `nix/base/flake.nix`'s
+  `Env HOME` — guarding only the overlay copies left that upstream half
+  silent, so renaming the container user kept every downstream assertion green
+  while the seed symlinked a profile into a home nobody owns
+  (`test: tests/test-nix-user-sync.sh`, both halves derived from each route's
+  own `HOME` declaration).
 - Publishing the Nix base does not deliver it: consumers build on the
   `BASE_IMAGE` digest in `nix/base/compose.nix-base.yml`, so a publish without
   a repin reaches nobody. The `pin` job in `.github/workflows/nix-base.yml`
