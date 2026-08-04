@@ -133,28 +133,30 @@ header claim goes stale as the test evolves, and nothing re-runs it)` — a
 rung-3 restatement, accepted deliberately. Re-verifying it mechanically is the
 CI mutation testing rejected below.
 
-#### Amendment (2026-08-04): record a mutation PAIR, one aimed at the input
+## Amendment (2026-08-04): record a mutation PAIR, one aimed at the input
 
 **Status: Accepted.**
 
-One mutation is not enough, and the record says so. Of 24 `Verified (ADR-0005`
-blocks across `main` and the open branches, **16 record a later round** — 67% of
-this repo's mutation records document a hole a *reviewer or auditor* found, not
-the author. Count them with
+One mutation is not enough. "Break the invariant" aims the mutation at the thing
+the author is already thinking about, so the §2 run confirms the hole they just
+closed and misses the parsing assumption they did not know they had made.
 
-    git grep -h 'Verified (ADR-0005' -- tests/ | sort -u | grep -ci 'round'
+The evidence is named cases, not a statistic. Every fail-open this repo has
+shipped since ADR-0005 landed was found by a reviewer or auditor AFTER the
+author's own §2 run passed: a `[[ ]]` dispatch arm invisible to a strict-shape
+parser (#96), COPY coverage satisfied by a comment (#97), a pin anchor restated
+rather than read (#95), a workflow omitting itself from its own trigger paths,
+and — in the PR that existed to fix this class — five successive rounds of
+comment- and spelling-blind parses.
 
-Match on `round`, not on an ordinal list: the first cut of this measurement
-grepped `second|third` and undercounted by three, because #110 went on to need a
-fourth and fifth. A guard-adjacent measurement that misses cases is the same
-defect as the guards it is measuring.
-
-The reason is structural, not a lapse: "break the invariant" aims the mutation
-at the thing the author is already thinking about. It reliably confirms the
-hole they just closed and reliably misses the parsing assumption they did not
-know they had made. Every input-shape hole in this repo — a `[[ ]]` dispatch
-arm, a YAML block spelling, a comment matched as code — was found by someone
-else, after the §2 run passed.
+A count is deliberately NOT quoted here. The first version of this amendment
+claimed "19 of 12", then "24 of 16", and the command it published to reproduce
+that returned 3, because a later edit dropped the branch loop it depended on.
+The population spans open branches and moves hourly; the marker (`round`) is
+also a floor, since records like "two mutations, both previously green" document
+an externally-found hole without using the word. An ADR arguing for measurement
+rigor should not publish a number that cannot be re-derived — the named cases
+above are stable and checkable, and they carry the argument.
 
 So record **two** mutations:
 
@@ -167,9 +169,16 @@ So record **two** mutations:
    commenting it out rather than deleting it; set the key in block form rather
    than flow. The guard must go **red**.
 
-Cost: two extra runs per new or materially-changed guard. Against that, these
-two would have caught every fail-open this repo has shipped since ADR-0005
-landed, each of which instead cost a review round.
+**Exception — guards whose invariant IS the byte form.** Where the fact being
+guarded is that a line keeps an exact shape (the `BASE_IMAGE` pin's four
+encodings), a form-only mutation correctly turns the guard red: format
+sensitivity is the point. Record that instead of running the form-only half,
+and say which invariant makes it so.
+
+Cost: two extra runs per new or materially-changed guard. Compare an
+assertion count only against the paired run on the same machine — suites with
+environment-conditional assertions (absent `zsh`/`fish`) report different
+absolute totals elsewhere.
 
 Not proposed: a new rung, and a new annotation kind for coverage or wiring.
 Coverage is already rung-2-able — §3's own rung-2 example (parsing a
@@ -179,12 +188,6 @@ fact to state in the invariant, not a kind of guard; mixing it into
 axis with the fact axis.
 
 ### 3. Derive over restate
-
-**The rung is a property of an ASSERTION, not of a suite** (added 2026-08-04).
-A suite can be rung 2 on the fact and rung 3 on the call:
-`tests/test-volume-chown-guard.sh` derives the chown semantics from the real
-lib while pinning the driver line as a literal. Read the ladder per assertion,
-or a single derived check will vouch for its restated neighbours.
 
 Three rungs, in order of preference. Choose consciously and say which in the
 guard's header:
@@ -237,3 +240,14 @@ was insufficient, why two rediscoveries happened) is the load-bearing part.
 **Require mutation testing in CI.** Rejected as premature — it means running the
 suite against deliberately broken trees, which is a meaningful harness
 investment. A recorded manual mutation captures most of the value now.
+
+## Amendment (2026-08-04): the rung is a property of an assertion
+
+**Status: Accepted.**
+
+Read the ladder per ASSERTION, not per suite. A suite can be rung 2 on the fact
+and rung 3 on the call: `tests/test-volume-chown-guard.sh` derives the chown
+semantics by running the real lib, while pinning the driver line as a literal.
+Annotating the suite as `test:` says nothing about which of its assertions are
+derived, and a single derived check will otherwise vouch for its restated
+neighbours.
