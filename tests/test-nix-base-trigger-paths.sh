@@ -24,6 +24,12 @@
 # build uses — a new deny pattern there breaks a COPY with no COPY source
 # touched.
 #
+# Verified (ADR-0005 §2), audit round: deleting `- .github/workflows/nix-base.yml`
+# from both paths lists turns this red on ".github/workflows/nix-base.yml is
+# itself a trigger path" (15 passed, 1 failed). This workflow already listed
+# itself; the assertion exists so the sibling cannot silently lose it again
+# (mutation run 2026-08-04).
+#
 # Verified (ADR-0005 §2), review round: deleting `- nix/base/**` from both paths
 # lists turns this red on "nix/base/Dockerfile.nix-default is itself a trigger
 # path" (14 passed, 1 failed) — 13/13 green before that assertion existed.
@@ -112,6 +118,20 @@ else
     _fail "${project_ctx}/** covers the --from=project build context" \
         "the tail build reads ./${project_ctx} as the 'project' context, so a" \
         "change there must trigger the workflow."
+fi
+
+# The workflow file is itself a build input: it holds the docker build command,
+# its --build-context and its --build-args. nix-base.yml has always listed
+# itself; docker-build.yml did not, so PR #93 — which existed to fix that
+# workflow's trigger paths — merged without ever running the classic build.
+# Derived from the workflow this suite already points at, not restated.
+workflow_rel="${workflow#"$DEV_BASE"/}"
+if covered "$workflow_rel"; then
+    _pass "$workflow_rel is itself a trigger path"
+else
+    _fail "$workflow_rel is itself a trigger path" \
+        "the workflow defines the tail build — its build command, contexts and args —" \
+        "so a change to it must re-run the verification it configures."
 fi
 
 # Not a COPY source, but it filters the repo-root context the tail build uses:

@@ -157,8 +157,9 @@ taxonomy and reads as `test:`.
 - Those same trigger paths must cover every tail-build input — default-context
   `COPY` sources in `nix/base/Dockerfile.nix-default`, the `--build-context`
   dir the `--from=project` COPYs read, and `.dockerignore`, which is no COPY
-  source but filters the repo-root context the tail build uses — and `push`
-  must equal `pull_request`. The
+  source but filters the repo-root context the tail build uses, and the
+  workflow file itself, which holds the build command and its contexts — and
+  `push` must equal `pull_request`. The
   workflow's own header states this rule and it drifted anyway —
   `lib/claude-code-token-env.sh` was COPYed, allowlisted in `.dockerignore` and
   hashed by `image_config_files()`, but unlisted here (#86), so a PR touching
@@ -168,9 +169,12 @@ taxonomy and reads as `test:`.
 - `docker-build.yml`'s trigger paths hand-mirror the same input classes for
   the classic build — the root `Dockerfile`'s default-context `COPY` sources,
   the `--build-context` dir the `--from=project` COPYs read, and
-  `.dockerignore` — with `push` equal to `pull_request`. The list omitted
-  `.dockerignore` (#92), so a deny pattern newly matching a COPY source could
-  merge green with no classic build run
+  `.dockerignore`, and THE WORKFLOW FILE ITSELF — with `push` equal to
+  `pull_request`. The list omitted `.dockerignore` (#92), so a deny pattern
+  newly matching a COPY source could merge green with no classic build run;
+  it then omitted itself, so PR #93 — which existed to fix these very trigger
+  paths — merged without ever running the classic build, the third instance of
+  "nothing failed, the verification just never ran"
   (test: `tests/test-docker-build-trigger-paths.sh`).
 - `nix/base/flake.nix`'s `Env` hand-maintains PATH and no other variable *of
   the base's* (it also sets `HOME` and `SSL_CERT_FILE`, additions
