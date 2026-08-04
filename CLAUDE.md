@@ -246,8 +246,10 @@ taxonomy and reads as `test:`.
   is covered end to end (`test: tests/test-compose-topology.sh`;
   `unguarded: binds nested under overlay-declared volumes, see #115`).
 - The graph has SEVERAL committed channels and a guard that reads a subset is
-  evadable through the rest, so the compose-file list is DERIVED
-  (`git ls-files` for `*compose*.y*ml`) rather than written down — a hand-kept
+  evadable through the rest, so the compose-file list is DERIVED — `git
+  ls-files` filtered by `(^|/)(docker-)?compose[^/]*\.ya?ml$`, i.e. `compose`
+  at the START of a path component, so `foo-compose.yml` would NOT be scanned —
+  rather than written down. A hand-kept
   list leaked a channel three times running: compose-only in rev 1, then
   `projects/<name>/host-mounts.txt` (which `lib/host-mounts.sh` turns into a
   generated override landing in the same `services.app.volumes`), then

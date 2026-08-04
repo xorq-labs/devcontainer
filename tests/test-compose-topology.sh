@@ -25,18 +25,25 @@
 #
 # What is asserted:
 #   1. the reader is not vacuous, and agrees with real `docker compose config`
-#      where a docker CLI exists (the reader re-implements Compose's short-form
-#      rules, so it is itself a restatement and needs its own check)
-#   2. ADR-0001: nothing bind-mounts the host credential store into the container
+#      where a docker CLI exists (the reader re-implements Compose's rules, so
+#      it is itself a restatement and needs its own check)
+#   2. ADR-0001: no WRITABLE mount of the host home/credential store, keyed on
+#      the mount SOURCE, with the transcript carve-out as the one declared
+#      exception; plus `:ro` pinned on the two `.claude-host` mounts
 #   3. coverage: the mounts under ~/.claude are exactly a declared set — a NEW
 #      one is red until someone names it and says why
 #   4. nesting: every bind nested under a volume is a declared exception, since
 #      that is the topology the unpruned `chown -R` descends through (#115)
-#   5. no project overlay introduces a mount under ~/.claude
+#   5. no compose file other than the base mounts anything under ~/.claude,
+#      across the DERIVED file set and EVERY service
+#   6. no committed host-mounts.txt does either, and the parser for that format
+#      is pinned against a synthetic line
 #
-# Verified (ADR-0005 §2), three mutations, each reverted after watching it go
-# red. Counts are what the runs produced; the "green before" column is stated
-# per-mutation because it is NOT uniform, and the difference is the whole point:
+# Verified (ADR-0005 §2), twelve mutations. Counts are transcribed from the
+# runs; the "green before" column is stated PER MUTATION because it is not
+# uniform, and that difference is the whole point — several of these were green
+# against an earlier revision of this same file, i.e. they are gaps this guard
+# had and closed, not gaps it never had:
 #   1. re-adding `${HOME}/.claude/credentials:/home/vscode/.claude/credentials`,
 #      the exact mount ADR-0001 exists to remove — 3 red (items 2, 3, 4).
 #      Was GREEN before this file: `bash tests/run-all` -> exit 0.
@@ -79,12 +86,33 @@
 #      compose reads as an anonymous volume at that path — 1 red (item 6).
 #      Green while the parser skipped single-field lines.
 #
-# Mutation method note: measure in a FRESH copy per mutation. Copying this
-# worktree with `cp -a` carries a `.git` file pointing at another worktree's
-# gitdir, so `git checkout` does not restore between runs and mutations
-# accumulate — that produced three rounds of inflated red counts elsewhere in
-# this suite's sibling. `tests/mutation-coverage` (#124) does this correctly.
-#   (mutation runs 2026-08-04; 4-5 added in round 1, 6-9 in round 2)
+#  10. a WRITABLE `${HOME}/.claude:/home/vscode/.claude-rw` — the host store,
+#      which contains .credentials.json, at a target no assertion named — 1 red
+#      (item 2). Green through round 2: the ADR-0001 check keyed on the word
+#      "credential" appearing in a path, so choosing another target evaded it.
+#      The rule is now keyed on the SOURCE, with one declared exception (the
+#      transcript carve-out, which is writable by design).
+#  11. a second SERVICE (`sidecar`) in a project overlay bind-mounting the host
+#      store under ~/.claude — 1 red (item 5). Green through round 2: the
+#      reader read `services.app` only, while `dc up -d` starts every service
+#      in the merged config.
+#  12. a host-mounts target hiding a COLON-LESS default, `${X-de}`, and
+#      separately an unbraced `$Y` — 1 red each (item 6). Green through round
+#      2: the interpolation model required a colon before `-`/`?` and only
+#      matched braced forms, so both rendered under ~/.claude for real compose
+#      while the reader left them literal. Third instance of this class, one
+#      spelling over from the previous fix — which is why the model is now a
+#      single shared definition rather than two hand-synced copies.
+#
+# METHOD: measure each mutation in a FRESH copy of the tree and transcribe the
+# numbers from the run. Counts taken from one scratch copy reused across
+# mutations disagreed with one-copy-per-mutation counts, and only the latter
+# reproduce; the reason the reused copy drifted was never established (an
+# earlier note blamed `git checkout` failing to restore in a `cp -a` copy of a
+# linked worktree — that does not reproduce). tests/mutation-coverage automates
+# this; it is not in this tree, it ships on the branch behind PR #124.
+#   (mutation runs 2026-08-04; 4-5 added in round 1, 6-9 in round 2,
+#    10-12 in round 3)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -162,8 +190,29 @@ fi
 # The ADR's central decision is a fact about THIS FILE, and until now it was
 # prose in four others. A bind whose source is the host credential store
 # re-introduces the shared inode the ADR exists to eliminate.
-creds="$(compose_mounts "$COMPOSE" | awk -F'\t' '$1 == "bind" && ($2 ~ /credential/ || $3 ~ /credential/)')"
-assert_eq "ADR-0001: nothing bind-mounts the host credential store" "" "$creds"
+# Keyed on the SOURCE, not on the word "credential" appearing in a path.
+# Name-keying was evadable by simply choosing another target: a writable
+# `${HOME}/.claude:/home/vscode/.claude-rw` mounts the host store (which
+# contains .credentials.json) and passed every assertion, because no path said
+# "credential". The rule ADR-0001 actually states is about the STORE, so: any
+# mount whose source is the host home or under it must be read-only, wherever
+# it lands and whatever it is called.
+#
+# ONE declared exception, and it is ADR-0001's own: the transcript carve-out
+# under ~/.claude/projects/<key> must be writable — that is the whole point of
+# it, and it addresses a per-container leaf, not the store. Anything else
+# writable under the host home is the regression.
+#
+# Read across the DERIVED set, not just the base file: an overlay (or a sidecar
+# service in one) mounting the store at a target outside ~/.claude would be
+# invisible to both this and the ~/.claude coverage assertion below.
+# shellcheck disable=SC2046  # word-splitting the derived file list is intended
+writable_host_store="$(compose_mounts $(committed_compose_files) |
+    awk -F'\t' '($3 == "/host/home" || index($3, "/host/home/") == 1) &&
+                $4 !~ /ro/ &&
+                index($3, "/host/home/.claude/projects/") != 1')"
+assert_eq "ADR-0001: no WRITABLE mount of the host home/credential store" \
+    "" "$writable_host_store"
 
 # The ADR's OTHER half, docs/adr/0001-...:46 — "the store is still reachable
 # READ-ONLY via the existing .claude-host mount (host ~/.claude, which includes
