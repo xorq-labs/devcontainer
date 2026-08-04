@@ -223,6 +223,19 @@ taxonomy and reads as `test:`.
   entries, so it must ask for `--untracked-files=all`: git's default collapses
   a wholly-untracked `.claude/` to one entry that matches no manifest path
   (`tests/test-worktree-claude-layout.sh`).
+- ADR-0003's re-inclusion must hold in the LIVE `.gitignore` of every
+  checkout: a path under `.claude/agents/` must not be ignored, or `git add`
+  on a new agent definition silently stages nothing (#91). The live file is
+  untracked — outside the tree — so the guard is a functional
+  `git check-ignore` probe at commit time, `dev/check-gitignore-agents`,
+  wired as a local pre-commit hook, plus a non-blocking warning in
+  `dev/setup-worktree` at the moment the main checkout's copy propagates
+  (tool: dev/check-gitignore-agents;
+  test: tests/test-gitignore-agents-reinclusion.sh). Harness-created session
+  worktrees under `.claude/worktrees/` never run setup-worktree and may lack
+  a `.gitignore` entirely (unguarded: ephemeral and harness-managed; nothing
+  authors agent files there, and the commit-time hook still fires if one
+  does).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).
@@ -271,7 +284,7 @@ taxonomy and reads as `test:`.
 - Python targets 3.12, formatted by ruff with 120 char line length (see `ruff.toml`).
 - Commit messages follow conventional commits: `fix:`, `feat:`, `ci:`, etc.
 - A PR that resolves an issue puts `Closes #N` in its **body** (not just the title). Citing the number in prose does not close anything: #54 was titled "…(#53)" and #53 stayed open for two weeks after it shipped, while #35 was independently re-solved by #71 because nobody knew it was open. An issue list that never drains stops being read, and a fixed-but-open issue is worse than no issue — it sends the next reader after work that is already done.
-- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003).
+- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003). Because the live file is untracked, drift from the template is caught at commit time by `dev/check-gitignore-agents`, a functional `git check-ignore` probe (see the invariant; #91).
 - Adding a `devcontainer` subcommand: add the dispatch arm in `dev/devcontainer`, add a row to `lib/command-table.tsv`. That is the whole workflow — the usage text, the bash/zsh/fish word lists, their descriptions, and the per-command argument wiring are all generated from the row. Never hand-edit a command list in `dev/devcontainer-completions` or the Commands block of `show_usage`.
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
