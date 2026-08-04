@@ -137,10 +137,17 @@ CI mutation testing rejected below.
 
 **Status: Accepted.**
 
-One mutation is not enough, and the record says so. Of 19 `Verified (ADR-0005`
-blocks across `main` and the open branches, **12 carry a later-round marker**
-(`review round`, `audit round`, `second`, `third`) — 63% of this repo's
-mutation records document a hole a *reviewer or auditor* found, not the author.
+One mutation is not enough, and the record says so. Of 24 `Verified (ADR-0005`
+blocks across `main` and the open branches, **16 record a later round** — 67% of
+this repo's mutation records document a hole a *reviewer or auditor* found, not
+the author. Count them with
+
+    git grep -h 'Verified (ADR-0005' -- tests/ | sort -u | grep -ci 'round'
+
+Match on `round`, not on an ordinal list: the first cut of this measurement
+grepped `second|third` and undercounted by three, because #110 went on to need a
+fourth and fifth. A guard-adjacent measurement that misses cases is the same
+defect as the guards it is measuring.
 
 The reason is structural, not a lapse: "break the invariant" aims the mutation
 at the thing the author is already thinking about. It reliably confirms the
