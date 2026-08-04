@@ -24,6 +24,16 @@
 # build uses — a new deny pattern there breaks a COPY with no COPY source
 # touched.
 #
+# Verified (ADR-0005 §2), review round: deleting `- nix/base/**` from both paths
+# lists turns this red on "nix/base/Dockerfile.nix-default is itself a trigger
+# path" (14 passed, 1 failed) — 13/13 green before that assertion existed.
+# Reordering the lists so `- '!nix/base/compose.nix-base.yml'` PRECEDES
+# `- nix/base/**` turns it red on "the pin file is excluded from the triggers"
+# (14 passed, 1 failed): GitHub's matcher is last-match-wins, so that order
+# re-includes the pin file and restarts the two-arch republish, which the old
+# order-independent exclusion scan reported as excluded (mutation runs
+# 2026-08-04).
+#
 # Scope note: the ROOT Dockerfile's COPY sources are still not required here —
 # this workflow builds the nix tail, not the classic image. The classic build's
 # workflow (docker-build.yml) hand-mirrors the same input classes and has its
@@ -37,11 +47,17 @@ set -euo pipefail
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 workflow="$DEV_BASE/.github/workflows/nix-base.yml"
-dockerfile="$DEV_BASE/nix/base/Dockerfile.nix-default"
 
 echo "--- nix-base.yml trigger paths cover the tail-build inputs ---"
 
 [ -f "$workflow" ] || { echo "  FAIL: workflow not found at $workflow"; exit 1; }
+
+# Read the built Dockerfile out of the build step rather than assuming it, and
+# require its own path to be a trigger — the sibling guard had the same hole
+# (removing `- nix/base/**` here left it 13/13 green).
+dockerfile_rel="$(workflow_build_dockerfile "$workflow" || true)"
+assert_nonempty "the tail-build step names the Dockerfile it builds" "$dockerfile_rel"
+dockerfile="$DEV_BASE/$dockerfile_rel"
 [ -f "$dockerfile" ] || { echo "  FAIL: Dockerfile not found at $dockerfile"; exit 1; }
 
 mapfile -t push_paths < <(workflow_event_paths "$workflow" push)
@@ -58,6 +74,14 @@ assert_eq "push and pull_request trigger on the same paths" \
 covered() {
     workflow_path_covered "$1" "${push_paths[@]}"
 }
+
+if covered "$dockerfile_rel"; then
+    _pass "$dockerfile_rel is itself a trigger path"
+else
+    _fail "$dockerfile_rel is itself a trigger path" \
+        "the tail build builds $dockerfile_rel, so a change to it must" \
+        "trigger the build that exists to verify it."
+fi
 
 # Default-context COPY sources, via the shared parser (tests/lib/dockerfile.sh)
 # so continuations, mixed case, leading flags and multi-source COPYs are handled
@@ -80,7 +104,7 @@ done
 # The additional build context the tail-build step passes. Derived from the
 # workflow rather than hardcoded, so moving ./defaults fails here instead of
 # leaving a stale assertion quietly passing.
-project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1)"
+project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1 || true)"
 assert_nonempty "the tail-build step names a project build context" "$project_ctx"
 if covered "${project_ctx}/x"; then
     _pass "${project_ctx}/** covers the --from=project build context"

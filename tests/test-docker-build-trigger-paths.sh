@@ -18,6 +18,15 @@
 # workflow's own --build-context flag rather than hardcoded); and
 # .dockerignore.
 #
+# Verified (ADR-0005 §2), review round: deleting `- Dockerfile` from BOTH paths
+# lists turns this red on "Dockerfile is itself a trigger path" (13 passed, 1
+# failed) — it was 12/12 green before that assertion existed, while the workflow
+# had stopped running on the very file it builds. Pointing the build step at a
+# new `-f Dockerfile.classic` turns it red on that path plus the classic file's
+# own unlisted COPY sources (8 passed, 2 failed), because the built Dockerfile
+# is now read from the build step instead of hardcoded (mutation runs
+# 2026-08-04).
+#
 # Verified (ADR-0005 §2): removing .dockerignore from both workflow lists
 # turns this red on ".dockerignore is a trigger path"; removing it from
 # pull_request only turns the push==pull_request assertion red (mutation run
@@ -30,11 +39,17 @@ set -euo pipefail
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 workflow="$DEV_BASE/.github/workflows/docker-build.yml"
-dockerfile="$DEV_BASE/Dockerfile"
 
 echo "--- docker-build.yml trigger paths cover the classic-build inputs ---"
 
 [ -f "$workflow" ] || { echo "  FAIL: workflow not found at $workflow"; exit 1; }
+
+# Which Dockerfile this workflow builds is read from the build step, not
+# assumed: a guard parsing a different file than the workflow builds is green
+# over an entirely unlisted input set.
+dockerfile_rel="$(workflow_build_dockerfile "$workflow" || true)"
+assert_nonempty "the build step names the Dockerfile it builds" "$dockerfile_rel"
+dockerfile="$DEV_BASE/$dockerfile_rel"
 [ -f "$dockerfile" ] || { echo "  FAIL: Dockerfile not found at $dockerfile"; exit 1; }
 
 mapfile -t push_paths < <(workflow_event_paths "$workflow" push)
@@ -51,6 +66,19 @@ assert_eq "push and pull_request trigger on the same paths" \
 covered() {
     workflow_path_covered "$1" "${push_paths[@]}"
 }
+
+# The Dockerfile itself is a build input. Without this, deleting `- Dockerfile`
+# from both paths lists left the guard green at 12/12 while the workflow
+# stopped running on changes to the very file it builds — bump NODE_MAJOR with
+# a stale NODESOURCE_SHA256, merge with no build, and the next unrelated build
+# on main dies at `sha256sum -c`.
+if covered "$dockerfile_rel"; then
+    _pass "$dockerfile_rel is itself a trigger path"
+else
+    _fail "$dockerfile_rel is itself a trigger path" \
+        "the workflow builds $dockerfile_rel, so a change to it must trigger" \
+        "the build that exists to verify it."
+fi
 
 # Default-context COPY sources, via the shared parser (tests/lib/dockerfile.sh)
 # so continuations, mixed case, leading flags and multi-source COPYs are
@@ -73,7 +101,10 @@ done
 # The additional build context the build step passes. Derived from the
 # workflow rather than hardcoded, so moving ./defaults fails here instead of
 # leaving a stale assertion quietly passing.
-project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1)"
+# `|| true`: without it, pipefail aborts the suite here with no FAIL line and no
+# Results line — red for CI but silent for a reader, and the assert below is
+# dead code on the one path it was written for.
+project_ctx="$(grep -oP -- '--build-context project=\./\K\S+' "$workflow" | head -n1 || true)"
 assert_nonempty "the build step names a project build context" "$project_ctx"
 if covered "${project_ctx}/x"; then
     _pass "${project_ctx}/** covers the --from=project build context"

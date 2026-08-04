@@ -27,6 +27,26 @@ workflow_event_paths() {
     ' "$workflow"
 }
 
+# workflow_build_dockerfile <workflow>
+#
+# The Dockerfile the workflow's `docker build` actually builds: the argument to
+# `-f`/`--file`, or `Dockerfile` when the build relies on the context default.
+# Emitted relative to the repo root, as `paths:` entries are.
+#
+# Derived, not hardcoded. A guard that parses one Dockerfile while the workflow
+# builds another checks nothing: pointing docker-build.yml at a new
+# `Dockerfile.classic` left the guard green at 12/12 while every real COPY
+# input went unlisted. Continuations are joined first so `-f` on a wrapped line
+# is still found.
+workflow_build_dockerfile() {
+    local workflow="$1" line f
+    line="$(sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' "$workflow" \
+        | grep -m1 -E '(^|[[:space:]])docker[[:space:]]+(buildx[[:space:]]+)?build([[:space:]]|$)' || true)"
+    [ -n "$line" ] || return 1
+    f="$(grep -oP '(?:^|\s)(?:-f|--file)[=[:space:]]\s*\K\S+' <<<"$line" | head -n1 || true)"
+    printf '%s\n' "${f:-Dockerfile}"
+}
+
 # _workflow_matches_entry <entry> <needle>
 #
 # One entry against one path: literal equality, or a `dir/**` prefix match.
@@ -41,24 +61,27 @@ _workflow_matches_entry() {
 
 # workflow_path_covered <needle> <entry>...
 #
-# Covered = listed literally, or matched by a `dir/**` entry, and not negated
-# by an exclusion. Exclusions get the SAME literal-or-prefix treatment as
-# inclusions: a future `- '!lib/**'` must not leave `lib/git.sh` reported as
-# covered via a `dir/**`-style branch while the trigger really excludes it —
-# that would be a green test over a broken workflow.
+# Covered = listed literally, or matched by a `dir/**` entry, with exclusions
+# applied in LIST ORDER. GitHub's matcher is last-match-wins — "a matching
+# positive pattern after a negative match will include the path again" — so a
+# single ordered pass is the only faithful model. Exclusions get the SAME
+# literal-or-prefix treatment as inclusions: a future `- '!lib/**'` must not
+# leave `lib/git.sh` reported as covered while the trigger really excludes it.
+#
+# This used to scan all exclusions first and let any of them win regardless of
+# position. That is order-INDEPENDENT and wrong in the direction that fails
+# open: reordering nix-base.yml so `- '!nix/base/compose.nix-base.yml'`
+# precedes `- nix/base/**` makes the pin file trigger the workflow again — the
+# hour-long two-arch republish the invariant exists to prevent — while the
+# guard still reported it excluded.
 workflow_path_covered() {
-    local needle="$1" entry
+    local needle="$1" entry covered=1
     shift
     for entry in "$@"; do
         case "$entry" in
-            '!'*) _workflow_matches_entry "${entry#!}" "$needle" && return 1 ;;
+            '!'*) _workflow_matches_entry "${entry#!}" "$needle" && covered=1 ;;
+            *) _workflow_matches_entry "$entry" "$needle" && covered=0 ;;
         esac
     done
-    for entry in "$@"; do
-        case "$entry" in
-            '!'*) ;;
-            *) _workflow_matches_entry "$entry" "$needle" && return 0 ;;
-        esac
-    done
-    return 1
+    return "$covered"
 }
