@@ -390,8 +390,16 @@ setup_claude() {
     local container_project_key="$DEV_CONTAINER_PROJECT_KEY"
 
     # Named volume root comes up root-owned; fix so vscode can write. Top-level
-    # is enough — setup-claude creates the contents as vscode. (There is no
-    # longer a credentials/ bind mount to avoid recursing into.)
+    # only, deliberately: setup-claude creates the contents as vscode, and a
+    # recursive chown here would cross into the transcript bind mounted at
+    # .claude/projects/<key> and rewrite ownership on the host side.
+    #
+    # It is NOT sufficient on its own. `.claude/projects` is created by the
+    # DAEMON as root to host that bind, so nothing below this line repairs it —
+    # that is dev_chown_mount_points' ancestor walk (lib/volume-perms.sh),
+    # which runs in setup() earlier in this same locked region (#106). setup()
+    # is cold-start only, so a container already running when that fix landed
+    # keeps the root-owned dir until its next recreate.
     dc exec -u root app chown vscode:vscode /home/vscode/.claude
 
     dc exec \
