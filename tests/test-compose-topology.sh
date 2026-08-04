@@ -49,7 +49,19 @@
 #      so it is not evidence of a gap. It is here because it proves the coverage
 #      assertion is two-directional — a REMOVED mount is the #58 case, and a
 #      containment check that only noticed additions would miss it.
-#   (mutation runs 2026-08-04)
+#   4. committing `~/.claude/evil:/home/vscode/.claude/evil` to
+#      projects/devcontainer/host-mounts.txt — a bind under the volume #115's
+#      `chown -R` is rooted at, arriving through the OTHER committed channel —
+#      1 red (item 6). Was GREEN against this suite's first revision: the
+#      guard read compose files only, so the whole point of it was evadable by
+#      putting the mount one file over in the same overlay directory.
+#      (Found in review, not by me.)
+#   5. dropping `:ro` from the `${HOME}/.claude:/home/vscode/.claude-host`
+#      mount, making the host credential store shared-WRITABLE from every
+#      container — 1 red (item 2's read-only half). Also GREEN against the
+#      first revision, because the reader discarded the options field, so no
+#      assertion could have checked it. (Found in review.)
+#   (mutation runs 2026-08-04; 4 and 5 added in review round 1)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -76,7 +88,18 @@ assert_contains "the reader classifies a host-path short-form mount as a bind" \
 # conditional. Without it the reader is an unverified second implementation of
 # Compose's short-form rules (is `claude-home:/x` a volume or a relative bind?),
 # which is the restatement shape this whole suite exists to prevent.
-if docker compose version >/dev/null 2>&1; then
+# Two distinct outcomes, deliberately not collapsed into one skip:
+#   no docker CLI at all      -> SKIP (the hermetic half still ran)
+#   docker present, no output -> FAIL (loud: an old CLI without `--format`,
+#                                which arrived ~compose v2.24, or a broken
+#                                render — either way the cross-check silently
+#                                not running is the thing to avoid)
+# Gating on `docker compose version` instead left an old CLI feeding empty
+# output to json.load, and `set -e` killed the suite mid-run before the
+# assertion written for that case could be reached. The render is captured
+# ONCE, with the same env stubs the reader uses, so the probe cannot pass while
+# the real invocation fails on a missing `${VAR:?}`.
+if command -v docker >/dev/null 2>&1; then
     real="$(
         DEV_IMAGE_REF=x:1 DEV_CONTAINER_WORKSPACE=/workspaces/src \
         DEV_WORKSPACE=/host/ws DEV_MAIN_GIT=/host/tree/.git DEV_MAIN_TREE=/host/tree \
@@ -86,7 +109,15 @@ if docker compose version >/dev/null 2>&1; then
         docker compose -f "$COMPOSE" config --format=json 2>/dev/null |
             python3 -c '
 import json, sys
-for v in json.load(sys.stdin)["services"]["app"]["volumes"]:
+# Tolerant on purpose: an old CLI (no --format) or a failed render feeds empty
+# or non-JSON here. Raising would abort the whole suite through set -e on this
+# assignment; returning nothing lets the anti-vacuity assertion below report a
+# normal FAIL with a message a reader can act on.
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for v in doc.get("services", {}).get("app", {}).get("volumes") or []:
     print("%s\t%s" % (v.get("type"), v.get("target")))
 ' | sort
     )"
@@ -104,6 +135,17 @@ fi
 # re-introduces the shared inode the ADR exists to eliminate.
 creds="$(compose_mounts "$COMPOSE" | awk -F'\t' '$1 == "bind" && ($2 ~ /credential/ || $3 ~ /credential/)')"
 assert_eq "ADR-0001: nothing bind-mounts the host credential store" "" "$creds"
+
+# The ADR's OTHER half, docs/adr/0001-...:46 — "the store is still reachable
+# READ-ONLY via the existing .claude-host mount (host ~/.claude, which includes
+# credentials/)". The host credential store IS mounted; `:ro` is the entire
+# reason that is acceptable. Dropping it makes it shared-writable from every
+# container — a regression squarely inside the ADR — and nothing pinned it,
+# because the reader used to discard the options field.
+for ro_target in "$CLAUDE_HOME-host" "$CLAUDE_HOME-host.json"; do
+    assert_eq "ADR-0001: $ro_target is mounted read-only" "ro" \
+        "$(compose_mounts "$COMPOSE" | awk -F'\t' -v t="$ro_target" '$2 == t { print $4 }')"
+done
 
 # ---- 3. coverage: the ~/.claude mounts are exactly this declared set ----
 # Two-directional on purpose: an ADDED mount is the mutation case, a REMOVED one
@@ -158,5 +200,32 @@ for ov in "$DEV_BASE"/projects/*/compose.override.yml; do
     [ -n "$hit" ] && overlay_hits="$overlay_hits$ov: $hit"$'\n'
 done
 assert_eq "no project overlay mounts anything under ~/.claude" "" "$overlay_hits"
+
+# ---- 6. the OTHER committed bind channel ----
+# lib/host-mounts.sh turns projects/<name>/host-mounts.txt into a compose
+# override that lands in services.app.volumes. Assertion 5's comment named the
+# blind spot for compose.override.yml and left the identical one in the same
+# directory: a committed `~/.claude/x:/home/vscode/.claude/x` here is a bind
+# under the volume #115's `chown -R` is rooted at, and every assertion above
+# reads compose files only. The files are empty today, which is precisely when
+# a guard is cheap to add.
+hm_files=("$DEV_BASE"/defaults/host-mounts.txt "$DEV_BASE"/projects/*/host-mounts.txt)
+hm_all="$(host_mount_mounts "${hm_files[@]}")"
+hm_hits="$(printf '%s\n' "$hm_all" | awk -F'\t' -v p="$CLAUDE_HOME" \
+    '$2 == p || index($2, p "/") == 1')"
+assert_eq "no committed host-mounts.txt declares a mount under ~/.claude" \
+    "" "$(printf '%s' "$hm_hits" | sed '/^$/d')"
+
+# Anti-vacuity for the parser itself: a guard over a channel it cannot read is
+# green for the wrong reason. Every committed file today is comment-only, so
+# there is no live line to anchor on — parse a synthetic one instead.
+# shellcheck disable=SC2088  # the ~ is literal PARSER INPUT, not a path this
+# shell should expand: host-mounts.txt lines carry it verbatim and
+# lib/host-mounts.sh:25 is what expands it. The assertion pins that expansion.
+hm_probe="$(printf '%s\n' "# a comment" "" \
+    "~/.claude/evil:$CLAUDE_HOME/evil:ro" |
+    host_mount_mounts /dev/stdin)"
+assert_eq "the host-mounts parser reads a line, drops comments, expands ~" \
+    "bind	$CLAUDE_HOME/evil	/host/home/.claude/evil	ro" "$hm_probe"
 
 finish

@@ -20,6 +20,11 @@
 #
 # `dc config` is deliberately NOT used: it needs a daemon, and tests/run-all is
 # hermetic. Compose interpolation is instead stubbed — see compose_mounts.
+#
+# Dependency note: this is the first suite to need pyyaml, which is NOT stdlib
+# (tests/lib/workflow-paths.sh avoided it for that reason). The failure mode is
+# loud and fail-closed — ModuleNotFoundError aborts the suite rather than
+# quietly asserting nothing — and CI has it.
 
 # compose_mounts <file>... — emit one `<kind>\t<target>\t<source>` line per
 # mount of service `app`, across the given compose files in override order.
@@ -57,9 +62,12 @@ VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[-?][^}]*)?\}")
 def interp(s):
     return VAR.sub(lambda m: STUBS.get(m.group(1), "/stub/" + m.group(1).lower()), s)
 
-def emit(kind, target, source):
+def emit(kind, target, source, opts=""):
+    # Options are a FOURTH column, not discarded: ADR-0001 records the
+    # read-only-ness of the .claude-host mount as part of its decision, so a
+    # reader that drops `:ro` cannot enforce half the ADR it exists to enforce.
     if target:
-        print("%s\t%s\t%s" % (kind, interp(target), interp(source or "")))
+        print("%s\t%s\t%s\t%s" % (kind, interp(target), interp(source or ""), opts))
 
 for path in sys.argv[1:]:
     with open(path) as fh:
@@ -68,7 +76,8 @@ for path in sys.argv[1:]:
 
     for v in app.get("volumes") or []:
         if isinstance(v, dict):
-            emit(v.get("type") or "volume", v.get("target"), v.get("source"))
+            emit(v.get("type") or "volume", v.get("target"), v.get("source"),
+                 "ro" if v.get("read_only") else "")
             continue
         # Short syntax: source:target[:opts]. Interpolate BEFORE splitting —
         # `${DEV_WORKSPACE:?required}` contains a colon, so splitting first
@@ -78,10 +87,52 @@ for path in sys.argv[1:]:
             continue
         source, target = parts[0], parts[1]
         # No slash in the source => named volume, per Compose own rule.
-        emit("volume" if "/" not in source else "bind", target, source)
+        emit("volume" if "/" not in source else "bind", target, source,
+             ",".join(parts[2:]))
 
     for t in app.get("tmpfs") or []:
-        emit("tmpfs", t.split(":")[0], "")
+        # interp BEFORE split, same reason as the short-form volumes above.
+        emit("tmpfs", interp(t).split(":")[0], "")
+' "$@"
+}
+
+# host_mount_mounts <host-mounts.txt>... — emit the same `<kind>\t<target>\t
+# <source>\t<opts>` shape for the OTHER committed bind channel.
+#
+# `lib/host-mounts.sh` reads these list files and generates a compose override
+# that lands in services.app.volumes, in the same `host:container[:opts]` short
+# form — so a mount declared here is every bit as real as one in
+# docker-compose.yml, and was invisible to a reader that only parsed compose
+# files. A committed `~/.claude/x:/home/vscode/.claude/x` line is exactly the
+# #115 hazard class, and the whole suite stayed green with one present.
+#
+# Comment/blank handling mirrors read_list() in lib/list-file.sh: strip from
+# `#`, trim, drop empties. `host-mounts.local.txt` is deliberately NOT read —
+# it is gitignored per-developer state, not a repo fact.
+host_mount_mounts() {
+    python3 -c '
+import sys
+for path in sys.argv[1:]:
+    try:
+        lines = open(path).read().splitlines()
+    except FileNotFoundError:
+        continue
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        source = parts[0]
+        # lib/host-mounts.sh:25 expands a leading ~ to $HOME. Mirrored with the
+        # same /host/home stub the compose reader uses, so the source column
+        # means the same thing in both. Only the TARGET column is asserted on
+        # today, but a reader that models the format wrongly is a trap for the
+        # next assertion someone adds.
+        if source.startswith("~"):
+            source = "/host/home" + source[1:]
+        print("bind\t%s\t%s\t%s" % (parts[1], source, ",".join(parts[2:])))
 ' "$@"
 }
 
