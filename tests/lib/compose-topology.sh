@@ -57,10 +57,23 @@ STUBS = {
     "DEV_CONTAINER_WORKSPACE": "/workspaces/src",
     "DEV_CONTAINER_PROJECT_KEY": "-workspaces-src",
 }
-VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[-?][^}]*)?\}")
+VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:[-?][^}]*)?\}")
+
+def _expand(m):
+    name, mod = m.group(1), m.group(2) or ""
+    if name in STUBS:
+        return STUBS[name]
+    # `${VAR:-default}` with VAR unset expands to DEFAULT, which is what compose
+    # does — substituting a stub instead moves the path somewhere it never goes.
+    # That is not academic: `/home/vscode/.clau${X:-de}/two` really mounts under
+    # ~/.claude, and a stub expansion put it under /home/vscode/.clau/stub/x/,
+    # matching no prefix and evading the guard.
+    if mod.startswith(":-"):
+        return mod[2:]
+    return "/stub/" + name.lower()
 
 def interp(s):
-    return VAR.sub(lambda m: STUBS.get(m.group(1), "/stub/" + m.group(1).lower()), s)
+    return VAR.sub(_expand, s)
 
 def emit(kind, target, source, opts=""):
     # Options are a FOURTH column, not discarded: ADR-0001 records the
@@ -70,8 +83,16 @@ def emit(kind, target, source, opts=""):
         print("%s\t%s\t%s\t%s" % (kind, interp(target), interp(source or ""), opts))
 
 for path in sys.argv[1:]:
-    with open(path) as fh:
-        doc = yaml.safe_load(fh) or {}
+    # Name the file on a parse failure. Under `set -euo pipefail` a raised
+    # exception aborts the whole suite, and a bare traceback leaves the reader
+    # guessing which of eleven compose files is malformed. Third instance of
+    # "a failure here aborts with no diagnostic" in this file (the others:
+    # the docker render, and `git ls-files`).
+    try:
+        with open(path) as fh:
+            doc = yaml.safe_load(fh) or {}
+    except yaml.YAMLError as exc:
+        sys.exit("compose-topology: cannot parse %s: %s" % (path, exc))
     app = (doc.get("services") or {}).get("app") or {}
 
     for v in app.get("volumes") or []:
@@ -111,7 +132,29 @@ for path in sys.argv[1:]:
 # it is gitignored per-developer state, not a repo fact.
 host_mount_mounts() {
     python3 -c '
-import sys
+import re, sys
+
+# Same interpolation stub as compose_mounts, for the same reason: the generated
+# override is handed to compose with -f, so compose expands ${...} in it. A
+# line like `~/.claude/x:/home/vscode/.clau${X:-de}/x` really mounts under
+# ~/.claude, but splitting on ":" FIRST tears it at the colon inside ${X:-de}
+# and yields a target of `/home/vscode/.clau${X`, which matches no prefix and
+# sails past every assertion. compose_mounts documents this hazard and this
+# parser reintroduced it — caught in review.
+STUBS = {"HOME": "/host/home"}
+VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:[-?][^}]*)?\}")
+
+def _expand(m):
+    name, mod = m.group(1), m.group(2) or ""
+    if name in STUBS:
+        return STUBS[name]
+    if mod.startswith(":-"):   # compose expands an unset ${VAR:-d} to d
+        return mod[2:]
+    return "/stub/" + name.lower()
+
+def interp(s):
+    return VAR.sub(_expand, s)
+
 for path in sys.argv[1:]:
     try:
         lines = open(path).read().splitlines()
@@ -121,8 +164,13 @@ for path in sys.argv[1:]:
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
-        parts = line.split(":")
-        if len(parts) < 2:
+        parts = interp(line).split(":")
+        # A colon-free line is forwarded verbatim by
+        # generate_host_mounts_override, and compose reads `- /path` as an
+        # ANONYMOUS VOLUME mounted at that container path — so it is a mount
+        # under that target, not a line to skip.
+        if len(parts) == 1:
+            print("volume\t%s\t\t" % parts[0])
             continue
         source = parts[0]
         # lib/host-mounts.sh:25 expands a leading ~ to $HOME. Mirrored with the
@@ -134,6 +182,28 @@ for path in sys.argv[1:]:
             source = "/host/home" + source[1:]
         print("bind\t%s\t%s\t%s" % (parts[1], source, ",".join(parts[2:])))
 ' "$@"
+}
+
+# committed_compose_files — every compose file tracked in the repo, one per
+# line, absolute.
+#
+# DERIVED, not listed. A hand-maintained list of "the compose files to check"
+# has leaked a channel three times running: the first revision of this guard
+# read docker-compose.yml only; review found projects/*/host-mounts.txt; the
+# next review found defaults/compose.override.yml (a real overlay —
+# DEV_PROJECT_DIR falls back to defaults/) and nix/base/compose.nix-base.yml
+# (appended by dc() on the nix route). Each time the fix was to extend the
+# list, and each time the list leaked again.
+#
+# So there is no list. `git ls-files` decides, which means a compose file added
+# anywhere in the repo is scanned the day it lands, with nobody having to
+# remember. This is deliberately WIDER than the set dc() assembles for any one
+# run — templates/nix/ is a scaffold, never mounted — because over-scanning
+# costs an assertion and under-scanning costs the guard.
+committed_compose_files() {
+    git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" ls-files |
+        grep -E '(^|/)(docker-)?compose[^/]*\.ya?ml$' |
+        sed "s|^|$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/|"
 }
 
 # compose_targets_under <prefix> <file>... — emit `<kind>\t<target>` for every

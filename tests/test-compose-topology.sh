@@ -61,7 +61,30 @@
 #      container — 1 red (item 2's read-only half). Also GREEN against the
 #      first revision, because the reader discarded the options field, so no
 #      assertion could have checked it. (Found in review.)
-#   (mutation runs 2026-08-04; 4 and 5 added in review round 1)
+#   6. a `~/.claude` bind added to `defaults/compose.override.yml` — 1 red
+#      (item 5). Was GREEN through review round 1: the overlay check globbed
+#      `projects/*/compose.override.yml`, and `defaults/` is a real overlay
+#      (DEV_PROJECT_DIR falls back to it).
+#   7. the same bind added to `nix/base/compose.nix-base.yml`, which dc()
+#      appends on the nix route — 1 red (item 5). Also GREEN through round 1;
+#      no assertion read that file at all.
+#   8. a host-mounts line whose target hides a colon in a default —
+#      `~/.claude/two:/home/vscode/.clau${X:-de}/two`, which really mounts
+#      under ~/.claude — 1 red (item 6). Green until the interpolation model
+#      was fixed TWICE: first the parser split before interpolating at all,
+#      then it expanded `${X:-de}` to a stub path instead of to `de` as
+#      compose does, putting the target under /home/vscode/.clau/stub/x/ where
+#      it matched no prefix.
+#   9. a colon-free host-mounts line, `/home/vscode/.claude/backup`, which
+#      compose reads as an anonymous volume at that path — 1 red (item 6).
+#      Green while the parser skipped single-field lines.
+#
+# Mutation method note: measure in a FRESH copy per mutation. Copying this
+# worktree with `cp -a` carries a `.git` file pointing at another worktree's
+# gitdir, so `git checkout` does not restore between runs and mutations
+# accumulate — that produced three rounds of inflated red counts elsewhere in
+# this suite's sibling. `tests/mutation-coverage` (#124) does this correctly.
+#   (mutation runs 2026-08-04; 4-5 added in round 1, 6-9 in round 2)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -119,8 +142,14 @@ except Exception:
     sys.exit(0)
 for v in doc.get("services", {}).get("app", {}).get("volumes") or []:
     print("%s\t%s" % (v.get("type"), v.get("target")))
-' | sort
+' | sort || true
     )"
+    # `|| true` is load-bearing, not defensive noise: without it `pipefail`
+    # propagates a nonzero docker status out of this command substitution and
+    # `set -e` kills the SUITE at this assignment — before the assertion written
+    # for exactly that case can run. The previous revision's comment claimed to
+    # have fixed this; the tolerant JSON parse only covered exit-0-with-garbage,
+    # and the nonzero-exit path (an old CLI without `--format`) still aborted.
     ours="$(compose_mounts "$COMPOSE" | awk -F'\t' '$1 != "tmpfs" { print $1 "\t" $2 }' | sort)"
     assert_true "docker compose config produced a mount list to compare against" \
         test -n "$real"
@@ -193,13 +222,38 @@ assert_eq "the only bind nested under a volume is the transcript carve-out (#115
 # Overlays declare project caches; the claude region is the base file's business
 # and carries ADR-0001/ADR-0003 decisions. An overlay mount here would be
 # invisible to every assertion above, which reads only the base file.
+# DERIVED from `git ls-files`, not a glob of the directories someone thought of.
+# A hand-maintained file list leaked a channel three times: this assertion once
+# read projects/*/compose.override.yml only, and both defaults/compose.override.yml
+# (a real overlay — DEV_PROJECT_DIR falls back to defaults/) and
+# nix/base/compose.nix-base.yml (appended by dc() on the nix route) were live,
+# unread channels. A ~/.claude bind in either left the whole suite green.
+# `|| true` for the same reason as the docker render below: without it, a failing
+# `git ls-files` (no repo, no git binary) exits nonzero through this
+# substitution and `set -e` kills the suite AT THE ASSIGNMENT, before the
+# anti-vacuity assertion written for exactly that case can report it. An empty
+# derived set must be a clean FAIL naming the cause, not a silent abort.
+compose_set="$(committed_compose_files || true)"
+assert_true "the committed compose set was derived from git ls-files" \
+    test -n "$compose_set"
+# Anti-vacuity with teeth: name the members whose absence caused a real gap, so
+# a regex that silently stops matching them cannot pass as "nothing to scan".
+# grep -qxF, not assert_contains: a path is a prefix of longer paths in this
+# set. (Migrate to assert_line once #124 lands — it adds that helper.)
+for expected in docker-compose.yml defaults/compose.override.yml \
+    nix/base/compose.nix-base.yml projects/devcontainer/compose.override.yml; do
+    assert_true "the derived set includes $expected" \
+        grep -qxF "$DEV_BASE/$expected" <<<"$compose_set"
+done
+
 overlay_hits=""
-for ov in "$DEV_BASE"/projects/*/compose.override.yml; do
-    [ -f "$ov" ] || continue
+while IFS= read -r ov; do
+    [ -n "$ov" ] && [ "$ov" != "$COMPOSE" ] || continue
     hit="$(compose_targets_under "$CLAUDE_HOME" "$ov")"
     [ -n "$hit" ] && overlay_hits="$overlay_hits$ov: $hit"$'\n'
-done
-assert_eq "no project overlay mounts anything under ~/.claude" "" "$overlay_hits"
+done <<<"$compose_set"
+assert_eq "no compose file other than the base mounts anything under ~/.claude" \
+    "" "$overlay_hits"
 
 # ---- 6. the OTHER committed bind channel ----
 # lib/host-mounts.sh turns projects/<name>/host-mounts.txt into a compose
@@ -217,8 +271,9 @@ assert_eq "no committed host-mounts.txt declares a mount under ~/.claude" \
     "" "$(printf '%s' "$hm_hits" | sed '/^$/d')"
 
 # Anti-vacuity for the parser itself: a guard over a channel it cannot read is
-# green for the wrong reason. Every committed file today is comment-only, so
-# there is no live line to anchor on — parse a synthetic one instead.
+# green for the wrong reason. Most committed files are comment-only (one live
+# line exists, projects/xorq-desktop's X11 socket, whose target is not under
+# ~/.claude), so a synthetic line is what pins the parsing rules.
 # shellcheck disable=SC2088  # the ~ is literal PARSER INPUT, not a path this
 # shell should expand: host-mounts.txt lines carry it verbatim and
 # lib/host-mounts.sh:25 is what expands it. The assertion pins that expansion.

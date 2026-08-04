@@ -238,15 +238,25 @@ taxonomy and reads as `test:`.
   existed, because the suite could only grep `docker-compose.yml` as text:
   existence was assertable, nesting, absence and mount options were not (#116).
   A guard on the graph is the only one that fails from the side that CHANGES,
-  i.e. in the PR editing the mount (test: `tests/test-compose-topology.sh`).
-- The graph has TWO committed channels and a guard that reads one is evadable
-  by using the other: `docker-compose.yml` plus each
-  `projects/<name>/host-mounts.txt`, which `lib/host-mounts.sh` turns into a
-  generated override landing in the same `services.app.volumes`. The first
-  revision of the topology guard read compose files only, so a bind under
-  `~/.claude` committed to `host-mounts.txt` left the whole suite green
-  (`host-mounts.local.txt` is gitignored per-developer state and deliberately
-  out of scope) (test: `tests/test-compose-topology.sh`).
+  i.e. in the PR editing the mount. Scope, since the rule above is stated
+  unqualified and the guard is not: the nesting assertion reads the BASE file's
+  volumes, while `chown_mount_points` recurses into every named volume in the
+  MERGED config, so a bind nested under an overlay volume (`/nix`, a venv, a
+  cache) is the same #115 hazard and is unguarded — only the `~/.claude` region
+  is covered end to end (`test: tests/test-compose-topology.sh`;
+  `unguarded: binds nested under overlay-declared volumes, see #115`).
+- The graph has SEVERAL committed channels and a guard that reads a subset is
+  evadable through the rest, so the compose-file list is DERIVED
+  (`git ls-files` for `*compose*.y*ml`) rather than written down — a hand-kept
+  list leaked a channel three times running: compose-only in rev 1, then
+  `projects/<name>/host-mounts.txt` (which `lib/host-mounts.sh` turns into a
+  generated override landing in the same `services.app.volumes`), then
+  `defaults/compose.override.yml` (a real overlay — `DEV_PROJECT_DIR` falls
+  back to it) and `nix/base/compose.nix-base.yml` (appended by `dc()` on the
+  nix route). Each fix extended the list; each extension leaked again. Only the
+  list files are still enumerated, from a glob (`host-mounts.local.txt` is
+  gitignored per-developer state and deliberately out of scope)
+  (test: `tests/test-compose-topology.sh`).
 - The topology reader re-implements Compose's short-form rules (a source with
   no `/` is a named volume), so it is itself a restatement and is cross-checked
   against real `docker compose config` output whenever a docker CLI is present
