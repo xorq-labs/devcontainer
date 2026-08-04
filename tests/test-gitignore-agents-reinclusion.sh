@@ -6,6 +6,12 @@
 # warning). The live file is untracked, so the probe is the guard for a fact
 # no hermetic test over committed files can see; this suite guards the probe.
 #
+# Verified (ADR-0005 §2), audit round: adding `stages: [manual]` to the hook in
+# .pre-commit-config.yaml left this suite at 14 passed / 0 failed while a commit
+# with a broken live .gitignore went through clean (rc 0; rc 1 with the hook
+# restored) — the ADR-0003 hard gate off, silently. Now FAILs "the hook runs at
+# the commit stage" (15 passed, 1 failed) (mutation run 2026-08-04).
+#
 # Verified (ADR-0005 §2), review round: reverting the probe to its dotfile name
 # and its `dir="${1:-.}"` handling, and un-gating the setup-worktree warning,
 # turns three assertions red — "a broken repo is still red when probed from a
@@ -85,6 +91,25 @@ assert_true "the pre-commit local hook runs the probe" \
     grep -q 'entry: dev/check-gitignore-agents' "$DEV_BASE/.pre-commit-config.yaml"
 assert_true "the hook runs even when no files match" \
     bash -c "grep -A5 'id: gitignore-agents-reinclusion' '$DEV_BASE/.pre-commit-config.yaml' | grep -q 'always_run: true'"
+# ...and runs at the COMMIT stage. Greps for `entry:` and `always_run:` say
+# nothing about when the hook fires: adding `stages: [manual]` left this suite
+# at 14/0 while a commit with a broken live .gitignore went through clean (rc 0
+# vs rc 1 with the hook restored). The gate #91/#94 exists to provide was off,
+# silently. Checked hermetically — pre-commit is not installed in the Bash-tests
+# CI job, and a skip there is the same "verification never ran" shape.
+hook_block="$(awk '/id: gitignore-agents-reinclusion/{f=1} f&&/^      - id: /&&!/gitignore-agents-reinclusion/{exit} f' \
+    "$DEV_BASE/.pre-commit-config.yaml")"
+assert_nonempty "the hook block was found in .pre-commit-config.yaml" "$hook_block"
+hook_stages="$(grep -oP '^\s*stages:\s*\K.*' <<<"$hook_block" || true)"
+if [ -z "$hook_stages" ]; then
+    _pass "the hook is not restricted off the commit stage (no stages: key)"
+elif grep -qE '(^|[^a-z-])(pre-commit|commit)([^a-z-]|$)' <<<"$hook_stages"; then
+    _pass "the hook's stages include the commit stage: $hook_stages"
+else
+    _fail "the hook runs at the commit stage" \
+        "stages: $hook_stages excludes pre-commit, so the ADR-0003 gate never" \
+        "fires on a real commit — silently, with this suite green."
+fi
 assert_true "setup-worktree warns through the same probe" \
     grep -q 'check-gitignore-agents' "$DEV_BASE/dev/setup-worktree"
 # ...but only where ADR-0003's convention is in force. setup-worktree runs on

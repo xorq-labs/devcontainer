@@ -21,6 +21,16 @@
 #   5. `chown -R` is post-order, the invariant the guard rests on: an interrupted
 #      run leaves the mount point unchowned, so it can't be read as completed
 #   6. the dev/devcontainer driver line still matches the lib's function
+# Verified (ADR-0005 §2), audit round — two mutations, BOTH 21 passed / 0 failed
+# before these assertions existed (and `tests/run-all` exit 0):
+#   - deleting `chown_named_volume_targets` from setup() (dev/devcontainer:835)
+#     => FAIL "setup() calls chown_named_volume_targets on every cold start".
+#     Every named-volume mount point stays root-owned on every cold start.
+#   - dropping the argv0 operand from the injection line (dev/devcontainer:828)
+#     => FAIL "the injection passes an argv0 before the mount points". The first
+#     mount point becomes $0 and is silently never chowned.
+#   (mutation runs 2026-08-04)
+#
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -160,6 +170,26 @@ driver='dev_chown_volume_targets vscode vscode /home/vscode "$@"'
 assert_true "dev/devcontainer drives the lib's function with (vscode, vscode, /home/vscode, \$@)" \
     grep -qF "$driver" "$DEV_BASE/dev/devcontainer"
 
+# ---- 6a. the wiring: setup() actually calls it, with the argv0 operand ----
+# Pinning the driver line proves the lib is driven correctly IF it runs. It does
+# not prove production reaches it. Both of these were mutable-green: deleting
+# the call from setup(), and dropping the argv0 operand, each left this suite at
+# 21/0 and `tests/run-all` at exit 0 while every named volume stayed root-owned.
+# Same one-directional shape as #95 — the suite composed its own invocation
+# instead of reading the executed one.
+setup_body="$(awk '/^setup\(\) \{/,/^\}/' "$DEV_BASE/dev/devcontainer")"
+assert_nonempty "setup() body extracted from dev/devcontainer" "$setup_body"
+assert_true "setup() calls chown_named_volume_targets on every cold start" \
+    grep -q 'chown_named_volume_targets' <<<"$setup_body"
+
+# The executed injection line, read rather than restated: `sh -c <script> <argv0>
+# <args...>` puts the first operand in $0, so without it the first mount point
+# is swallowed and silently never chowned.
+exec_line="$(grep -oP 'dc exec .*sh -c "\$script".*' "$DEV_BASE/dev/devcontainer" | head -1 || true)"
+assert_nonempty "the injection line was found in dev/devcontainer" "$exec_line"
+argv0="$(grep -oP 'sh -c "\$script"\s+\K[^"\s$]+' <<<"$exec_line" || true)"
+assert_nonempty "the injection passes an argv0 before the mount points" "$argv0"
+
 # The injected script must be valid POSIX sh and must pick the mount points out
 # of "$@" — the `sh -c <script> <argv0> <args...>` convention the caller relies
 # on. Composed here the same way chown_named_volume_targets composes it.
@@ -168,7 +198,7 @@ $driver"
 assert_true "injected script parses as POSIX sh" sh -n -c "$script"
 
 : >"$CHOWN_LOG"
-sh -c "$script" volume-perms "/home/vscode/.cache/uv"
+sh -c "$script" "$argv0" "/home/vscode/.cache/uv"
 # assert_contains, not assert_eq: the guard probes the REAL /home/vscode/.cache/uv,
 # so on a machine where that path exists with a non-vscode owner a chown -R line
 # is also (correctly) logged. Only the unconditional ancestor chown is
