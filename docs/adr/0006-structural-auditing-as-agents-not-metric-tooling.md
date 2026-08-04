@@ -97,7 +97,7 @@ re-litigated from scratch each run.
 - The first audit (2026-08-02, repo-wide) predates this ADR; its one shape is
   disposed as #92 and its report ships as the first entry in `docs/audits/`
   so the baseline starts now, not at the second audit. *(Amended 2026-08-04:
-  that report and its sibling are kept; see the amendment.)*
+  the reports already committed there are kept; see the amendment.)*
 - The accepted-gaps list is the contract for future "should we adopt
   CodeScene/code-maat?" discussions: reopen by amending this ADR, not ad hoc.
 
@@ -129,8 +129,8 @@ Why the reversal:
   reviewable document per run prices the audit above what an average one
   returns, and the failure mode is not a missing file — it is a skipped
   audit.
-- **The baseline it bought was thinner than it looked.** Of the two reports
-  filed, the part that got reused was the *commands* under §Measurements, not
+- **The baseline it bought was thinner than it looked.** Of the reports filed
+  so far, the part that got reused was the *commands* under §Measurements, not
   the numbers they produced; the commands are already in the agent definition
   and reproduce without a prior report.
 
@@ -151,10 +151,11 @@ ADR-0005's `unguarded:` form:
 > every one. Revisit if two consecutive audits are seen re-filing the same
 > dropped candidate, or if a measurement trend is wanted for its own sake.
 
-**The existing reports stay.** `docs/audits/2026-08-02-repo-wide.md` and
-`docs/audits/2026-08-02-adr-0005-acceptance.md` are kept as historical record,
-and `docs/audits/` is kept with them: dropping the requirement is not a reason
-to destroy what it produced. The auditor still reads the newest report there
+**The existing reports stay.** Whatever is already in `docs/audits/` is kept as
+historical record, and the directory with it: dropping the requirement is not a
+reason to destroy what it produced. (Deliberately not enumerated — a list of
+filenames here would be a second copy of a directory listing, going stale on
+the next report committed under the now-optional rule.) The auditor still reads the newest report there
 when one exists — the directory is an optional baseline now, not a guaranteed
 one, and the agent definition says so.
 
