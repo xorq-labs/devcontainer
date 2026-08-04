@@ -13,8 +13,8 @@ instance is an anecdote and belongs in a normal review.
 ## Scope
 
 Repo-wide by default; the invoking prompt may narrow it to a subsystem, a time
-window, or a set of issues. This is a deliberate, occasional audit — expect to
-read a lot and report little.
+window, a set of issues, or a set of merged PRs. This is a deliberate,
+occasional audit — expect to read a lot and report little.
 
 Bound your own cost: go breadth-first — cheap greps and `git log --oneline`
 across many files — and only read a file in full once something points at it.
@@ -39,11 +39,14 @@ Two passes, then a synthesis step. Both passes matter: the cross-section says
 what is true now, the history says what keeps becoming true again.
 
 **1. Cross-section of the current tree.**
-- Invariants vs guards: which invariants cite a real check, which say `(—)` or
-  gesture at prose. If `docs/adr/` records an annotation vocabulary for guard
-  KINDS, hold invariants to it and use its terms; if it records none, describe
-  the kind of guard in your own words rather than inventing a scheme. Either
-  way, an invariant that cannot answer "what would catch this?" is a finding.
+- Invariants vs guards: which invariants cite a real check, which record an
+  accepted risk with its reason, and which merely gesture at prose. If
+  `docs/adr/` records an annotation vocabulary for guard KINDS, hold invariants
+  to it and use its terms — read the vocabulary from the ledger's own header
+  rather than assuming the markers you remember; a legacy citation left untyped
+  is itself a finding. If it records none, describe the kind of guard in your
+  own words rather than inventing a scheme. Either way, an invariant that
+  cannot answer "what would catch this?" is a finding.
 - Rules asserted in comments outside `tests/` (`must`, `never`, `in sync`,
   `lockstep`, `mirror`). Keep only those asserting a CROSS-FILE fact that can
   drift; most are local prose and are not findings.
@@ -52,13 +55,25 @@ what is true now, the history says what keeps becoming true again.
   cannot fail. Where cheap, prove it by mutating the tree in a scratch copy and
   showing the guard stays green.
 
-**2. History.** Start from what the repo already records — open issues, `(—)`
-invariants, ADRs — and mine history only for what that record does NOT hold.
-Re-deriving the issue tracker is this pass's failure mode: a shape the record
-already names is a drop, so filter against the record up front rather than
-after the dig.
+**2. History.** Start from what the repo already records — open issues,
+accepted-risk invariants, ADRs — and mine history only for what that record
+does NOT hold. Re-deriving the issue tracker is this pass's failure mode: a
+shape the record already names is a drop, so filter against the record up front
+rather than after the dig.
 - `git log` for files that accumulate repeated `fix:` commits, and for reverts
   or re-fixes of the same behaviour.
+- The commit sequence INSIDE merged PRs, which the log above cannot show you
+  where main is squash-merged (check: one commit per PR, `(#N)`-suffixed). The
+  squash is what hides the evidence — three attempts at one hunk land as a
+  single clean commit. Recover it with
+  `gh pr view <n> --json commits --jq '.commits[] | "\(.oid[0:8]) \(.messageHeadline)"'`,
+  which still returns the pre-squash sequence after merge. Look for fix-the-fix
+  chains on the same lines, a fix whose own follow-up narrows or reverses it,
+  and near-misses that never reached main. Two fixes to one hunk inside a
+  branch say the first was wrong, and WHY it was wrong is the structural
+  question; from main it is invisible. Cost control: this is one API call per
+  PR, so scope it to the PRs that the other probes already implicated, not to
+  every PR in the window.
 - Invariants and tests added only AFTER an incident — correlate `CLAUDE.md` and
   `tests/` additions with the issues/PRs that prompted them. A guard that
   always arrives late points at a stage that has no guard at all.
