@@ -15,6 +15,17 @@
 # suite does for config_files) with docker/dc stubbed. No real docker: `docker
 # image inspect` reads a marker file, `dc build` simulates a slow build. flock
 # is real — the concurrency test genuinely races two processes on one lock.
+# Verified (ADR-0005 §2 pair), second review round: the pairing walk compared
+# against the previous non-blank line only, so `ensure_image && dc_up` and
+# `ensure_image; dc_up` — genuinely paired, and plausible refactors — were
+# FALSE FAILs at 17/1. Admitted explicitly. Detection is unchanged: deleting
+# either call site is 17/1, commenting both out is 16/2, and the form-only
+# signature reformat still holds at 18 (mutation runs 2026-08-04).
+#
+# Known and accepted, per tests/lib/shellsrc.sh's stated limits: dead code
+# satisfies the pairing (`if false; then ensure_image; fi` above a dc_up stays
+# green). A textual guard cannot do reachability; see issue #123.
+#
 # Verified (ADR-0005 §2, review round): presence-only was not enough. DELETING
 # either ensure_image call site — the cold-start one or the recreate arm's —
 # left the suite at 16/0, because assert_contains only needs one. Losing the
@@ -24,7 +35,9 @@
 # ensure_image turns both deletions red (17/1 each), and the form-only
 # reformat still holds at 18 (mutation runs 2026-08-04).
 #
-# Verified (ADR-0005 §2, amended: a mutation PAIR):
+# Verified (ADR-0005 §2, amended: a mutation PAIR) — PRIOR ROUND, counts as
+# measured on the pre-pairing tree; the block above supersedes them (the same
+# mutations now give 16/2 and 18/0, because the pairing assertions were added):
 #   SEMANTIC, in a form not written here — comment out BOTH `ensure_image` call
 #     sites in ensure_up() (there are two, and disabling one leaves the other
 #     genuinely calling it). On main's version of this suite that is 14 passed /
@@ -169,6 +182,9 @@ assert_contains "ensure_up makes the image present via ensure_image" "ensure_ima
 _paired=0; _unpaired=0; _prev=""
 while IFS= read -r _line; do
     case "$_line" in
+        # Both on one line (`ensure_image && dc_up`, `ensure_image; dc_up`) is a
+        # plausible refactor and genuinely paired; the _prev walk cannot see it.
+        *ensure_image*dc_up*) _paired=$((_paired + 1)) ;;
         *dc_up*)
             case "$_prev" in
                 *ensure_image*) _paired=$((_paired + 1)) ;;
