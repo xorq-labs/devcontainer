@@ -22,13 +22,19 @@
 # in those same compose files (cache/config mounts) are coupled to the image's
 # container user in the Dockerfile, a different fact with a different owner.
 #
-# Verified (ADR-0005 §2), three mutations, each red on the named assertion:
+# Verified (ADR-0005 §2), five mutations, each red on the named assertion:
 #   - templates/nix/compose.override.yml EXTRA_PATH -> /home/nixuser/... =>
 #     FAIL "templates/nix/compose.override.yml: /home/nixuser/.nix-profile/bin"
 #     (expected /home/vscode/.nix-profile/bin);
 #   - the same edit in nix/base/README.md => FAIL "nix/base/README.md: ...";
 #   - renaming NIX_USER in lib/nix-seed.sh => FAIL "NIX_USER default parsed",
-#     and the suite stops instead of comparing against an empty expectation.
+#     and the suite stops instead of comparing against an empty expectation;
+#   - a NEW overlay projects/zz-probe/compose.override.yml carrying a stale
+#     user => FAIL naming that file. This is the one that proves discovery
+#     beats listing, so it belongs here and not only in the PR body;
+#   - a stale .devcontainer/compose.override.yml (the highest-precedence
+#     overlay) => FAIL naming it. Before this suite stopped excluding that
+#     directory the same fixture passed green (mutation runs 2026-08-04).
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -51,10 +57,21 @@ expected="/home/$nix_user/.nix-profile/bin"
 
 # Discover the compose files carrying the literal instead of listing them: a new
 # overlay (or a template copy) with the wrong user must fail here on its own.
+#
+# `.devcontainer/` is deliberately NOT excluded. resolve_project_dir() in
+# lib/git.sh ranks it ABOVE projects/<name>, and `devcontainer init --local
+# --nix` writes exactly that file, so a stale copy there wins overlay
+# resolution — the one place a stale literal does the most damage. Excluding it
+# let a planted stale .devcontainer/compose.override.yml pass green.
+#
+# Scope boundary: discovery is *.yml/*.yaml plus the one README below. A copy
+# of the literal in a shell script or a second doc is NOT in the population.
+# None exists today (the only non-yml .nix-profile uses are $HOME-derived), but
+# a future one would escape silently.
 mapfile -t compose_files < <(
     grep -rlE '\.nix-profile' \
         --include='*.yml' --include='*.yaml' \
-        --exclude-dir='.git' --exclude-dir='.claude' --exclude-dir='.devcontainer' \
+        --exclude-dir='.git' --exclude-dir='.claude' \
         "$DEV_BASE" | sort
 )
 assert_true "compose files carrying .nix-profile discovered" \
@@ -88,8 +105,7 @@ if [ -f "$readme" ]; then
         assert_eq "nix/base/README.md: $p" "/home/$nix_user/.nix-profile" "$p"
     done
 else
-    echo "  FAIL: $readme not found"
-    FAIL=$((FAIL + 1))
+    _fail "nix/base/README.md: .nix-profile path documented" "$readme not found"
 fi
 
 echo ""
