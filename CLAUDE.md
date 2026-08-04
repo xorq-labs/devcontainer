@@ -144,8 +144,10 @@ taxonomy and reads as `test:`.
   `Env HOME` — guarding only the overlay copies left that upstream half
   silent, so renaming the container user kept every downstream assertion green
   while the seed symlinked a profile into a home nobody owns
-  (`test: tests/test-nix-user-sync.sh`, both halves derived from each route's
-  own `HOME` declaration).
+  (`test: tests/test-nix-user-sync.sh` — the overlay copies derive from
+  `NIX_USER`; the container-user half requires each route's `HOME` declaration
+  to exist and checks every committed `home/<user>` literal in both Dockerfiles
+  and the flake, so a partial rename fails too).
 - Publishing the Nix base does not deliver it: consumers build on the
   `BASE_IMAGE` digest in `nix/base/compose.nix-base.yml`, so a publish without
   a repin reaches nobody. The `pin` job in `.github/workflows/nix-base.yml`

@@ -22,6 +22,20 @@
 # in those same compose files (cache/config mounts) are coupled to the image's
 # container user in the Dockerfile, a different fact with a different owner.
 #
+# Verified (ADR-0005 §2), review round — four more, ALL green on the first cut
+# of this upstream block:
+#   - the alias guard reformatted so the grep misses it (single-quoted RHS, or
+#     operands swapped) => FAIL "HOST_USER alias guard found". The loop had no
+#     non-empty assertion, so two assertions evaporated silently — the #86
+#     fail-open shape, reintroduced here two commits after #102 fixed it;
+#   - a partial rename inside nix/base/flake.nix alone (its `mkdir -p
+#     home/vscode/...`, `chmod 700`, `chown -R` lines are RELATIVE paths that
+#     an absolute /home/<user> pattern misses) => FAIL "flake.nix: home/devuser";
+#   - deleting `ENV HOME=/home/vscode` from the root Dockerfile entirely =>
+#     FAIL "Dockerfile declares ENV HOME=/home/<user>". Globbing every
+#     /home/<user> literal does not require the declaration to exist.
+#   (mutation runs 2026-08-04)
+#
 # Verified (ADR-0005 §2), upstream half — three mutations, ALL green on the
 # suite before it existed (11 passed, 0 failed each):
 #   - renaming the container user throughout both Dockerfiles
@@ -135,23 +149,40 @@ echo "--- NIX_USER matches the container user the image actually creates ---"
 # plus every other literal /home/<user> path in either Dockerfile, so a PARTIAL
 # rename is caught too. Paths interpolating a variable (`/home/$HOST_USER`, the
 # host-user alias symlink) are legitimately a different value and excluded.
+# Both absolute (/home/<user>) and repo-relative (home/<user>, as the flake's
+# image-build steps write) spellings. `+` needs at least one char from the
+# class and `$` is outside it, so `/home/$HOST_USER` — the host-user alias,
+# legitimately a different value — yields no match and is excluded.
+#
+# The population is the WHOLE file, comments included. That is deliberate:
+# Dockerfile.nix-default's comment about what the base ships is real coverage.
+# The cost is that a legitimate non-container path in a comment (say a note
+# mentioning /home/node) would FAIL here — if you hit that, exclude it
+# explicitly rather than narrowing the pattern.
 user_paths_in() {
-    grep -oE '/home/[A-Za-z0-9._-]+' "$1" | sed 's|^/home/||' | sort -u
+    grep -oE 'home/[A-Za-z0-9._-]+' "$1" | sed 's|^home/||' | sort -u
 }
 
-for f in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
+# The classic route's own declaration must exist and name NIX_USER. Globbing
+# every /home/<user> path below would otherwise pass a Dockerfile with no
+# ENV HOME at all.
+env_home_user="$(grep -oP '^ENV\s+HOME=/home/\K[A-Za-z0-9._-]+' "$DEV_BASE/Dockerfile" || true)"
+assert_nonempty "Dockerfile declares ENV HOME=/home/<user>" "$env_home_user"
+assert_eq "Dockerfile: ENV HOME user" "$nix_user" "$env_home_user"
+
+for f in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default" \
+         "$DEV_BASE/nix/base/flake.nix"; do
     rel="${f#"$DEV_BASE"/}"
     mapfile -t users < <(user_paths_in "$f")
-    assert_true "$rel: literal /home/<user> paths found" test "${#users[@]}" -gt 0
+    assert_true "$rel: home/<user> paths found" test "${#users[@]}" -gt 0
     for u in "${users[@]}"; do
-        assert_eq "$rel: /home/$u" "$nix_user" "$u"
+        assert_eq "$rel: home/$u" "$nix_user" "$u"
     done
 done
 
 # The flake bakes HOME into the nix base's image config; the tail Dockerfile
 # inherits it rather than restating ENV HOME.
-flake="$DEV_BASE/nix/base/flake.nix"
-mapfile -t flake_users < <(grep -oE '"HOME=/home/[A-Za-z0-9._-]+"' "$flake" \
+mapfile -t flake_users < <(grep -oE '"HOME=/home/[A-Za-z0-9._-]+"' "$DEV_BASE/nix/base/flake.nix" \
     | sed -E 's|^"HOME=/home/||; s|"$||' | sort -u)
 assert_true "nix/base/flake.nix: Env HOME declared" test "${#flake_users[@]}" -gt 0
 for u in "${flake_users[@]}"; do
@@ -159,11 +190,14 @@ for u in "${flake_users[@]}"; do
 done
 
 # The host-user alias symlink is skipped when HOST_USER already IS the container
-# user; that comparison is a fourth copy of the name.
+# user; that comparison is a further copy of the name. Non-empty guarded: a
+# reformat the grep misses (single quotes, swapped operands) must FAIL here, not
+# silently assert nothing — the #86 shape this repo keeps re-finding.
 for f in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
     rel="${f#"$DEV_BASE"/}"
     mapfile -t cmp_users < <(grep -oE '"\$HOST_USER" != "[A-Za-z0-9._-]+"' "$f" \
         | sed -E 's|.* != "||; s|"$||' | sort -u)
+    assert_true "$rel: HOST_USER alias guard found" test "${#cmp_users[@]}" -gt 0
     for u in "${cmp_users[@]}"; do
         assert_eq "$rel: HOST_USER alias guard compares against $u" "$nix_user" "$u"
     done
