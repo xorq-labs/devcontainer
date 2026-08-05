@@ -129,7 +129,15 @@ worktree-audit --delete <path>...   # delete only the paths that pass
 
 Content is matched by **hash, not path**, so work that was committed and later moved or deleted upstream still counts as present. Build output and package stores are skipped (regenerable, and where nearly all the disk sits); symlinks are not audited, because git stores a symlink as a blob of its target path. Anything unaccounted for is listed and blocks deletion, as does any process whose cwd is inside the tree.
 
-Note that `dev/hooks/post-checkout` auto-locks worktrees on creation, which stops `prune` from deleting them but does **not** make cross-namespace paths resolvable — and git suppresses its own `prunable` flag for locked worktrees, so the doctor tests reachability itself rather than trusting that flag. The hook only runs in repos that carry `dev/hooks/`; a project without it gets no auto-lock at all.
+### Preventing it at creation
+
+`dev/hooks/post-checkout` fires on every `git worktree add` — from `dev/new-worktree`, from bare git, or from an agent harness making its own isolated worktree. That last group is the one that matters most: it never calls `dev/` scripts, so a hook is the only place to catch it.
+
+The hook does two things. It **locks** the worktree, which stops `prune` from reaching the admin dir. And inside a container it **re-records both paths in host form**, which is what actually makes the worktree usable from the host — host paths being the only form valid in both namespaces. The translation comes from `DEV_WORKSPACE` / `DEV_CONTAINER_WORKSPACE` (exported by `dev/devcontainer`) plus the `/home/<hostuser>` → `$HOME` symlink, so it never guesses; with neither available it declines and leaves the paths alone.
+
+It also refuses to write a path it cannot itself resolve. Leaving container-form paths is strictly better than recording a path that resolves nowhere: the first is the repairable `mismatched` state above, the second breaks the worktree in *both* namespaces.
+
+Two limits worth knowing. Locking alone does not make a worktree usable — and because git suppresses its own `prunable` flag for locked worktrees, a locked-but-broken worktree reports clean, which is why the doctor tests reachability itself. And the hook only runs in repos that carry `dev/hooks/`: a project without it gets neither the lock nor the translation, and worktrees created before the hook landed keep their old recorded paths until `worktree-doctor --repair` fixes them.
 
 ## Project configuration
 

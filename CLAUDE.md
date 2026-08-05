@@ -407,6 +407,19 @@ taxonomy and reads as `test:`.
   would fail exactly where the tool is needed — an orphan has no HEAD, so
   "tracked at this path" is unanswerable, while "these bytes are in the object
   database" stays answerable (`test: tests/test-worktree-audit.sh`).
+- `dev/hooks/post-checkout` is the only creation-time interception point that is
+  caller-agnostic: it fires on every `git worktree add`, including an agent
+  harness's own isolated worktrees, which never route through `dev/` scripts. It
+  locks (stopping a prune from reaching the admin dir) AND, in a container,
+  re-records both recorded paths in host form (making the worktree usable from
+  the host at all). Neither substitutes for the other
+  (`test: tests/test-post-checkout-hook.sh`).
+- The hook's path translation derives from `DEV_WORKSPACE` /
+  `DEV_CONTAINER_WORKSPACE` plus the `/home/<hostuser>` -> `$HOME` symlink, and
+  declines rather than guessing when they are absent. It also refuses to record
+  a path it cannot itself resolve: container-form paths are a repairable state
+  `dev/worktree-doctor` reports, whereas an unresolvable path breaks the
+  worktree in both namespaces (`test: tests/test-post-checkout-hook.sh`).
 - `git worktree add` and `git worktree repair` both record the CANONICAL path of
   wherever they run, so host paths are the only form valid in both namespaces
   (the container reaches them through its `/home/<hostuser>` -> `/home/vscode`
