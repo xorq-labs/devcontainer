@@ -1,8 +1,32 @@
 #!/usr/bin/env bash
-# Auto-lock worktrees on creation to prevent container-side prune.
+# On worktree creation: lock it, and — in a container — re-record its paths in
+# host form so both namespaces can resolve it.
 #
-# git worktree add runs an implicit prune; inside a container, host-side
-# worktree paths are unreachable and get destroyed. Locking prevents this.
+# A linked worktree is two halves that must agree, and both store ABSOLUTE
+# paths: the working tree's `.git` file names an admin dir under the main
+# checkout, and that admin dir's `gitdir` file names the working tree's `.git`
+# back. `git worktree add` records them as the CANONICAL paths of wherever it
+# ran, resolving symlinks on the way.
+#
+# docker-compose.yml mounts the repo at its host path specifically so worktree
+# gitdir files resolve inside the container. That covers host -> container. The
+# reverse was never covered: the Dockerfile symlinks /home/<hostuser> ->
+# /home/vscode, so a worktree created in here canonicalizes to /home/vscode/...
+# (or to /workspaces/src/...), and that is what gets written into the .git the
+# host shares by bind mount. The host can resolve neither, so its
+# `git worktree prune` deletes the admin dir out from under a working tree that
+# was fine — taking HEAD, the index and the refs, which makes the branch
+# unrecoverable.
+#
+# Locking alone does not fix that. It stops prune from deleting the admin dir,
+# but the worktree stays unusable from the host, and git suppresses its own
+# `prunable` flag for locked worktrees so nothing reports the breakage. So we
+# also translate. Host paths are the one form valid in BOTH namespaces, because
+# the container reaches them through that same /home/<hostuser> symlink.
+#
+# This runs on `git worktree add` from ANY caller — dev/new-worktree, bare git,
+# or an agent harness creating its own isolated worktree — which is the point:
+# the callers that cause this are exactly the ones that never call dev/ scripts.
 
 # $3: 1 = branch checkout, 0 = file checkout
 [ "${3:-}" = "1" ] || exit 0
@@ -13,6 +37,71 @@ git_common="$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd)" || exi
 [ "$git_dir" = "$git_common" ] && exit 0
 
 wt="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+# Lock first: it addresses a different failure (a prune that reaches the admin
+# dir) and must still happen even when the translation below declines.
 git worktree lock "$wt" \
     --reason "auto-locked by post-checkout hook to prevent container-side prune" \
     2>/dev/null || true
+
+# ---------- re-record in host form ----------
+# Only meaningful in a container: on the host the recorded paths are already the
+# host's. DEV_HOOK_IN_CONTAINER overrides the probe (1/0) so the suite can drive
+# both branches without docker.
+_in_container() {
+    if [ -n "${DEV_HOOK_IN_CONTAINER:-}" ]; then
+        [ "$DEV_HOOK_IN_CONTAINER" = "1" ]
+        return
+    fi
+    [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null
+}
+_in_container || exit 0
+
+# dev/devcontainer exports the host side of both mounts. Without them there is
+# nothing to translate to, and guessing would be worse than leaving the paths
+# alone — a wrong path is indistinguishable from the breakage being fixed.
+[ -n "${DEV_WORKSPACE:-}" ] && [ -n "${DEV_CONTAINER_WORKSPACE:-}" ] || exit 0
+
+# The host user's home is whichever /home entry is a symlink to ours — the
+# Dockerfile creates exactly that. DEV_HOOK_HOME_ROOT relocates the scan for the
+# suite. Deriving it from DEV_WORKSPACE's own /home/<user> prefix instead would
+# be a guess whenever the repo lives outside /home, so we do not.
+# Compared after full resolution so a relative symlink (`ln -s vscode dan`) counts
+# the same as the absolute one the Dockerfile writes. -L keeps $HOME itself out.
+_host_home=""
+_home_real="$(readlink -f "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+for _d in "${DEV_HOOK_HOME_ROOT:-/home}"/*; do
+    if [ -L "$_d" ] && [ "$(readlink -f "$_d" 2>/dev/null)" = "$_home_real" ]; then
+        _host_home="$_d"
+        break
+    fi
+done
+
+# Container path -> host path. Two forms occur in practice: paths under the
+# workspace mount, and paths reached through the /home/<hostuser> alias (which
+# git has already canonicalized to $HOME). A worktree container's
+# git-common-dir lands in the second form, since DEV_MAIN_GIT is mounted at its
+# host path and that path resolves through the same symlink.
+_to_host() {
+    case "$1" in
+        "$DEV_CONTAINER_WORKSPACE"|"$DEV_CONTAINER_WORKSPACE"/*)
+            printf '%s' "${DEV_WORKSPACE}${1#"$DEV_CONTAINER_WORKSPACE"}" ;;
+        "$HOME"|"$HOME"/*)
+            [ -n "$_host_home" ] || return 1
+            printf '%s' "${_host_home}${1#"$HOME"}" ;;
+        *) return 1 ;;
+    esac
+}
+
+_host_wt="$(_to_host "$wt")" || exit 0
+_host_common="$(_to_host "$git_common")" || exit 0
+
+# Never record a path this namespace cannot itself resolve. Leaving the
+# container-form paths in place is strictly better than writing a path that
+# resolves nowhere: the first is a known, repairable state that
+# dev/worktree-doctor reports and --repair fixes, the second breaks the worktree
+# here too.
+[ -e "$_host_wt/.git" ] && [ -d "$_host_common" ] || exit 0
+
+printf 'gitdir: %s\n' "$_host_common/worktrees/$(basename "$git_dir")" >"$wt/.git"
+printf '%s\n' "$_host_wt/.git" >"$git_dir/gitdir"
