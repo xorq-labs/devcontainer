@@ -100,6 +100,37 @@ Worktrees of one project **share a single image**, tagged `<project>-devimg:<fin
 
 The image tag hashes **build inputs only**. Purely runtime inputs (`host-mounts.txt` / `host-mounts.local.txt`) feed a separate *staleness* hash that drives the "config changed, recreate?" prompt on a running container — so editing a host mount recreates the container without minting a new image tag or triggering a rebuild. Compose files are hashed whole (they mix build and runtime config), so a runtime-only compose edit still re-tags into a fully-cached rebuild — correct, just slightly noisy.
 
+### Diagnosing broken worktrees
+
+A linked worktree is two halves that must agree, and both store **absolute paths**: the working tree's `.git` file names an admin dir under the main checkout, and that admin dir's `gitdir` file names the working tree's `.git` back. Whoever runs `git worktree add` records the paths as *they* see them — and `git worktree repair` and `add` both resolve symlinks, so a worktree created inside the container records a container path (`/workspaces/src/…`, or `/home/vscode/…` via the `/home/<hostuser>` symlink) into the `.git` the host shares by bind mount. The host then cannot resolve it, and a host-side `git worktree prune` deletes the admin dir out from under a working tree that was perfectly fine.
+
+`dev/worktree-doctor` classifies every worktree of the current repo:
+
+```bash
+worktree-doctor              # report; exits non-zero if anything is wrong
+worktree-doctor --repair     # re-record the mismatched paths (HOST only)
+```
+
+| state | meaning | fix |
+| --- | --- | --- |
+| `healthy` | both halves agree and resolve from here | — |
+| `mismatched` | both halves exist, paths are cross-namespace | `--repair` |
+| `orphaned` | working tree exists, admin dir is gone | audit, then delete |
+| `stale-admin` | admin dir exists, no working tree anywhere | `git worktree prune` |
+
+Repair belongs on the **host**: host paths are the only form that resolves in *both* namespaces, since the container reaches them through its `/home/<hostuser>` symlink. Run inside a container it would re-record a container path, so `--repair` refuses there unless forced.
+
+An `orphaned` worktree has lost its HEAD, index and refs, so git can no longer say what branch it was on or whether the work was committed. `dev/worktree-audit` answers the one question that still matters before deleting — is every byte here already in the object database?
+
+```bash
+worktree-audit <path>...            # report; exits non-zero unless safe
+worktree-audit --delete <path>...   # delete only the paths that pass
+```
+
+Content is matched by **hash, not path**, so work that was committed and later moved or deleted upstream still counts as present. Build output and package stores are skipped (regenerable, and where nearly all the disk sits); symlinks are not audited, because git stores a symlink as a blob of its target path. Anything unaccounted for is listed and blocks deletion, as does any process whose cwd is inside the tree.
+
+Note that `dev/hooks/post-checkout` auto-locks worktrees on creation, which stops `prune` from deleting them but does **not** make cross-namespace paths resolvable — and git suppresses its own `prunable` flag for locked worktrees, so the doctor tests reachability itself rather than trusting that flag. The hook only runs in repos that carry `dev/hooks/`; a project without it gets no auto-lock at all.
+
 ## Project configuration
 
 Project-specific configuration lives in a **project overlay** — either `projects/<name>/` in the devcontainer repo (shipped defaults) or `.devcontainer/` in the consumer workspace (local override). Everything outside the overlay (the `Dockerfile`, `nix/base/`, `docker-compose.yml`, `dev/devcontainer`, `lib/`, etc.) is generic infrastructure. The overlay is resolved automatically: workspace `.devcontainer/` takes precedence over `projects/<name>/`, which falls back to `defaults/`. Per-project `devcontainer.json` lives alongside the overlay because the spec doesn't support sub-file includes (see step 5 below).

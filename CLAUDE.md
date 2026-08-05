@@ -33,7 +33,7 @@ bash tests/test-resolve-list-cleanup.sh
 
 ## Repo layout
 
-- `dev/` — user-facing scripts: `devcontainer`, `new-worktree`, `setup-worktree`, `cleanup-worktree`, `init`
+- `dev/` — user-facing scripts: `devcontainer`, `new-worktree`, `setup-worktree`, `cleanup-worktree`, `worktree-doctor`, `worktree-audit`, `init`
 - `lib/` — shared bash libraries sourced by dev/ scripts (`git.sh`, `host-bridge.sh`, `host-mounts.sh`, `list-file.sh`, `command-table.sh`) plus `command-table.tsv`, the declarative `devcontainer` command surface
 - `defaults/` — fallback project overlay (used when no project-specific overlay matches)
 - `projects/<name>/` — project-specific overlays (install-system.sh, setup-env.sh, compose.override.yml, worktree-*.txt)
@@ -393,3 +393,25 @@ taxonomy and reads as `test:`.
 - Any convention that spans two files gets a drift-guard test when it is introduced (existing examples: `tests/test-claude-code-pin-sync.sh`, `tests/test-lint-config-sync.sh`, `tests/test-classic-args-sync.sh`, `tests/test-completions-sync.sh`, `tests/test-dockerignore-lib-allowlist.sh`). A convention only its author knows about will drift.
 - Guards follow ADR-0005. Type every new invariant's guard (see the Invariants header for the vocabulary). When adding or materially changing a guard, break the invariant once, watch the guard go red, and record the mutation in the test's header comment. Prefer generating the second copy from the first, then deriving the expectation by parsing the source of truth at check time; restate-and-compare is the fallback, not the default.
 - A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume.
+- `dev/worktree-doctor` must decide reachability itself and never trust git's
+  `prunable` flag: `dev/hooks/post-checkout` locks every worktree on creation
+  and git suppresses `prunable` for locked worktrees, so the flag reports the
+  common broken case as clean (`test: tests/test-worktree-doctor.sh`).
+- A worktree is attributed to this repo only on proof — it sits inside the main
+  tree, its recorded admin path names this repo's git dir, or this repo has an
+  admin dir by that name. Sibling directories are shared ground: every repo
+  checked out beside this one keeps its worktrees there, and attributing a
+  foreign broken worktree would send someone to delete another project's work
+  (`test: tests/test-worktree-doctor.sh`).
+- `dev/worktree-audit` matches content by hash, never by path. Path-matching
+  would fail exactly where the tool is needed — an orphan has no HEAD, so
+  "tracked at this path" is unanswerable, while "these bytes are in the object
+  database" stays answerable (`test: tests/test-worktree-audit.sh`).
+- `git worktree add` and `git worktree repair` both record the CANONICAL path of
+  wherever they run, so host paths are the only form valid in both namespaces
+  (the container reaches them through its `/home/<hostuser>` -> `/home/vscode`
+  symlink from `Dockerfile`). Comparing `readlink -f` against the invocation
+  path cannot detect this — git always reports the physical path — so the
+  container probe is `/.dockerenv` plus `/proc/1/cgroup`
+  (`test: tests/test-worktree-doctor.sh` guards the refusal;
+  `unguarded: the two-namespace asymmetry itself needs a container to observe`).

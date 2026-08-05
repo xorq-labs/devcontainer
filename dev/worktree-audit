@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
+    cat <<'USAGE'
+Usage: worktree-audit <path>... [--delete]
+
+Prove that a worktree directory holds no content the repo does not already
+have, before anything deletes it.
+
+An orphaned worktree (see `worktree-doctor`) has lost its admin dir, so its
+HEAD, index and refs are gone: git can no longer tell you what branch it was
+on or whether its work was committed. What git CAN still answer is the only
+question that matters before deleting: does this exact byte sequence exist
+anywhere in the object database? This hashes every file and asks that, per
+file. Content is matched by hash, not by path — a file that was committed and
+later moved or deleted upstream still counts as present, which is what makes a
+clean audit meaningful rather than merely reassuring.
+
+Reported as NOT in git, a file is either genuinely unique work (salvage it) or
+local scratch (a settings.local.json, a generated lockfile). The audit does not
+guess which; it names them and refuses to delete.
+
+Build output and caches are skipped — they are regenerable by definition and
+are where essentially all the disk goes. The worktree's own `.git` file is
+skipped too: it is never a tracked blob, and it is the very thing that is
+broken.
+
+Symlinks are not audited. Git stores a symlink as a blob of its target path,
+which is not what reading through the link yields, so hashing them would report
+false uniqueness. `worktree-doctor`'s overlay symlinks are recreated by
+`setup-worktree` anyway.
+
+Exits 0 when every file is accounted for and nothing is running inside; 1
+otherwise. With --delete, removes each path that passes and leaves the rest
+alone.
+USAGE
+    exit 0
+fi
+
+_delete=0
+_paths=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --delete) _delete=1 ;;
+        -*) echo "error: unknown argument: $1 (see --help)" >&2; exit 1 ;;
+        *)  _paths+=("$1") ;;
+    esac
+    shift
+done
+[ "${#_paths[@]}" -gt 0 ] || { echo "error: no paths given (see --help)" >&2; exit 1; }
+
+_base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# shellcheck source=lib/git.sh
+. "$_base/lib/git.sh"
+main="$(dev_main_tree)"
+
+# Regenerable trees, skipped wholesale. Anything added here weakens the audit,
+# so the bar is: reproducible from tracked inputs by a build or install step.
+_PRUNE_DIRS=(
+    node_modules target dist build .venv .direnv
+    __pycache__ .pytest_cache .ruff_cache .mypy_cache
+    .next .turbo .cargo-target
+    .pnpm-store .yarn
+)
+
+# Cap the per-path listing; a worktree carrying a package store can otherwise
+# print thousands of lines and bury the two that matter.
+_LIST_CAP="${WORKTREE_AUDIT_LIST_CAP:-20}"
+
+# Emit every auditable regular file under $1.
+_files_of() {
+    local root="$1" args=() d
+    for d in "${_PRUNE_DIRS[@]}"; do
+        args+=(-name "$d" -o)
+    done
+    unset 'args[${#args[@]}-1]'
+    find "$root" \
+        \( -type d \( "${args[@]}" \) -prune \) -o \
+        \( -type f -readable \
+           ! -name '*.pyc' ! -name '*.tsbuildinfo' \
+           -print \)
+}
+
+# Any process with a cwd inside the tree means someone is still working there;
+# deleting under them would be silently destructive. /proc is authoritative and
+# needs no lsof.
+#
+# One `find` rather than a readlink per pid: on a host running containers this
+# walks ~5000 entries, and forking per entry cost 13s per audited path (almost
+# all of it in the kernel) against 0.2s this way. %h is the /proc/<pid> dir and
+# %l the link target; an unreadable target (another user's process) comes back
+# empty and is skipped.
+_live_procs() {
+    local root="$1" line pid target
+    while IFS= read -r line; do
+        pid="${line%% *}"; pid="${pid#/proc/}"
+        target="${line#* }"
+        [ -n "$target" ] || continue
+        case "$target" in
+            "$root"|"$root"/*) printf '%s\n' "$pid" ;;
+        esac
+    done < <(find /proc -maxdepth 2 -name cwd -type l -printf '%h %l\n' 2>/dev/null)
+}
+
+_rc=0
+for _root in "${_paths[@]}"; do
+    [ -d "$_root" ] || { echo "error: not a directory: $_root" >&2; _rc=1; continue; }
+    _root="$(cd "$_root" && pwd)"
+    echo "=== $_root"
+
+    mapfile -t _files < <(_files_of "$_root")
+    # The worktree's own .git file is expected to be untracked content.
+    _kept=()
+    for _f in "${_files[@]}"; do
+        [ "$_f" = "$_root/.git" ] && continue
+        case "$_f" in
+            *$'\n'*)
+                echo "  error: path contains a newline, cannot audit: $_f" >&2
+                _rc=1
+                continue
+                ;;
+        esac
+        _kept+=("$_f")
+    done
+
+    _missing=()
+    if [ "${#_kept[@]}" -gt 0 ]; then
+        # Batched plumbing: one hash-object and one cat-file for the whole tree
+        # rather than two git processes per file. Both preserve input order, so
+        # index i of the check output corresponds to index i of _kept.
+        mapfile -t _hashes < <(printf '%s\n' "${_kept[@]}" \
+            | git -C "$main" hash-object --stdin-paths)
+        if [ "${#_hashes[@]}" -ne "${#_kept[@]}" ]; then
+            echo "  error: hashed ${#_hashes[@]} of ${#_kept[@]} files; aborting" >&2
+            _rc=1
+            continue
+        fi
+        mapfile -t _checks < <(printf '%s\n' "${_hashes[@]}" \
+            | git -C "$main" cat-file --batch-check)
+        for _i in "${!_checks[@]}"; do
+            case "${_checks[$_i]}" in
+                *" missing") _missing+=("${_kept[$_i]#"$_root"/}") ;;
+            esac
+        done
+    fi
+
+    mapfile -t _live < <(_live_procs "$_root")
+
+    printf '  %d files audited, %d not in git, %d live process(es)\n' \
+        "${#_kept[@]}" "${#_missing[@]}" "${#_live[@]}"
+    _shown=0
+    for _m in "${_missing[@]}"; do
+        if [ "$_shown" -ge "$_LIST_CAP" ]; then
+            printf '    ... and %d more (WORKTREE_AUDIT_LIST_CAP to raise)\n' \
+                "$(( ${#_missing[@]} - _shown ))"
+            break
+        fi
+        echo "    not in git: $_m"
+        _shown=$((_shown + 1))
+    done
+    for _l in "${_live[@]}"; do echo "    live pid:   $_l"; done
+
+    if [ "${#_missing[@]}" -eq 0 ] && [ "${#_live[@]}" -eq 0 ]; then
+        if [ "$_delete" = "1" ]; then
+            rm -rf "$_root"
+            echo "  deleted (every file's content is in the object database)"
+        else
+            echo "  SAFE to delete (every file's content is in the object database)"
+        fi
+    else
+        echo "  NOT safe to delete"
+        _rc=1
+    fi
+done
+
+exit "$_rc"

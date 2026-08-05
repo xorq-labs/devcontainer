@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
+    cat <<'USAGE'
+Usage: worktree-doctor [--repair] [--force]
+
+Classify every git worktree of this repo and name what is wrong with each.
+
+A linked worktree is two halves that must agree: the working tree's `.git`
+file names an admin dir under the main checkout, and that admin dir's `gitdir`
+file names the working tree's `.git` file back. Both halves store ABSOLUTE
+paths, recorded from the perspective of whoever ran `git worktree add`. A
+worktree created inside a dev container records container paths (`/workspaces/src/...`,
+or the realpath of the `/home/<hostuser>` symlink, i.e. `/home/vscode/...`)
+into the .git the host shares by bind mount — so the host cannot resolve it,
+and `git worktree prune` on the host deletes the admin dir out from under a
+perfectly good working tree.
+
+States reported:
+
+  healthy       both halves agree and resolve from here.
+  mismatched    admin dir exists, working tree exists, but the recorded paths
+                do not resolve from here — a cross-namespace path. REPAIRABLE:
+                --repair re-records both halves from this namespace's view.
+  orphaned      working tree exists, admin dir is gone. Its HEAD, index and
+                refs went with the admin dir and cannot be reconstructed; the
+                branch it was on is unrecoverable. Audit the contents with
+                `worktree-audit` and delete if nothing is unique.
+  stale-admin   admin dir exists, no working tree anywhere. What plain
+                `git worktree prune` is for.
+
+Exits 0 when everything is healthy, 1 when any problem remains (after
+--repair, if given), so a hook or CI job can gate on it.
+
+--repair re-records the mismatched worktrees. It must run in the namespace
+whose paths you want recorded — normally the HOST. `git worktree repair`
+canonicalizes through symlinks exactly as `git worktree add` does, so repairing
+from inside a container re-records container-local paths and achieves nothing.
+Host paths are the form that resolves in BOTH namespaces (the container reaches
+them through its `/home/<hostuser>` symlink), which is why the host is the right
+place to repair. Inside a container --repair refuses; --force overrides.
+USAGE
+    exit 0
+fi
+
+_repair=0 _force=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --repair) _repair=1 ;;
+        --force)  _force=1 ;;
+        *) echo "error: unknown argument: $1 (see --help)" >&2; exit 1 ;;
+    esac
+    shift
+done
+
+_base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# shellcheck source=lib/git.sh
+. "$_base/lib/git.sh"
+
+# Whether we are inside a container, which decides whether --repair may run:
+# repair records the canonical path of wherever it runs, and a container path is
+# exactly what the host cannot resolve. Note that comparing `readlink -f` against
+# the invocation path does NOT detect this — git always reports the physical
+# path, so the main tree resolves to a canonical path in either namespace.
+# WORKTREE_DOCTOR_IN_CONTAINER overrides the probe (1/0); the suite uses it to
+# exercise both branches on one machine.
+_in_container() {
+    if [ -n "${WORKTREE_DOCTOR_IN_CONTAINER:-}" ]; then
+        printf '%s' "$WORKTREE_DOCTOR_IN_CONTAINER"
+        return 0
+    fi
+    if [ -f /.dockerenv ] || grep -qa 'docker\|containerd' /proc/1/cgroup 2>/dev/null; then
+        printf '1'
+    else
+        printf '0'
+    fi
+}
+
+main="$(dev_main_tree)"
+# The shared admin root. Resolve through rev-parse rather than assuming
+# "$main/.git": that is a file, not a directory, when worktree-doctor itself is
+# run from inside a linked worktree.
+git_common="$(git -C "$main" rev-parse --git-common-dir)"
+case "$git_common" in
+    /*) ;;
+    *)  git_common="$main/$git_common" ;;
+esac
+git_common="$(cd "$git_common" && pwd)"
+
+# ---------- half two: working trees actually on disk ----------
+# A linked worktree's `.git` is a FILE naming its admin dir; the main checkout's
+# is a directory, which is how the main tree filters itself out. Scan the places
+# worktrees land rather than walking the repo: dev/new-worktree puts them beside
+# the main checkout, Claude Code's own isolation puts them under
+# .claude/worktrees/, and hand-made ones tend to sit at the repo root.
+#
+# Siblings of the main checkout are shared ground — every OTHER repo's worktrees
+# live there too, and calling those orphans of this repo would be plain wrong.
+# So a candidate is attributed to this repo only on proof: it sits inside the
+# main tree, or its recorded admin path names this repo's git dir, or this repo
+# actually has an admin dir by that name. A sibling that is both orphaned AND
+# recorded under a foreign namespace cannot be attributed to anyone and is
+# skipped — deliberately, since guessing would be worse than silence.
+shopt -s nullglob
+_disk_dirs=() _disk_admin=()
+for _d in "$main"/.claude/worktrees/*/ "$main"/*/ "$(dirname "$main")"/*/; do
+    _d="${_d%/}"
+    [ -f "$_d/.git" ] || continue
+    _gf="$(sed -n 's/^gitdir: //p' "$_d/.git" | head -1)"
+    [ -n "$_gf" ] || continue
+    _name="$(basename "$_gf")"
+    _claimed_common="$(dirname "$(dirname "$_gf")")"
+    if [ "${_d#"$main"/}" = "$_d" ] \
+        && [ "$_claimed_common" != "$git_common" ] \
+        && [ ! -d "$git_common/worktrees/$_name" ]; then
+        continue
+    fi
+    _disk_dirs+=("$_d")
+    _disk_admin+=("$_name")
+done
+shopt -u nullglob
+
+# Admin name -> on-disk working tree, so an unresolvable admin entry can be
+# matched to a working tree sitting at a path git cannot reach.
+declare -A _admin_to_dir=()
+for _i in "${!_disk_dirs[@]}"; do
+    _admin_to_dir["${_disk_admin[$_i]}"]="${_disk_dirs[$_i]}"
+done
+
+# ---------- half one: what git knows about (admin dirs) ----------
+# Walk the admin dirs directly rather than trusting `git worktree list
+# --porcelain`'s `prunable` flag. Two reasons: the admin dir NAME is what the
+# working tree's .git file references and porcelain never prints it, and git
+# suppresses `prunable` for a LOCKED worktree — so a locked worktree with
+# unreachable paths reports clean while being just as unusable. The auto-lock in
+# dev/hooks/post-checkout makes that the common case, not a corner one.
+_healthy=() _mismatched=() _mismatched_rec=() _orphaned=() _stale=()
+declare -A _claimed_admin=()
+
+shopt -s nullglob
+for _a in "$git_common"/worktrees/*/; do
+    _a="${_a%/}"
+    _name="$(basename "$_a")"
+    _recorded="$(cat "$_a/gitdir" 2>/dev/null || true)"
+    _wt="$(dirname "$_recorded")"
+    _claimed_admin["$_name"]=1
+    if [ -n "$_recorded" ] && [ -e "$_recorded" ] \
+        && git -C "$_wt" rev-parse --git-dir >/dev/null 2>&1; then
+        _healthy+=("$_wt")
+    elif [ -n "${_admin_to_dir[$_name]:-}" ]; then
+        _mismatched+=("${_admin_to_dir[$_name]}")
+        _mismatched_rec+=("$_recorded")
+    else
+        _stale+=("$_name: recorded tree not found at ${_recorded:-<empty gitdir>}")
+    fi
+done
+shopt -u nullglob
+
+for _i in "${!_disk_dirs[@]}"; do
+    [ -n "${_claimed_admin[${_disk_admin[$_i]}]:-}" ] && continue
+    _orphaned+=("${_disk_dirs[$_i]}")
+done
+
+# ---------- report ----------
+printf '%-12s %s\n' "STATE" "WORKTREE"
+for _w in "${_healthy[@]}";    do printf '%-12s %s\n' "healthy" "$_w"; done
+for _i in "${!_mismatched[@]}"; do
+    printf '%-12s %s\n' "mismatched" "${_mismatched[$_i]}"
+    printf '%-12s   recorded as: %s\n' "" "${_mismatched_rec[$_i]}"
+done
+for _w in "${_orphaned[@]}";   do printf '%-12s %s\n' "orphaned" "$_w"; done
+for _w in "${_stale[@]}";      do printf '%-12s %s\n' "stale-admin" "$_w"; done
+
+_problems=$(( ${#_mismatched[@]} + ${#_orphaned[@]} + ${#_stale[@]} ))
+echo ""
+printf '%d healthy, %d mismatched, %d orphaned, %d stale-admin\n' \
+    "${#_healthy[@]}" "${#_mismatched[@]}" "${#_orphaned[@]}" "${#_stale[@]}"
+
+# ---------- repair ----------
+if [ "$_repair" = "1" ] && [ "${#_mismatched[@]}" -gt 0 ]; then
+    echo ""
+    if [ "$(_in_container)" = "1" ] && [ "$_force" = "0" ]; then
+        {
+            echo "error: refusing to --repair inside a container."
+            echo "  would record: $main"
+            echo "'git worktree repair' resolves symlinks and records the CANONICAL path, so"
+            echo "in here it re-records a container path — the same path form that broke these"
+            echo "worktrees, since the host cannot resolve it. Run --repair on the host, where"
+            echo "the recorded path is valid in both namespaces. Pass --force to override."
+        } >&2
+        exit 1
+    fi
+    for _w in "${_mismatched[@]}"; do
+        echo "repairing $_w"
+        git -C "$main" worktree repair "$_w"
+    done
+    echo ""
+    echo "re-run worktree-doctor to confirm"
+    exit 0
+fi
+
+if [ "${#_mismatched[@]}" -gt 0 ]; then
+    echo "run 'worktree-doctor --repair' on the host to re-record the mismatched paths"
+fi
+if [ "${#_orphaned[@]}" -gt 0 ]; then
+    echo "orphaned metadata cannot be rebuilt; audit contents with 'worktree-audit <path>'"
+fi
+if [ "${#_stale[@]}" -gt 0 ]; then
+    echo "stale admin dirs are removable with 'git worktree prune'"
+fi
+
+[ "$_problems" -eq 0 ]

@@ -15,7 +15,7 @@ repos:
         args: [--severity=warning]
         types: [file]
         files: >-
-          ^dev/(devcontainer|devcontainer-completions|init|new-worktree|setup-worktree|cleanup-worktree|check-gitignore-agents|hooks/post-checkout)$
+          ^dev/(devcontainer|devcontainer-completions|init|new-worktree|setup-worktree|cleanup-worktree|worktree-doctor|worktree-audit|check-gitignore-agents|hooks/post-checkout)$
 
   # These pins are the source of truth for CI (the pre-commit job is the only
   # CI lint gate). Keep ruff/yamllint/hadolint in sync with the in-container
