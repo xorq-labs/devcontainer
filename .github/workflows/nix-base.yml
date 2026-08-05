@@ -118,7 +118,33 @@ jobs:
             --build-context project=./defaults \
             --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
             -t nix-base-tail:ci .
-          docker run --rm nix-base-tail:ci sh -c 'claude --version && test -x /usr/local/bin/setup-env'
+          docker run --rm nix-base-tail:ci claude --version
+          # As vscode, and by RUNNING setup-env rather than `test -x` as root.
+          # The old assertion could not fail for #129: no USER is set on the
+          # image, so it ran as root, where both -x and -r are true on a 0711
+          # file. bash needs the READ bit to execute a script, and only an
+          # unprivileged user is subject to it.
+          docker run --rm -u vscode nix-base-tail:ci setup-env sync-if-needed
+
+      # Regression for #129. COPY preserves the source's mode, and ./defaults in
+      # CI comes from a fresh checkout at 0755 — so the hostile input (a
+      # contributor on umask 0077, whose working tree is 0700) is one CI has
+      # never built from. The tail layers are the only ones that re-run here;
+      # the base is already loaded.
+      #
+      # Verified (ADR-0005 §2): reverting either Dockerfile's `chmod 755` to
+      # `chmod +x` turns this step red with
+      # `setup-env: Permission denied` (exit 126), while the step above stays
+      # green — which is the asymmetry that let the bug ship.
+      - name: Build the tail from a umask-0077 overlay
+        run: |
+          cp -r ./defaults /tmp/overlay-0700
+          chmod 0700 /tmp/overlay-0700/setup-env.sh
+          docker build -f nix/base/Dockerfile.nix-default \
+            --build-context project=/tmp/overlay-0700 \
+            --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
+            -t nix-base-tail-0700:ci .
+          docker run --rm -u vscode nix-base-tail-0700:ci setup-env sync-if-needed
 
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'

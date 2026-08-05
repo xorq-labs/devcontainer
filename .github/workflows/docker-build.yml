@@ -32,10 +32,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The overlay is deliberately given the mode a umask-0077 contributor's
+      # working tree would have (#129). COPY preserves the source's mode, so
+      # this is the input that distinguishes an absolute `chmod 755` from
+      # `chmod +x`; a fresh checkout's 0755 passes either way and is why CI
+      # never caught it. One build, not two: after this the image's modes are
+      # input-independent by construction, so the hostile source is the only
+      # informative one.
       - name: Build Dockerfile
         run: |
+          chmod 0700 ./defaults/setup-env.sh
           docker build \
             --build-context project=./defaults \
             --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
             -t devcontainer-ci:test \
             .
+      # Verified (ADR-0005 §2): with `chmod +x` restored in the Dockerfile this
+      # fails `setup-env: Permission denied` (exit 126). Runs as vscode, and
+      # runs the script — as root, or with `test -x`, a 0711 file passes.
+      - name: setup-env is runnable by the unprivileged user
+        run: docker run --rm -u vscode devcontainer-ci:test setup-env sync-if-needed
