@@ -22,7 +22,7 @@ _project_dir="$(resolve_project_dir "$_base" "$main_tree" "$_project_name")"
 echo "worktree overlay: $(project_dir_label "$_project_dir" "$_base")" >&2
 dest="$(dirname "$main_tree")/${_project_name}-${branch//\//-}"
 
-install_hooks
+install_hooks "$_base"
 git worktree add "$dest" "$branch" >&2
 git worktree lock "$dest" \
     --reason "locked by new-worktree to prevent container-side prune" \

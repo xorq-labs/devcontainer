@@ -942,7 +942,7 @@ ensure_up() {
         echo "overlay: $_overlay_label"
         write_resolved_env "$DEV_WORKSPACE/.envrcs/.resolved-env"
         setup_claude_credentials
-        install_hooks
+        install_hooks "$DEV_BASE_DIR"
         ensure_external_volumes
         ensure_claude_logs
         if [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then

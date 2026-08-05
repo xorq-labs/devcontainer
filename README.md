@@ -13,7 +13,7 @@ direnv allow
 uv tool install pre-commit
 ```
 
-The git hook is symlinked automatically by direnv (via `symlink_hooks` in `lib/git.sh`). In devcontainer and worktree contexts, `install_hooks` also clears `core.hooksPath` before symlinking. The hook finds `pre-commit` via `.tools/bin/` on the host or PATH in the container — no `pre-commit install` needed.
+The git hook is symlinked automatically by direnv (via `symlink_hooks` in `lib/git.sh`). In devcontainer and worktree contexts, `install_hooks` also clears `core.hooksPath` before symlinking, and — given this repo's root as its argument — copies in the allowlisted hooks the consuming project has no version of (see [Getting the hook into consuming projects](#getting-the-hook-into-consuming-projects)). The hook finds `pre-commit` via `.tools/bin/` on the host or PATH in the container — no `pre-commit install` needed.
 
 After this, the configured checks run automatically on `git commit`. To run all hooks against every file manually:
 
@@ -137,7 +137,21 @@ The hook does two things. It **locks** the worktree, which stops `prune` from re
 
 It also refuses to write a path it cannot itself resolve. Leaving container-form paths is strictly better than recording a path that resolves nowhere: the first is the repairable `mismatched` state above, the second breaks the worktree in *both* namespaces.
 
-Two limits worth knowing. Locking alone does not make a worktree usable — and because git suppresses its own `prunable` flag for locked worktrees, a locked-but-broken worktree reports clean, which is why the doctor tests reachability itself. And the hook only runs in repos that carry `dev/hooks/`: a project without it gets neither the lock nor the translation, and worktrees created before the hook landed keep their old recorded paths until `worktree-doctor --repair` fixes them.
+Locking alone does not make a worktree usable — and because git suppresses its own `prunable` flag for locked worktrees, a locked-but-broken worktree reports clean, which is why the doctor tests reachability itself. Worktrees created before the hook landed keep their old recorded paths until `worktree-doctor --repair` fixes them.
+
+### Getting the hook into consuming projects
+
+`dev/devcontainer` calls `install_hooks` for every project on start, but a project only gets its hooks symlinked if it carries its own `dev/hooks/`. Most don't — so they used to get neither the auto-lock nor the path translation, which is the difference between one project accumulating a handful of broken worktrees and another accumulating dozens.
+
+`install_hooks "$DEV_BASE_DIR"` now fills the gaps from this repo, per hook name — a project that ships its own copy of a hook keeps it and still receives the ones it lacks.
+
+What gets distributed is an **allowlist** (`_DEVCONTAINER_SHARED_HOOKS` in `lib/git.sh`), currently just `post-checkout` — not everything in `dev/hooks/`. A hook is only safe to push into a project that has never heard of it if it needs no configuration there. `post-checkout` qualifies: it does nothing except when a worktree is created. `pre-commit` does **not** — it ends in `exec pre-commit hook-impl --config=.pre-commit-config.yaml`, so in a project with no such config every commit fails, and with pre-commit absent it exits 1 instead. Adding a name to the allowlist means asserting the hook is inert in a project that doesn't use the tool behind it.
+
+The allowlist governs only what this repo pushes *outward*. A project's own `dev/hooks/` is still symlinked in full, whatever it contains.
+
+Gap-filled hooks are **copied**, not symlinked. A symlink would point into the devcontainer repo, which is not mounted inside the consuming project's container — only that project's tree and its `.git` are — so it would dangle exactly where the hook matters. A copy under `.git/hooks/` rides along with the `.git` bind mount and works in both namespaces. Installation happens host-side for the same reason: only `lib/*.sh` is baked into the image, not `dev/hooks/`, and a host-side install reaches the container anyway through that shared `.git`.
+
+Copies carry a provenance marker after the shebang. It's what lets a later run refresh a stale copy while never touching a hook you wrote yourself — an unmarked regular file in `.git/hooks/` is left strictly alone.
 
 ## Project configuration
 
