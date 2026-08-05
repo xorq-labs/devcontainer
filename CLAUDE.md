@@ -407,6 +407,27 @@ taxonomy and reads as `test:`.
   would fail exactly where the tool is needed — an orphan has no HEAD, so
   "tracked at this path" is unanswerable, while "these bytes are in the object
   database" stays answerable (`test: tests/test-worktree-audit.sh`).
+- Hooks filled into a consuming project by `copy_shared_hooks()` are COPIED, not
+  symlinked: the devcontainer repo is not mounted inside a consuming project's
+  container, so a symlink would dangle exactly where the hook matters. Only
+  `lib/*.sh` is baked into the image, never `dev/hooks/`, so installation is
+  host-side — the copy lands in `.git/hooks`, which the container reaches through
+  the `.git` bind mount (`test: tests/test-hook-distribution.sh`).
+- A copied hook carries `_DEVCONTAINER_HOOK_MARKER` after its shebang, and that
+  marker is the whole authority for overwriting: a regular file in `.git/hooks/`
+  without it is someone's own hook and is never touched, while a marked one is
+  refreshed when the source moves. Precedence is per hook NAME, so a project
+  shipping its own copy of one hook still receives the others
+  (`test: tests/test-hook-distribution.sh`).
+- What `copy_shared_hooks()` distributes is `_DEVCONTAINER_SHARED_HOOKS`, an
+  ALLOWLIST — never the contents of `dev/hooks/`. A hook may only be listed if it
+  is inert in a project that does not use the tool behind it. `pre-commit` is
+  excluded for exactly that reason: it ends in `exec pre-commit hook-impl
+  --config=.pre-commit-config.yaml`, so distributing it breaks every commit in a
+  project with no such config (verified: `TypeError: expected str, bytes or
+  os.PathLike object, not NoneType`, commit refused). The allowlist governs only
+  what this repo pushes outward — a project's own `dev/hooks/` is symlinked in
+  full by `symlink_hooks()` regardless (`test: tests/test-hook-distribution.sh`).
 - `dev/hooks/post-checkout` is the only creation-time interception point that is
   caller-agnostic: it fires on every `git worktree add`, including an agent
   harness's own isolated worktrees, which never route through `dev/` scripts. It
