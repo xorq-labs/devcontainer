@@ -13,6 +13,9 @@ on:
       # Filters the repo-root build context, so it can break a COPY without
       # any COPY source changing.
       - .dockerignore
+      # This file defines the build itself: change the docker build command,
+      # a --build-context or a --build-arg and the verification must re-run.
+      - .github/workflows/docker-build.yml
   pull_request:
     branches: [main]
     paths:
@@ -25,6 +28,9 @@ on:
       # Filters the repo-root build context, so it can break a COPY without
       # any COPY source changing.
       - .dockerignore
+      # This file defines the build itself: change the docker build command,
+      # a --build-context or a --build-arg and the verification must re-run.
+      - .github/workflows/docker-build.yml
 
 jobs:
   build:
