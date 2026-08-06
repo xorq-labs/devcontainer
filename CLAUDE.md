@@ -76,8 +76,9 @@ an interactive question. Current records: ADR-0001 (private credential
 seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
 `.claude/agents/` in git; per-subdir state symlinks), ADR-0005 (guard
 taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
-reserved by #81), and nix/base/README.md
-"Design decisions" for the base-image record.
+reserved by #81), ADR-0006 (structural auditing as prompted agents, not metric
+tooling; amended 2026-08-04 so committing an audit report is optional), and
+nix/base/README.md "Design decisions" for the base-image record.
 
 ## Invariants
 
@@ -446,4 +447,4 @@ taxonomy and reads as `test:`.
   found by an audit before any incident.
 
 - Guards follow ADR-0005. Type every new invariant's guard (see the Invariants header for the vocabulary). When adding or materially changing a guard, record a mutation PAIR in the test's header comment (ADR-0005 §2, amended 2026-08-04): a FORM-ONLY change to the source it parses, which must leave it green with no drop in assertion count, and a SEMANTIC change expressed in a form you did not write — comment the call out rather than deleting it — which must turn it red. One mutation aimed at the invariant confirms the hole you just closed and misses the parsing assumption you did not know you had made — no fail-open in this repo has ever been found by the guard's own author, and #93's and #110's guards carried recorded §2 runs and grew them anyway. Where the byte form IS the invariant (the `BASE_IMAGE` pin), record that instead of running the form-only half, and say which invariant makes it so. Prefer generating the second copy from the first, then deriving the expectation by parsing the source of truth at check time; restate-and-compare is the fallback, not the default.
-- A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume.
+- A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume. Committing the report itself to `docs/audits/` is optional (ADR-0006 required it until the 2026-08-04 amendment dropped it), which makes those three dispositions the only durable trace an audit is required to leave — and the amendment accepts, explicitly, that audit-to-audit measurement continuity is unguarded as a result.

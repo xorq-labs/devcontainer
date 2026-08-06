@@ -13,6 +13,10 @@ spot-checks that proved live fail-open guards (§4). The sibling report
 `2026-08-02-repo-wide.md` is the history-inclusive pass over the whole repo.
 A later audit should rerun §Method's M1–M7 and compare.
 
+ADR-0006's amendment of 2026-08-04 makes committing a report optional; this
+one is kept as historical record, so M1–M7 remain rerunnable from here even
+though no future audit is obliged to leave a successor.
+
 ---
 
 *Everything below is the report as posted on #89 — "this issue" and "posted

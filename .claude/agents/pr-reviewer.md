@@ -51,6 +51,13 @@ Keep this DIFF-SCOPED. Repo-wide pattern analysis belongs to the
 repo-level debt, and doing it here means every parallel review redoes the same
 scan for findings its author cannot act on.
 
+The origin/main anchor also puts THIS branch's own commit sequence out of
+scope, and that is a handoff, not a blind spot: you review the net diff, so a
+hunk fixed three times on the way here reads the same to you as one written
+correctly. Whether that churn is a recurring shape is the auditor's question
+(it reads branch commits via `gh pr view`), and answering it needs the other
+PRs you cannot see. Do not reach for the branch log to fill the gap.
+
 ## Credential-handling code (extra rubric)
 
 When the PR moves credentials, tokens, or auth config:
