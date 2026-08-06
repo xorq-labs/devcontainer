@@ -12,11 +12,12 @@
 # unrelated build on main would fail. An absent check looks identical to a
 # passing one — this test converts it into a red one.
 #
-# Three input classes are checked, matching the sibling: default-context COPY
+# Four input classes are checked, matching the sibling: default-context COPY
 # sources of the root Dockerfile; the additional build context that
 # `COPY --from=project ...` reads (CI supplies ./defaults, derived from the
-# workflow's own --build-context flag rather than hardcoded); and
-# .dockerignore.
+# workflow's own --build-context flag rather than hardcoded); .dockerignore;
+# and the workflow file itself, whose edits change what the build does and
+# must therefore trigger it (#109).
 #
 # Verified (ADR-0005 §2), audit round: deleting `- .github/workflows/docker-build.yml`
 # from both paths lists turns this red on ".github/workflows/docker-build.yml is

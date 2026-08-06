@@ -16,13 +16,14 @@
 # simply did not run. That is the failure mode this test converts into a red
 # check.
 #
-# Three input classes are checked, because a tail build can break through any of
+# Four input classes are checked, because a tail build can break through any of
 # them: default-context COPY sources; the additional build context that
 # `COPY --from=project ...` reads (CI supplies ./defaults, derived here from the
-# workflow's own --build-context flag rather than hardcoded); and .dockerignore,
+# workflow's own --build-context flag rather than hardcoded); .dockerignore,
 # which is not a COPY source at all but filters the repo-root context the tail
 # build uses — a new deny pattern there breaks a COPY with no COPY source
-# touched.
+# touched; and the workflow file itself, whose edits change what the build
+# does and must therefore trigger it (#109).
 #
 # Verified (ADR-0005 §2), audit round: deleting `- .github/workflows/nix-base.yml`
 # from both paths lists turns this red on ".github/workflows/nix-base.yml is
