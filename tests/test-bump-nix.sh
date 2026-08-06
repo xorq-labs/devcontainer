@@ -6,9 +6,22 @@
 # The script targets lib/nix-seed.sh one level up from its own path, so we run
 # a copy from a disposable sandbox and stub `curl` on PATH — no real file is
 # touched and no network is required. The curl stub serves both endpoints the
-# script hits: the GitHub releases API (latest version) and
-# releases.nixos.org (installer download, deterministic per-URL content so the
-# expected sha256 is computable in the test).
+# script hits: the GitHub TAGS endpoint (latest version — NixOS/nix publishes
+# no GitHub releases, so /releases/latest 404s and only /tags answers; any
+# other api.github.com URL fails in the stub exactly as it does live, #126)
+# and releases.nixos.org (installer download, deterministic per-URL content so
+# the expected sha256 is computable in the test). The stubbed tag list carries
+# the two live traps: a maintenance backport tagged after the newest stable
+# (creation order != version order) and a higher-numbered prerelease (not a
+# pin candidate).
+#
+# Mutation used to prove the resolution guard fails (ADR-0005): point
+# latest_version() in dev/bump-nix back at /releases/latest (the pre-#126
+# endpoint, which the stub 404s exactly as the real repo does). Observed red:
+# the latest-tag bump test (exit 0 / reports the bump / version pin updated /
+# sha pin updated in lockstep) and every --check that must resolve a latest
+# version (exit 0 / shows current / shows latest / notes up to date).
+#   Results: 36 passed, 9 failed
 set -euo pipefail
 
 # --- inlined test harness ---------------------------------------------------
@@ -83,7 +96,8 @@ SRC="$DEV_BASE/dev/bump-nix"
 # ---------- setup: disposable sandbox ----------
 SANDBOX="$(mktemp -d)"
 _cleanup_dirs+=("$SANDBOX")
-mkdir -p "$SANDBOX/dev" "$SANDBOX/lib" "$SANDBOX/bin" "$SANDBOX/bin-badnet"
+mkdir -p "$SANDBOX/dev" "$SANDBOX/lib" "$SANDBOX/bin" "$SANDBOX/bin-badnet" \
+    "$SANDBOX/bin-noapi"
 cp "$SRC" "$SANDBOX/dev/bump-nix"
 BUMP="$SANDBOX/dev/bump-nix"
 SEEDLIB="$SANDBOX/lib/nix-seed.sh"
@@ -101,7 +115,12 @@ for a in "$@"; do
     esac
 done
 case "$url" in
-    *api.github.com*) printf '{"tag_name":"9.9.9"}\n' ;;
+    # Only /tags answers, like the real repo: a backport tagged after the
+    # newest stable, a higher prerelease, and a leading-v tag are all traps
+    # the resolver must step around to land on 9.9.9.
+    *api.github.com/repos/NixOS/nix/tags*)
+        printf '[{"name":"9.8.10"},{"name":"10.0.0-rc1"},{"name":"v9.9.9"},{"name":"9.9.8"}]\n' ;;
+    *api.github.com*) exit 22 ;;
     *releases.nixos.org*)
         content="fake installer for $url"
         if [ -n "$out" ]; then printf '%s\n' "$content" > "$out"; else printf '%s\n' "$content"; fi
@@ -116,11 +135,18 @@ cat > "$SANDBOX/bin-badnet/curl" <<'EOF'
 url=""
 for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
 case "$url" in
-    *api.github.com*) printf '{"tag_name":"9.9.9"}\n' ;;
+    *api.github.com/repos/NixOS/nix/tags*) printf '[{"name":"9.9.9"}]\n' ;;
     *) exit 22 ;;
 esac
 EOF
-chmod +x "$SANDBOX/bin/curl" "$SANDBOX/bin-badnet/curl"
+# Nothing reachable at all — the shape test-bump-nix-base.sh proves at its
+# bin-badnet: a --check that cannot produce a report must fail, not report
+# nothing and exit 0 (#126).
+cat > "$SANDBOX/bin-noapi/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 6
+EOF
+chmod +x "$SANDBOX/bin/curl" "$SANDBOX/bin-badnet/curl" "$SANDBOX/bin-noapi/curl"
 
 # Expected sha for a given version = sha of the stub's deterministic content.
 expected_sha() {
@@ -153,15 +179,37 @@ run_bump_badnet() {
     rc=$?
     set -e
 }
+run_bump_noapi() {
+    set +e
+    out="$(PATH="$SANDBOX/bin-noapi:$PATH" "$BUMP" "$@" 2>&1)"
+    rc=$?
+    set -e
+}
 
-# ---------- test: default bump to latest release ----------
-echo "--- bump-nix (default: latest release) ---"
+# ---------- test: default bump to latest tag ----------
+echo "--- bump-nix (default: latest tag) ---"
 write_seedlib "1.0.0" "$OLD_SHA"
 run_bump
 assert_eq "exit 0" "0" "$rc"
 assert_contains "reports the bump" "1.0.0 → 9.9.9" "$out"
 assert_eq "version pin updated" "9.9.9" "$(pin_version)"
 assert_eq "sha pin updated in lockstep" "$(expected_sha 9.9.9)" "$(pin_sha)"
+
+# ---------- test: unreachable version endpoint fails loudly ----------
+# Ported from tests/test-bump-nix-base.sh's bin-badnet case: --check exits 0
+# whether or not the pin is current, but that is about the comparison, not the
+# network — a --check that cannot produce a report at all must fail (#126).
+echo "--- bump-nix (version endpoint unreachable) ---"
+write_seedlib "1.0.0" "$OLD_SHA"
+run_bump_noapi --check
+assert_true "--check fails when the version endpoint is unreachable" \
+    test "$rc" -ne 0
+assert_contains "and says it could not resolve a version" \
+    "could not determine the latest Nix version" "$out"
+run_bump_noapi
+assert_eq "a default bump also fails" "1" "$rc"
+assert_eq "and writes neither half of the pin" "1.0.0" "$(pin_version)"
+assert_eq "sha untouched too" "$OLD_SHA" "$(pin_sha)"
 
 # ---------- test: explicit version ----------
 echo "--- bump-nix (explicit version) ---"
