@@ -20,6 +20,18 @@ Commits run shellcheck, ruff, yamllint, and hadolint via pre-commit. Config is i
 pre-commit run --all-files
 ```
 
+That bare name resolves in both places: `.tools/bin/` on the host (the
+`uv tool install` above), and PATH in the container, where
+`projects/devcontainer/install-system.sh` installs it. Never reach for
+`.tools/bin/pre-commit` by path from inside a container. A worktree ships with
+no `.tools/`, and where a host copy IS visible — the main checkout, which
+compose bind-mounts at its host path — its uv shim is unexecutable there. The
+shebang names `.tools/uvx/pre-commit/bin/python`, which the container can see:
+it is a symlink to a uv-managed host interpreter (under `~/.local/share/uv/` by
+default) that no mount carries, so it dangles. The shim therefore passes `-x`
+and still fails to exec, which is why `is_runnable()` in `dev/hooks/pre-commit`
+will not trust `-x` alone and runs `--version` too.
+
 ## Testing
 
 Suites live in `tests/*.sh` and share a harness (`tests/lib/harness.sh`:
