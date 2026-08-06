@@ -415,5 +415,35 @@ taxonomy and reads as `test:`.
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
 - Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift. hadolint additionally carries two per-arch checksums in `install-system.sh` that no test can verify — bump it with `devcontainer bump-hadolint` rather than by hand, and use `devcontainer bump-hadolint --verify` to confirm the committed checksums really are the release's.
 - Any convention that spans two files gets a drift-guard test when it is introduced (existing examples: `tests/test-claude-code-pin-sync.sh`, `tests/test-lint-config-sync.sh`, `tests/test-classic-args-sync.sh`, `tests/test-completions-sync.sh`, `tests/test-dockerignore-lib-allowlist.sh`). A convention only its author knows about will drift.
+  This is followed roughly half the time. Authors do guard couplings they both
+  recognise and scope correctly, at introduction:
+  #41 shipped `tests/test-claude-code-pin-sync.sh` and
+  `tests/test-nix-base-pin.sh` in the same commit as the pins they guard, #55
+  shipped `tests/test-token-env-snippet.sh` with the strip-list coupling, #74
+  shipped `tests/test-worktree-claude-layout.sh` with the layout, #57 shipped
+  `tests/test-devcontainer-sessions.sh` with the Python re-implementation.
+  What escapes splits three ways, and four attempts at a single moral for it
+  were each falsified in review — so it is recorded as a classification, each
+  claim carrying the commit that evidences it.
+  1. **Prose stood in for a guard.** `71b6e03` (#33) added reciprocal "keep in
+     sync" comments at both linter-pin sites plus a Conventions note, and no
+     test; `343632a` states the tail-build rule in `nix-base.yml`'s own header,
+     which then drifted (#86); ADR-0003 recorded the live-`.gitignore`
+     migration that nothing checked (#91).
+  2. **Genuinely unrecognised.** dispatch↔completions carried no sync comment
+     at any revision before `143bbf7` (#72) — checked at `c4b1110`, `96f0eb5`,
+     `fc2ca02` and `143bbf7^`. Nobody wrote it down because nobody saw it.
+  3. **Guarded, but too narrowly for a copy that propagates.** `e54a37e` (#37)
+     shipped the `# match NIX_USER in lib/nix-seed.sh` comment AND
+     `tests/test-init-nix.sh` asserting `EXTRA_PATH` matches `NIX_USER`'s home
+     — a real at-introduction guard, scoped to the scaffold. The committed
+     overlay copies were outside it, and `xorq-desktop`'s carried no NIX_USER
+     mention at all, so #99 was a coverage fix, not a first guard.
+  Review therefore has to do all three jobs: notice the unseen coupling, refuse
+  a comment offered in place of a test, and ask whether a real guard covers
+  every copy. Treat "a comment will do" as never sufficient — normative, not an
+  observed law: `NIX_USER` never actually drifted, and its coverage gap was
+  found by an audit before any incident.
+
 - Guards follow ADR-0005. Type every new invariant's guard (see the Invariants header for the vocabulary). When adding or materially changing a guard, break the invariant once, watch the guard go red, and record the mutation in the test's header comment. Prefer generating the second copy from the first, then deriving the expectation by parsing the source of truth at check time; restate-and-compare is the fallback, not the default.
 - A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume.
