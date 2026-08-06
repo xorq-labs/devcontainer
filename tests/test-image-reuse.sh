@@ -15,9 +15,46 @@
 # suite does for config_files) with docker/dc stubbed. No real docker: `docker
 # image inspect` reads a marker file, `dc build` simulates a slow build. flock
 # is real — the concurrency test genuinely races two processes on one lock.
+# Verified (ADR-0005 §2 pair), second review round: the pairing walk compared
+# against the previous non-blank line only, so `ensure_image && dc_up` and
+# `ensure_image; dc_up` — genuinely paired, and plausible refactors — were
+# FALSE FAILs at 17/1. Admitted explicitly. Detection is unchanged: deleting
+# either call site is 17/1, commenting both out is 16/2, and the form-only
+# signature reformat still holds at 18 (mutation runs 2026-08-04).
+#
+# Known and accepted, per tests/lib/shellsrc.sh's stated limits: dead code
+# satisfies the pairing (`if false; then ensure_image; fi` above a dc_up stays
+# green). A textual guard cannot do reachability; see issue #123.
+#
+# Verified (ADR-0005 §2, review round): presence-only was not enough. DELETING
+# either ensure_image call site — the cold-start one or the recreate arm's —
+# left the suite at 16/0, because assert_contains only needs one. Losing the
+# recreate one means `dc down; dc_up` runs with the new fingerprint tag absent,
+# so compose's fallback build fires unlocked and without ensure_image's
+# nix-base pull or unhashable-refusal. Pairing each dc_up with a preceding
+# ensure_image turns both deletions red (17/1 each), and the form-only
+# reformat still holds at 18 (mutation runs 2026-08-04).
+#
+# Verified (ADR-0005 §2, amended: a mutation PAIR) — PRIOR ROUND, counts as
+# measured on the pre-pairing tree; the block above supersedes them (the same
+# mutations now give 16/2 and 18/0, because the pairing assertions were added):
+#   SEMANTIC, in a form not written here — comment out BOTH `ensure_image` call
+#     sites in ensure_up() (there are two, and disabling one leaves the other
+#     genuinely calling it). On main's version of this suite that is 14 passed /
+#     0 failed: `assert_contains` matched the commented-out text and no image
+#     would be built before `dc up`. Now 15/1, FAIL "ensure_up makes the image
+#     present via ensure_image".
+#   FORM-ONLY — reformat `ensure_up()` to `ensure_up ()`, and separately
+#     `dc_up()` to `dc_up ()` (both valid bash, both shellcheck-clean). The
+#     suite stays green at 16 assertions, unchanged. Against the old hand-rolled
+#     `sed -n '/^ensure_up()/,/^}$/p'` each reformat emptied the body and turned
+#     an assertion red for the wrong reason (13/1).
+#   (mutation runs 2026-08-04)
+#
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+. "$(dirname "$(readlink -f "$0")")/lib/shellsrc.sh"
 
 DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 DC="$DEV_BASE/dev/devcontainer"
@@ -128,9 +165,41 @@ assert_true "race leaves the ref present" [ -f "$st/present" ]
 # Guards the exact refactor: the image is made present before the container
 # starts, and `up` itself no longer builds.
 echo "--- wiring: ensure_image before dc_up, no --build in up ---"
-ensure_up_body="$(sed -n '/^ensure_up()/,/^}$/p' "$DC")"
-assert_contains "ensure_up makes the image present via ensure_image" "ensure_image" "$ensure_up_body"
-dc_up_body="$(sed -n '/^dc_up()/,/^}$/p' "$DC")"
+# Comment-stripped, and via the shared extractor: `assert_contains` on the raw
+# body matched a COMMENTED-OUT call, so `# ensure_image (disabled)` passed at
+# 14/0 with no image built before `dc up` on a cold start.
+ensure_up_body="$(shell_function_body "$DC" ensure_up || true)"
+assert_nonempty "ensure_up() body extracted from dev/devcontainer" "$ensure_up_body"
+ensure_up_live="$(shell_strip_comments <<<"$ensure_up_body")"
+assert_contains "ensure_up makes the image present via ensure_image" "ensure_image" "$ensure_up_live"
+# Presence is not enough: ensure_up() has TWO dc_up paths — cold start, and the
+# recreate arm — each with its own ensure_image. Asserting the name merely
+# appears let either site be DELETED while the other kept the guard green, and
+# losing the recreate one means `dc down; dc_up` runs with the new fingerprint
+# tag absent, so compose's fallback build fires unlocked and without
+# ensure_image's nix-base pull or unhashable-refusal. Pair them instead, with
+# both counts derived from the body.
+_paired=0; _unpaired=0; _prev=""
+while IFS= read -r _line; do
+    case "$_line" in
+        # Both on one line (`ensure_image && dc_up`, `ensure_image; dc_up`) is a
+        # plausible refactor and genuinely paired; the _prev walk cannot see it.
+        *ensure_image*dc_up*) _paired=$((_paired + 1)) ;;
+        *dc_up*)
+            case "$_prev" in
+                *ensure_image*) _paired=$((_paired + 1)) ;;
+                *) _unpaired=$((_unpaired + 1)) ;;
+            esac
+            ;;
+    esac
+    [ -n "${_line//[[:space:]]/}" ] && _prev="$_line"
+done <<<"$ensure_up_live"
+assert_true "ensure_up() has at least one dc_up call site" \
+    test "$((_paired + _unpaired))" -gt 0
+assert_eq "every dc_up in ensure_up() is preceded by ensure_image" "0" "$_unpaired"
+dc_up_body="$(shell_function_body "$DC" dc_up || true)"
+assert_nonempty "dc_up() body extracted from dev/devcontainer" "$dc_up_body"
+dc_up_body="$(shell_strip_comments <<<"$dc_up_body")"
 if grep -q 'dc up -d' <<< "$dc_up_body"; then
     _pass "dc_up starts the container with 'dc up -d'"
 else
