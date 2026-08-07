@@ -207,7 +207,11 @@ taxonomy and reads as `test:`.
   and it resolves versions from the GitHub /tags endpoint because NixOS/nix
   publishes no releases; /releases/latest 404s, which left the tool dead — and
   the coupling unguarded — for as long as nothing ran it against the real
-  network (#126) (tool: dev/bump-nix; test: tests/test-bump-nix.sh).
+  network (#126). It takes the highest stable `X.Y.Z`, not the first entry
+  (GitHub guarantees no /tags ordering), and refuses to resolve BACKWARDS — a
+  truncated listing would otherwise rewrite the pair older, with a valid
+  checksum, and call it a bump; an explicit version still downgrades on
+  request (tool: dev/bump-nix; test: tests/test-bump-nix.sh).
 - `HADOLINT_VERSION` and BOTH per-arch checksums (`HADOLINT_SHA256_AMD64`,
   `HADOLINT_SHA256_ARM64`) in `projects/devcontainer/install-system.sh` are a
   coupled triple, and the `.pre-commit-config.yaml` hadolint rev is a fourth

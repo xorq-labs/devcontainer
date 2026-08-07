@@ -4,7 +4,7 @@ set -euo pipefail
 # Bump the pinned Nix version in lib/nix-seed.sh.
 #
 # Usage:
-#   devcontainer bump-nix            # bump to the latest Nix release
+#   devcontainer bump-nix            # bump to the highest upstream tag
 #   devcontainer bump-nix 2.29.1     # pin an explicit version
 #   devcontainer bump-nix --check    # report current vs latest, don't edit
 #
@@ -43,12 +43,14 @@ fi
 
 # Resolve the latest stable Nix version from the GitHub tags endpoint.
 # NixOS/nix publishes NO GitHub releases — /releases is empty and
-# /releases/latest 404s (#126) — so versions exist only as tags. The endpoint
-# orders tags by creation, and a maintenance backport (2.34.8 tagged after
-# 2.35.0) makes "first entry" the wrong answer, so pick the highest
-# stable-shaped X.Y.Z instead; prereleases (2.36.0-rc1) are not pin
-# candidates. On failure print nothing and let the empty-result check below
-# produce a clean error.
+# /releases/latest 404s (#126) — so versions exist only as tags.
+#
+# Take the highest stable-shaped X.Y.Z, not the first entry: GitHub guarantees
+# no ordering for /tags. Prereleases (2.36.0-rc1) are not pin candidates, and
+# neither are the two-component tags upstream used through 2.4 — the pin and
+# the installer URL both want X.Y.Z, and if that scheme returns, the backwards
+# guard below turns a stale answer into a loud one. On failure print nothing
+# and let the empty-result check below produce a clean error.
 latest_version() {
     curl -sf "https://api.github.com/repos/NixOS/nix/tags?per_page=100" 2>/dev/null \
         | python3 -c 'import json, re, sys
@@ -80,6 +82,18 @@ if ! [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)*$ ]]; then
     exit 1
 fi
 
+# Resolution may only move the pin FORWARD: a listing that came back truncated
+# or reordered would otherwise fail silently, since the older installer really
+# downloads and its checksum really computes — a backwards rewrite reported as
+# a bump. An explicit version is a deliberate act, downgrades included.
+if [ -z "$target" ] && [ "$current" != "$new" ] \
+    && [ "$(printf '%s\n%s\n' "$current" "$new" | sort -V | head -n1)" = "$new" ]; then
+    echo "error: resolved latest $new is older than the committed pin $current" >&2
+    echo "       (the tag listing is truncated or unordered — pass an explicit" >&2
+    echo "        version to move the pin deliberately)" >&2
+    exit 1
+fi
+
 # --check reports the current/target versions and never edits, whether or not
 # they already match.
 if $check_only; then
@@ -99,7 +113,7 @@ fi
 
 if [ "$current" = "$new" ]; then
     echo "Nix already pinned to $current${target:+ (requested)}"
-    [ -n "$target" ] || echo "(latest release)"
+    [ -n "$target" ] || echo "(highest upstream tag)"
     exit 0
 fi
 

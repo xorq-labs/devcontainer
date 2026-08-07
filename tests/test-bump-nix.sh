@@ -10,18 +10,28 @@
 # no GitHub releases, so /releases/latest 404s and only /tags answers; any
 # other api.github.com URL fails in the stub exactly as it does live, #126)
 # and releases.nixos.org (installer download, deterministic per-URL content so
-# the expected sha256 is computable in the test). The stubbed tag list carries
-# the two live traps: a maintenance backport tagged after the newest stable
-# (creation order != version order) and a higher-numbered prerelease (not a
-# pin candidate).
+# the expected sha256 is computable in the test). The stubbed tag list is
+# deliberately not version-ordered and carries a higher-numbered prerelease
+# and a leading-v tag: the resolver may assume neither position nor shape.
 #
 # Mutation used to prove the resolution guard fails (ADR-0005): point
 # latest_version() in dev/bump-nix back at /releases/latest (the pre-#126
 # endpoint, which the stub 404s exactly as the real repo does). Observed red:
 # the latest-tag bump test (exit 0 / reports the bump / version pin updated /
-# sha pin updated in lockstep) and every --check that must resolve a latest
-# version (exit 0 / shows current / shows latest / notes up to date).
-#   Results: 36 passed, 9 failed
+# sha pin updated in lockstep), every --check that must resolve a latest
+# version (exit 0 / shows current / shows latest / notes up to date), and the
+# backwards guard's message, which never gets reached.
+#   Results: 43 passed, 10 failed
+#
+# Mutation used to prove the backwards-resolution guard fails: delete the
+# `resolved latest ... is older than the committed pin` block from
+# dev/bump-nix. Observed red:
+#   FAIL: --check refuses a backwards resolution
+#   FAIL: and names both versions
+#   FAIL: a default bump also fails
+#   FAIL: version pin untouched
+#   FAIL: sha untouched
+#   Results: 48 passed, 5 failed
 set -euo pipefail
 
 # --- inlined test harness ---------------------------------------------------
@@ -97,7 +107,7 @@ SRC="$DEV_BASE/dev/bump-nix"
 SANDBOX="$(mktemp -d)"
 _cleanup_dirs+=("$SANDBOX")
 mkdir -p "$SANDBOX/dev" "$SANDBOX/lib" "$SANDBOX/bin" "$SANDBOX/bin-badnet" \
-    "$SANDBOX/bin-noapi"
+    "$SANDBOX/bin-noapi" "$SANDBOX/bin-stale"
 cp "$SRC" "$SANDBOX/dev/bump-nix"
 BUMP="$SANDBOX/dev/bump-nix"
 SEEDLIB="$SANDBOX/lib/nix-seed.sh"
@@ -115,9 +125,9 @@ for a in "$@"; do
     esac
 done
 case "$url" in
-    # Only /tags answers, like the real repo: a backport tagged after the
-    # newest stable, a higher prerelease, and a leading-v tag are all traps
-    # the resolver must step around to land on 9.9.9.
+    # Only /tags answers, like the real repo — and not in version order: the
+    # first entry is not the highest, a higher prerelease sits above the
+    # answer, and the answer itself carries a leading v. All land on 9.9.9.
     *api.github.com/repos/NixOS/nix/tags*)
         printf '[{"name":"9.8.10"},{"name":"10.0.0-rc1"},{"name":"v9.9.9"},{"name":"9.9.8"}]\n' ;;
     *api.github.com*) exit 22 ;;
@@ -146,7 +156,33 @@ cat > "$SANDBOX/bin-noapi/curl" <<'EOF'
 #!/usr/bin/env bash
 exit 6
 EOF
-chmod +x "$SANDBOX/bin/curl" "$SANDBOX/bin-badnet/curl" "$SANDBOX/bin-noapi/curl"
+# The endpoint answers, but with nothing newer than the pin — what a truncated
+# or reordered listing looks like from here. Installer downloads still work,
+# so only the guard stands between this and a valid-checksum backwards rewrite.
+cat > "$SANDBOX/bin-stale/curl" <<'EOF'
+#!/usr/bin/env bash
+out=""
+url=""
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "-o" ]; then out="$a"; prev=""; continue; fi
+    case "$a" in
+        -o) prev="-o" ;;
+        http*) url="$a" ;;
+    esac
+done
+case "$url" in
+    *api.github.com/repos/NixOS/nix/tags*)
+        printf '[{"name":"0.9.1"},{"name":"0.9.0"}]\n' ;;
+    *releases.nixos.org*)
+        content="fake installer for $url"
+        if [ -n "$out" ]; then printf '%s\n' "$content" > "$out"; else printf '%s\n' "$content"; fi
+        ;;
+    *) exit 22 ;;
+esac
+EOF
+chmod +x "$SANDBOX/bin/curl" "$SANDBOX/bin-badnet/curl" "$SANDBOX/bin-noapi/curl" \
+    "$SANDBOX/bin-stale/curl"
 
 # Expected sha for a given version = sha of the stub's deterministic content.
 expected_sha() {
@@ -185,6 +221,12 @@ run_bump_noapi() {
     rc=$?
     set -e
 }
+run_bump_stale() {
+    set +e
+    out="$(PATH="$SANDBOX/bin-stale:$PATH" "$BUMP" "$@" 2>&1)"
+    rc=$?
+    set -e
+}
 
 # ---------- test: default bump to latest tag ----------
 echo "--- bump-nix (default: latest tag) ---"
@@ -210,6 +252,26 @@ run_bump_noapi
 assert_eq "a default bump also fails" "1" "$rc"
 assert_eq "and writes neither half of the pin" "1.0.0" "$(pin_version)"
 assert_eq "sha untouched too" "$OLD_SHA" "$(pin_sha)"
+
+# ---------- test: a backwards resolution fails loudly ----------
+# Everything downstream succeeds on its own terms — the older installer
+# exists, its checksum computes — so without the guard the pair is rewritten
+# BACKWARDS and reported as a bump. Only resolution is constrained; an
+# explicit version still downgrades on request.
+echo "--- bump-nix (resolved latest older than the pin) ---"
+write_seedlib "1.0.0" "$OLD_SHA"
+run_bump_stale --check
+assert_true "--check refuses a backwards resolution" test "$rc" -ne 0
+assert_contains "and names both versions" \
+    "resolved latest 0.9.1 is older than the committed pin 1.0.0" "$out"
+run_bump_stale
+assert_eq "a default bump also fails" "1" "$rc"
+assert_eq "version pin untouched" "1.0.0" "$(pin_version)"
+assert_eq "sha untouched" "$OLD_SHA" "$(pin_sha)"
+run_bump_stale "0.9.1"
+assert_eq "an explicit downgrade is still allowed" "0" "$rc"
+assert_eq "pin moved backwards on request" "0.9.1" "$(pin_version)"
+assert_eq "sha in lockstep with the explicit version" "$(expected_sha 0.9.1)" "$(pin_sha)"
 
 # ---------- test: explicit version ----------
 echo "--- bump-nix (explicit version) ---"
