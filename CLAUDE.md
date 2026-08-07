@@ -337,6 +337,25 @@ taxonomy and reads as `test:`.
   a `.gitignore` entirely (unguarded: ephemeral and harness-managed; nothing
   authors agent files there, and the commit-time hook still fires if one
   does).
+- The host bridge owns git identity and git credentials as a pair: `setup_git`
+  copies name/email, and `setup_gh` must wire the credential helper
+  (`gh auth setup-git`) — bridge only the `hosts.yml` and `gh auth status`
+  reads green in every container while `git push` over HTTPS fails. The rule is
+  WHEREVER GH CAN AUTHENTICATE AT ALL, not wherever a file was bridged: gh
+  authenticates from a `hosts.yml` OR from `GH_TOKEN`/`GITHUB_TOKEN`, and
+  `gh auth git-credential` serves either. Scoping the wiring to the copy path
+  instead — as this first shipped — silently excluded two configurations the
+  copy half returns early on: the tokenless abort (#136), a documented recovery
+  state that deliberately leaves the container on `GH_TOKEN`, and mountless
+  runtimes (CI, Codespaces) that bridge nothing. Hence the split into
+  `gh_bridge_hosts_config` with the wiring after it. The gate runs INSIDE the
+  container in the SAME `dc_exec` as the action — only the container sees its
+  own `GH_TOKEN`, which nothing here sets — so those paths cost one round trip,
+  not a probe plus one. Exiting 0 when neither holds is a noise guard, not
+  safety: gh refuses by itself, so the alternative is a warning on every entry
+  naming nothing actionable. The container's `~/.gitconfig` is ephemeral, so
+  the helper re-applies every entry; repeats are free (`--replace-all`)
+  (test: tests/test-host-bridge-gh.sh).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).

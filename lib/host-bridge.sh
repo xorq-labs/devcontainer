@@ -463,7 +463,11 @@ gh_hosts_with_token() {
     '
 }
 
-setup_gh() {
+# Copy half of setup_gh: bridge the host's hosts.yml, filling keyring tokens.
+# Split out from setup_gh so the credential-helper half below runs on EVERY
+# outcome — this half has three (bridged, aborted, nothing to bridge) and two of
+# them return early.
+gh_bridge_hosts_config() {
     local hosts="$HOME/.config/gh/hosts.yml"
     [ -f "$hosts" ] || return 0
 
@@ -512,6 +516,31 @@ setup_gh() {
     # docker cp preserves host UID; explicit chown makes us robust to
     # base images that don't honor USER_UID build args.
     dc exec -u root app chown vscode:vscode /home/vscode/.config/gh/hosts.yml
+}
+
+setup_gh() {
+    gh_bridge_hosts_config
+
+    # Bridging hosts.yml authenticates the `gh` CLI only — git gets no
+    # credential helper, so `git push` over HTTPS fails while `gh auth status`
+    # reads green. `gh auth setup-git` over a hand-written credential.<host>
+    # .helper: it wires every host gh knows and keeps the token off disk. The
+    # container's ~/.gitconfig is ephemeral, so this re-applies every entry;
+    # repeats are free (gh writes it with --replace-all).
+    #
+    # Wired wherever gh can authenticate AT ALL, not only where we bridged a
+    # file: an env-token-only container gets a working helper, and both the
+    # tokenless abort above and mountless runtimes (CI) land exactly there. The
+    # gate runs in the container (only it sees its own GH_TOKEN) and in the SAME
+    # exec as the action, so covering those paths costs one round trip, not two.
+    # Exiting 0 when neither holds is a NOISE guard, not safety — gh refuses by
+    # itself; the warning would just fire every entry naming nothing actionable.
+    dc_exec sh -c '
+        [ -f /home/vscode/.config/gh/hosts.yml ] ||
+            [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] ||
+            exit 0
+        exec gh auth setup-git
+    ' || echo "warning: 'gh auth setup-git' failed in the container — git push over HTTPS won't authenticate" >&2
 }
 
 setup_claude_credentials() {
