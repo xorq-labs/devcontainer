@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Tests for the guarded named-volume chown (lib/volume-perms.sh, driven by
-# chown_named_volume_targets in dev/devcontainer). Exercises the GUARD DECISION
-# in isolation — no docker, no root, no real volume — by sourcing the shipped lib
-# and stubbing `chown` on PATH so every invocation is recorded instead of
-# performed. `stat` is NOT stubbed: the ownership probe runs for real against
-# temp dirs the suite owns.
+# Tests for the guarded mount-point chown (lib/volume-perms.sh, driven by
+# chown_mount_points in dev/devcontainer). Exercises the GUARD DECISION and the
+# bind/volume DISPATCH in isolation — no docker, no root, no real volume — by
+# sourcing the shipped lib and stubbing `chown` on PATH so every invocation is
+# recorded instead of performed. `stat` is NOT stubbed: the ownership probe runs
+# for real against temp dirs the suite owns.
 #
 # Modelling the two states without root: the guard compares owner/group NAMES,
 # so a name that cannot match any real owner ("$MISMATCH_OWNER") models a fresh
@@ -20,7 +20,75 @@
 #   4. ancestor walking stops at the home prefix and never leaves it
 #   5. `chown -R` is post-order, the invariant the guard rests on: an interrupted
 #      run leaves the mount point unchowned, so it can't be read as completed
-#   6. the dev/devcontainer driver line still matches the lib's function
+#   6. bind/volume dispatch: a bind gets its daemon-created ancestors repaired
+#      but is never DISPATCHED into the recursive branch, a volume still gets
+#      both, an unknown kind gets nothing
+#   7. the ANCESTOR WALK never lands a chown on a bind mount point or on
+#      anything under one, including when one bind nests inside another
+#      (DEV_MAIN_GIT inside DEV_MAIN_TREE, and the deeper host-mounts.txt
+#      shape) — those paths are the host side of the mount. The RECURSIVE
+#      branch is not covered by any of that and the suite says so: a bind
+#      nested under a volume is still reached, pinned as current behaviour
+#      (#115)
+#   8. the compose query emits kind-qualified volume AND bind targets, checked
+#      by running dev/devcontainer's own python snippet against a document
+#   9. the dev/devcontainer driver line still matches the lib's function
+#
+# Verified (ADR-0005 §2), seven mutations. Counts and assertion names below are
+# transcribed from the runs — see the METHOD note at the end, because three
+# earlier versions of this record were wrong.
+#   1. mount_point_targets' filter reverted to the pre-#106 `type == "volume"`
+#      — 3 red: "the compose query emits BIND targets too (the #106 fix)", the
+#      kind-set anti-vacuity assertion (the generic extraction finds no
+#      `in (...)` tuple at all), and the kind-set comparison. Item 8 is the
+#      only thing that sees the compose query; everything else drives the lib.
+#   2. the `_vp_is_protected` check dropped from dev_chown_ancestors — 6 red,
+#      all in item 7.
+#   3. the `bind)` dispatch arm routed to dev_chown_volume_targets — 1 red,
+#      "a bind target is never recursed into". NOT the deep-nesting assertions:
+#      they are line-anchored on `<owner> <path>` and this mutation logs
+#      `-R <owner> <path>`, a different whole line. Coverage for this mutation
+#      is exactly one assertion, which is worth knowing before relying on it.
+#   4. the `_vp_never_chown=""` reset deleted, leaking the exclusion set into a
+#      later direct dev_chown_volume_targets call — 1 red, "a direct
+#      volume-targets call does not inherit protections". That assertion was
+#      FAIL-OPEN as first written (assert_contains with a needle that is a
+#      PREFIX of the recursive line): it passed with the leak live and the
+#      suite stayed at 41/0. Found in review, not by me.
+#   5. the under-a-bind arm of _vp_is_protected removed, leaving exact-match
+#      only — 1 red, "a directory INSIDE a bind is not chowned (not just the
+#      mount point)".
+#   6. the ancestor walk changed to `break` at a protected bind instead of
+#      skipping past it — 1 red, "the walk continues PAST a protected bind to
+#      the dirs above it". That assertion was ALSO fail-open until this round:
+#      it read the log of a call where the protected bind was itself an
+#      argument, so its own walk chowned everything above it and the assertion
+#      passed either way. It now drives dev_chown_ancestors directly with a
+#      hand-filled exclusion set. (Skip and break are outcome-equivalent for
+#      every input reachable through dev_chown_mount_points, so this pins a
+#      documented behaviour rather than fixing a live bug.)
+#   7. the whole `bind)` dispatch arm deleted — 3 red, including the kind-set
+#      comparison, which is what proves that guard derives both sides rather
+#      than restating a vocabulary.
+#
+# METHOD: measure each mutation in a FRESH copy of the tree, and transcribe the
+# numbers from the run rather than reasoning about them. Three earlier versions
+# of this record were wrong — counts inflated, and one mutation credited with
+# reds belonging to another.
+#
+# What is established: hand-measured counts taken from a single scratch copy
+# reused across mutations disagreed with counts re-measured one-copy-per-
+# mutation, and the latter reproduce. What is NOT established is why the reused
+# copy drifted: an earlier draft of this note blamed `git checkout` failing to
+# restore in a `cp -a` copy of a linked worktree, and that does not reproduce —
+# the copy's gitdir resolves and the restore works. Something else in that loop
+# accumulated state. The prescription stands on the reproducibility of the
+# fresh-copy numbers, not on the diagnosis.
+#
+# tests/mutation-coverage automates this (fresh copy per mutation, plus it
+# flags a mutation that changed nothing). It is not in this tree — it ships on
+# the branch behind PR #124.
+#   (mutation runs 2026-08-04)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -56,7 +124,7 @@ run() {
 
 log() { cat "$CHOWN_LOG"; }
 
-echo "=== named-volume chown guard tests ==="
+echo "=== mount-point chown guard tests ==="
 
 # ---- 1. the guard decision ----
 home="$tmp/home/vscode"
@@ -153,22 +221,229 @@ else
         "'$order_root/sub/file'" "${order_lines[0]}"
 fi
 
-# ---- 6. the dev/devcontainer driver line matches the lib ----
-# chown_named_volume_targets injects the lib into the container and appends this
+# ---- 6. bind vs volume dispatch: a bind is never recursed into ----
+# The daemon creates a mount target's missing parents as root for binds exactly
+# as for volumes (~/.claude/projects, hosting the transcript bind under the
+# claude-home volume), so those ancestors must be repaired. Recursing into the
+# target itself must NOT happen for a bind: the walk would cross into the host
+# side and rewrite ownership there.
+#
+# Both cases use MISMATCH_OWNER so the guard would ALLOW the recursion — the
+# bind case therefore proves dispatch, not a guard that happened to skip.
+run_mp() {
+    : >"$CHOWN_LOG"
+    dev_chown_mount_points "$@"
+}
+
+mp_home="$tmp/mp/vscode"
+mp_target="$mp_home/.claude/projects/-devcontainer-x"
+mkdir -p "$mp_target"
+
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "bind:$mp_target"
+assert_not_contains "a bind target is never recursed into" "-R " "$(log)"
+# Line-anchored: this needle is a strict PREFIX of the bind-target line
+# ("… /projects" vs "… /projects/-devcontainer-x"), so assert_contains passes
+# on a mutant that chowns the target instead of its parent — verified. Third
+# instance of that trap in this file; the neighbours below are anchored for the
+# same reason.
+assert_true "a bind target's daemon-created parent is chowned" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/.claude/projects" "$CHOWN_LOG"
+assert_false "a bind target itself is not chowned" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $mp_target" "$CHOWN_LOG"
+
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "volume:$mp_target"
+assert_contains "a volume target still gets the recursive chown" \
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mp_target" "$(log)"
+# Line-anchored for the same reason as the direct-call assertion at the end of
+# item 7: the recursive line `-R <owner> <mp_target>` contains this needle as a
+# substring, so assert_contains here would pass with the ancestor walk removed.
+assert_true "a volume target's ancestors are still chowned" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/.claude/projects" "$CHOWN_LOG"
+
+# An unrecognised kind must fall through to nothing: the recursive branch is the
+# destructive one, so a mount type the lib has not been taught about (tmpfs,
+# npipe, cluster) must not reach it by default.
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "tmpfs:$mp_target"
+assert_eq "an unknown mount kind is skipped entirely" "" "$(log)"
+
+# An entry with no kind separator at all is skipped for the same reason.
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "$mp_target"
+assert_eq "an unqualified target (no <kind>: prefix) is skipped" "" "$(log)"
+
+# ---- 7. a bind mount point is never chowned, however it is reached ----
+# docker-compose.yml mounts DEV_MAIN_TREE and DEV_MAIN_GIT at their HOST paths,
+# and <tree>/.git nests inside <tree>. On a host whose checkout lives under the
+# container home prefix (a host user named `vscode`; Codespaces), walking up
+# from the .git bind reaches the worktree bind — which is the host side of a
+# mount, i.e. the user's real repo directory. It must be skipped, while the
+# walk continues past it to the container-side dirs above.
+tree="$mp_home/repos/proj"
+gitdir="$tree/.git"
+mkdir -p "$gitdir"
+
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "bind:$tree" "bind:$gitdir"
+assert_false "a nested bind's parent bind is never chowned" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $tree" "$CHOWN_LOG"
+
+# "Continues past" needs the protected bind to NOT be in the argument list —
+# otherwise its own walk chowns everything above it and the assertion passes
+# whether the walk skips or breaks. Verified: mutating the skip to a `break`
+# left the suite fully green before this was rewritten. So drive the walk
+# directly with a hand-filled exclusion set naming a bind that is not an
+# argument.
+: >"$CHOWN_LOG"
+# shellcheck disable=SC2154  # _vp_nl comes from the sourced lib above; building
+# the set with the lib's own delimiter is the point — a literal newline here
+# would stop tracking it if the lib ever changed delimiters.
+_vp_never_chown="$_vp_nl$tree$_vp_nl"
+dev_chown_ancestors "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "$gitdir"
+_vp_never_chown=""
+assert_true "the walk continues PAST a protected bind to the dirs above it" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/repos" "$CHOWN_LOG"
+assert_false "...while still not chowning the protected bind itself" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $tree" "$CHOWN_LOG"
+
+# Protection is order-independent: the bind targets are collected in a first
+# pass, so it holds whichever order compose emits them in.
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "bind:$gitdir" "bind:$tree"
+assert_false "protection does not depend on argument order" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $tree" "$CHOWN_LOG"
+# Paired positive: without it the negative above passes on an empty log, so a
+# run that chowned NOTHING would read as a protected one (the #95-#97 shape).
+assert_contains "reversed order still repairs the container-side ancestor" \
+    "$MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/repos" "$(log)"
+
+# A bind nesting TWO levels under another bind: the intermediate directory is
+# inside the outer bind, so it is host-side even though it is not itself a mount
+# point. An exact-match-only protection would chown it. Not reachable from
+# docker-compose.yml (which nests one level, <tree>/.git under <tree>) but
+# reachable from host-mounts.txt, which takes arbitrary <host>:<container>.
+deep_outer="$mp_home/data"
+deep_inner="$deep_outer/secrets/keys"
+mkdir -p "$deep_inner"
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" \
+    "bind:$deep_outer" "bind:$deep_inner"
+assert_false "a directory INSIDE a bind is not chowned (not just the mount point)" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $deep_outer/secrets" "$CHOWN_LOG"
+assert_false "the outer bind mount point is still not chowned" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $deep_outer" "$CHOWN_LOG"
+
+# Same for a volume nested inside a bind (a venv volume under the worktree):
+# the volume is recursed into, its bind parent still is not.
+venv="$tree/.venv"
+mkdir -p "$venv"
+run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "bind:$tree" "volume:$venv"
+assert_contains "a volume nested in a bind is still recursed into" \
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $venv" "$(log)"
+assert_false "a volume's ancestor walk also skips the bind mount point" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $tree" "$CHOWN_LOG"
+
+# The SHIPPED direction, pinned honestly: a bind nested UNDER a volume is still
+# reached by the recursion. `chown -R` has no mount awareness, and
+# _vp_never_chown is consulted by dev_chown_ancestors alone, so the recursive
+# branch descends through the bind — the claude-home / transcript-bind topology.
+# This asserts what the code DOES, not what it should do; #115 tracks the fix
+# and this assertion is its red-to-green target. Item 7's other cases cover the
+# opposite nesting (a volume under a bind), which is the safe one — without this
+# the suite would read as having covered both.
+#
+# What it actually observes, stated plainly: `chown` is STUBBED here, so this
+# witnesses the unpruned `chown -R` being INVOKED on a volume that contains a
+# bind — not the descent itself, which a stub cannot see. That invocation is the
+# observable proxy, and it is sufficient as a red-to-green target: both
+# candidate #115 fixes flip it (a pruned `find` emits no `-R` line at all).
+assert_contains "a volume containing a bind still gets the unpruned chown -R (#115)" \
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/.claude" "$(
+        : >"$CHOWN_LOG"
+        dev_chown_mount_points "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" \
+            "volume:$mp_home/.claude" "bind:$mp_target"
+        log
+    )"
+
+# The protection is scoped to the dispatching call: dev_chown_volume_targets is
+# still a usable entry point on its own and must not inherit a stale exclusion
+# set from a previous dev_chown_mount_points call.
+run "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "$venv"
+# grep -qxF, NOT assert_contains: "$tree" is a PREFIX of "$venv", so a substring
+# check is satisfied by the recursive line `-R <owner> <tree>/.venv` and passes
+# even when the exclusion set leaks — the very leak this asserts against.
+# (Mutation: delete the `_vp_never_chown=""` reset and the substring form stays
+# green at 41/0. The line-anchored form goes red. Same trap the ancestor-walk
+# assertions above already avoid.)
+assert_true "a direct volume-targets call does not inherit protections" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $tree" "$CHOWN_LOG"
+
+# ---- 8. the compose query emits kind-qualified volume AND bind targets ----
+# Derived, not restated: the python snippet is lifted out of mount_point_targets
+# in dev/devcontainer and run against a synthetic `docker compose config`
+# document, so a narrowed filter there fails HERE rather than only in a
+# container. `dc config` itself needs docker, which this suite does not have —
+# the snippet is the part that can be run hermetically.
+# `|| true` so an extraction that yields nothing reaches the anti-vacuity
+# assertion below. Without it a failing pipeline exits nonzero through this
+# substitution and `set -e` kills the suite AT THE ASSIGNMENT — the failure
+# channel becomes an undiagnosed abort, and the assertion written for exactly
+# that case never runs.
+query="$(awk "/python3 -c '\$/{f=1; next} f && /^'\$/{exit} f" "$DEV_BASE/dev/devcontainer" || true)"
+assert_true "the compose-query snippet was extracted from dev/devcontainer" \
+    test -n "$query"
+
+compose_json='{"services": {"app": {"volumes": [
+    {"type": "volume", "source": "claude-home", "target": "/home/vscode/.claude"},
+    {"type": "bind", "source": "/host/logs", "target": "/home/vscode/.claude/projects/-k"},
+    {"type": "tmpfs", "target": "/home/vscode/.claude/shell-snapshots"},
+    {"type": "volume", "source": "no-target"}
+]}}}'
+emitted="$(printf '%s' "$compose_json" | python3 -c "$query")"
+assert_contains "the compose query emits volume targets, kind-qualified" \
+    "volume:/home/vscode/.claude" "$emitted"
+assert_contains "the compose query emits BIND targets too (the #106 fix)" \
+    "bind:/home/vscode/.claude/projects/-k" "$emitted"
+assert_not_contains "the compose query skips mount kinds the lib cannot dispatch" \
+    "tmpfs:" "$emitted"
+assert_not_contains "the compose query skips a mount with no target" \
+    "no-target" "$emitted"
+
+# The mount kinds the query emits and the kinds the lib dispatches on are a
+# two-file coupling, so per the repo convention it gets a drift guard — and a
+# DERIVED one (ADR-0005): both sides are parsed out of their own source rather
+# than restated here. A kind emitted but not dispatched is silently skipped; a
+# kind dispatched but never emitted is dead code.
+# Both sides are parsed GENERICALLY — no vocabulary is written down here.
+# Enumerating the known kinds (volume|bind|tmpfs|npipe|cluster) made this a
+# third restatement: Compose's `image` mount type (v2.35+) was absent from it,
+# so a filter gaining "image" with no dispatcher arm would be invisible to both
+# extractions and the sets would stay equal. `|| true` so an extraction that
+# matches nothing reaches the anti-vacuity assertions below instead of aborting
+# the suite at the assignment.
+emitted_kinds="$(printf '%s\n' "$query" | grep -oE 'in \([^)]*\)' |
+    grep -oE '"[a-z]+"' | tr -d '"' | sort -u | tr '\n' ' ' || true)"
+dispatched_kinds="$(sed -n '/^dev_chown_mount_points()/,/^}/p' "$DEV_BASE/lib/volume-perms.sh" |
+    grep -oE '^[[:space:]]+[a-z]+\)$' |
+    tr -d ' )' | sort -u | tr '\n' ' ' || true)"
+assert_true "the compose query's kind set was parsed out of dev/devcontainer" \
+    test -n "$emitted_kinds"
+assert_true "the dispatcher's kind set was parsed out of lib/volume-perms.sh" \
+    test -n "$dispatched_kinds"
+assert_eq "every kind the query emits is a kind the lib dispatches on" \
+    "$emitted_kinds" "$dispatched_kinds"
+
+# ---- 9. the dev/devcontainer driver line matches the lib ----
+# chown_mount_points injects the lib into the container and appends this
 # exact line; a rename on either side would otherwise fail only at runtime.
-driver='dev_chown_volume_targets vscode vscode /home/vscode "$@"'
+driver='dev_chown_mount_points vscode vscode /home/vscode "$@"'
 assert_true "dev/devcontainer drives the lib's function with (vscode, vscode, /home/vscode, \$@)" \
     grep -qF "$driver" "$DEV_BASE/dev/devcontainer"
 
 # The injected script must be valid POSIX sh and must pick the mount points out
 # of "$@" — the `sh -c <script> <argv0> <args...>` convention the caller relies
-# on. Composed here the same way chown_named_volume_targets composes it.
+# on. Composed here the same way chown_mount_points composes it.
 script="$(cat "$DEV_BASE/lib/volume-perms.sh")
 $driver"
 assert_true "injected script parses as POSIX sh" sh -n -c "$script"
 
 : >"$CHOWN_LOG"
-sh -c "$script" volume-perms "/home/vscode/.cache/uv"
+sh -c "$script" volume-perms "volume:/home/vscode/.cache/uv"
 # assert_contains, not assert_eq: the guard probes the REAL /home/vscode/.cache/uv,
 # so on a machine where that path exists with a non-vscode owner a chown -R line
 # is also (correctly) logged. Only the unconditional ancestor chown is
