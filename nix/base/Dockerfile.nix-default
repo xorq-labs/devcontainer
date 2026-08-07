@@ -58,7 +58,11 @@ COPY audit-hook /usr/local/bin/audit-hook
 COPY lib/git.sh /usr/local/lib/devcontainer/git.sh
 COPY lib/claude-code-token-env.sh /usr/local/lib/devcontainer/claude-code-token-env.sh
 COPY --from=project setup-env.sh /usr/local/bin/setup-env
-RUN chmod +x /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
+# An ABSOLUTE mode, never `+x` — mirrors the root Dockerfile's tail. COPY preserves
+# the source's mode and setup-env.sh comes from a project overlay, so a 0700 source
+# (umask 0077) plus `chmod +x` lands as 0711 and vscode cannot read it to run it
+# (#129).
+RUN chmod 755 /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
 
 # Same setup-token injection as the root Dockerfile (ADR-0002): the nix base is
 # the DEFAULT route for non-seed overlays, and the `devcontainer claude` wrapper

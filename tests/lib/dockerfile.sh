@@ -33,6 +33,41 @@ dockerfile_copy_sources() {
     _dockerfile_copy_sources "$1" all
 }
 
+# dockerfile_copy_dests <dockerfile>
+#
+# Emit the DESTINATION path of every COPY, from the default context and from
+# `--from=<ctx>` alike. Sources answer "what inputs can change the image"; the
+# mode guard needs the other end — what the file becomes once it lands, which is
+# the thing a mode applies to.
+dockerfile_copy_dests() {
+    local line
+    while IFS= read -r line; do
+        # Globbing off for the same reason as the source parser: a literal
+        # argv, never expanded against the caller's CWD.
+        set -f
+        # shellcheck disable=SC2086 # deliberate word splitting of the COPY argv
+        set -- $line
+        set +f
+        shift                                  # drop the COPY instruction
+        while [ "$#" -gt 0 ]; do               # drop leading flags
+            case "$1" in
+                --*) shift ;;
+                *) break ;;
+            esac
+        done
+        [ "$#" -ge 2 ] || continue             # need at least one source + dest
+        shift $(($# - 1))                      # keep only the last argument
+        printf '%s\n' "$1"
+    done < <(_dockerfile_copy_lines "$1")
+}
+
+# Join continuations before matching, so a wrapped COPY is one line. Shared by
+# both parsers: a fix to the joining lands in each.
+_dockerfile_copy_lines() {
+    sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' "$1" \
+        | grep -iP '^COPY[[:space:]]'
+}
+
 _dockerfile_copy_sources() {
     local file="$1" mode="$2" line n
     while IFS= read -r line; do
@@ -59,9 +94,5 @@ _dockerfile_copy_sources() {
             shift
             n=$((n - 1))
         done
-    done < <(
-        # Join continuations before matching, so a wrapped COPY is one line.
-        sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ba' -e '}' "$file" \
-            | grep -iP '^COPY[[:space:]]'
-    )
+    done < <(_dockerfile_copy_lines "$file")
 }

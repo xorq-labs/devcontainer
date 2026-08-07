@@ -115,6 +115,14 @@ taxonomy and reads as `test:`.
   (setup-claude, audit-hook, git.sh, token-env); a lib shipped on one route
   only breaks the other at runtime (fingerprint + dockerignore guards catch
   most, not all, of this).
+- Scripts COPYd into `/usr/local/bin` by either Dockerfile get an ABSOLUTE mode
+  (`chmod 755`), never `+x`. COPY preserves the source's mode and `setup-env.sh`
+  comes from a project overlay — a contributor's working tree — so a 0700 source
+  (umask 0077) plus `+x` lands as 0711: unreadable, therefore unrunnable, by
+  vscode (#129) (test: `tests/test-copied-script-modes.sh`; ci:
+  `docker-build.yml#build` and `nix-base.yml#build`, which build from a
+  deliberately 0700 overlay — the mode CI otherwise never sees, since a fresh
+  checkout is 0755).
 - The classic-arg detection regex in `overlay_sets_classic_args()` in
   `dev/devcontainer` must match the root `Dockerfile`'s classic-routing ARG set
   (`tests/test-classic-args-sync.sh`).
