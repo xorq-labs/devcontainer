@@ -354,15 +354,106 @@ setup_git() {
     fi
 }
 
+# gh stores its OAuth token in the OS keyring wherever one is available, so a
+# host hosts.yml routinely carries the account stanza and NO token. Copying that
+# in is worse than copying nothing: gh's multi-account migration runs at CONFIG
+# LOAD, goes to the keyring for the missing token, and the container has no
+# dbus-launch to reach one — so the migration refuses and EVERY gh command dies
+# before it starts, `gh --version` included, with GH_TOKEN never consulted. An
+# absent hosts.yml leaves gh working and GH_TOKEN usable.
+#
+# So setup_gh materializes the host's token into the copy. The two helpers below
+# are text-only, which is what makes them testable without docker or a real gh
+# (tests/test-gh-hosts-token.sh).
+
+# Print the host keys whose block carries no oauth_token. Reads a hosts.yml on
+# stdin.
+gh_hosts_missing_token() {
+    awk '
+        /^[^ \t#][^:]*:[ \t]*$/ {
+            if (host != "" && !tok) print host
+            host = $0
+            sub(/:[ \t]*$/, "", host)
+            tok = 0
+            next
+        }
+        /^[ \t]+oauth_token[ \t]*:/ { tok = 1 }
+        END { if (host != "" && !tok) print host }
+    '
+}
+
+# Emit a hosts.yml (stdin -> stdout) with `oauth_token: <token>` added to
+# <host>'s block. Three choices worth stating:
+#   - HOST level, not under users.<name> where gh's own migration would put it:
+#     that form works with no users stanza at all, and still satisfies the
+#     migration on a half-migrated file (checked against gh 2.x).
+#   - indentation read from the block's own body, because YAML requires the keys
+#     of one mapping to agree — a hard-coded width corrupts any other file.
+#   - token by environment, not argv: argv is world-readable through ps, and
+#     `awk -v` would interpret backslash escapes in the value.
+gh_hosts_with_token() {
+    GH_HOSTS_TARGET="$1" GH_HOSTS_TOKEN="$2" awk '
+        BEGIN {
+            target = ENVIRON["GH_HOSTS_TARGET"] ":"
+            token = ENVIRON["GH_HOSTS_TOKEN"]
+        }
+        # Deferred by one line: the block body is the only place its indent can
+        # be read from, and that is the line AFTER the host key.
+        pending {
+            indent = "    "
+            if ($0 ~ /^[ \t]+[^ \t]/) {
+                indent = $0
+                sub(/[^ \t].*$/, "", indent)
+            }
+            printf "%soauth_token: %s\n", indent, token
+            pending = 0
+        }
+        { print }
+        {
+            line = $0
+            sub(/[ \t]*$/, "", line)
+            if (line == target) pending = 1
+        }
+        END { if (pending) printf "    oauth_token: %s\n", token }
+    '
+}
+
 setup_gh() {
     local hosts="$HOME/.config/gh/hosts.yml"
-    if [ -f "$hosts" ]; then
-        dc_exec mkdir -p /home/vscode/.config/gh
-        docker cp "$hosts" "$(dc ps -q app)":/home/vscode/.config/gh/hosts.yml
-        # docker cp preserves host UID; explicit chown makes us robust to
-        # base images that don't honor USER_UID build args.
-        dc exec -u root app chown vscode:vscode /home/vscode/.config/gh/hosts.yml
-    fi
+    [ -f "$hosts" ] || return 0
+
+    local staged
+    staged="$(mktemp)"
+    # The staged file holds a bearer token: create it unreadable to anyone else
+    # BEFORE writing (mktemp is already 0600, but this file is copied into the
+    # container and the mode travels with it).
+    chmod 600 "$staged"
+    cat "$hosts" >"$staged"
+
+    local host token
+    while read -r host; do
+        [ -n "$host" ] || continue
+        token="$(gh auth token -h "$host" 2>/dev/null || true)"
+        if [ -z "$token" ]; then
+            # Any tokenless host is fatal to gh as a whole, not just to that
+            # host, so a partial fill is not worth copying — leaving no
+            # hosts.yml at all keeps gh runnable and GH_TOKEN usable.
+            echo "warning: host \`gh auth token -h $host\` yielded nothing (gh not installed, not logged in, or keyring unreadable)" >&2
+            echo "         skipping gh config copy — run \`gh auth login\` on the host, or set GH_TOKEN in the container" >&2
+            rm -f "$staged"
+            return 0
+        fi
+        gh_hosts_with_token "$host" "$token" <"$staged" >"$staged.next"
+        mv "$staged.next" "$staged"
+        chmod 600 "$staged"
+    done < <(gh_hosts_missing_token <"$hosts")
+
+    dc_exec mkdir -p /home/vscode/.config/gh
+    docker cp "$staged" "$(dc ps -q app)":/home/vscode/.config/gh/hosts.yml
+    # docker cp preserves host UID; explicit chown makes us robust to
+    # base images that don't honor USER_UID build args.
+    dc exec -u root app chown vscode:vscode /home/vscode/.config/gh/hosts.yml
+    rm -f "$staged"
 }
 
 setup_claude_credentials() {
