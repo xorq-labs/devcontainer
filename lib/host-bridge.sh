@@ -366,19 +366,59 @@ setup_git() {
 # are text-only, which is what makes them testable without docker or a real gh
 # (tests/test-gh-hosts-token.sh).
 
-# Print the host keys whose block carries no oauth_token. Reads a hosts.yml on
-# stdin.
+# Print the host keys that need filling. Reads a hosts.yml on stdin.
+#
+# A host is already fine when it has a token gh can reach without the keyring:
+# one at host level, or one under the user named by `user:`. A token belonging
+# to some OTHER user does not count — the migration still goes to the keyring
+# for the active one, which is the whole failure. That distinction is why this
+# tracks the users stanza instead of grepping for any `oauth_token` at all.
 gh_hosts_missing_token() {
     awk '
+        function flush(   ok) {
+            if (host == "") return
+            # No `user:` key at all: any in-file token is the only candidate.
+            ok = host_tok || (active != "" && (active in user_tok)) ||
+                 (active == "" && any_user_tok)
+            if (!ok) print host
+        }
         /^[^ \t#][^:]*:[ \t]*$/ {
-            if (host != "" && !tok) print host
+            flush()
             host = $0
             sub(/:[ \t]*$/, "", host)
-            tok = 0
+            base = -1; host_tok = 0; active = ""
+            in_users = 0; user = ""; any_user_tok = 0
+            delete user_tok
             next
         }
-        /^[ \t]+oauth_token[ \t]*:/ { tok = 1 }
-        END { if (host != "" && !tok) print host }
+        host == "" { next }
+        /^[ \t]*$/ { next }
+        /^[ \t]*#/ { next }
+        {
+            ind = match($0, /[^ \t]/) - 1
+            if (base < 0) base = ind
+            key = $0
+            sub(/^[ \t]*/, "", key)
+            sub(/[ \t]*:.*$/, "", key)
+            if (ind <= base) {
+                in_users = (key == "users")
+                if (key == "oauth_token") host_tok = 1
+                else if (key == "user") {
+                    active = $0
+                    sub(/^[ \t]*user[ \t]*:[ \t]*/, "", active)
+                    sub(/[ \t]*$/, "", active)
+                }
+            } else if (in_users) {
+                # Inside the stanza a bare key is a username; anything deeper
+                # that says oauth_token belongs to the last one seen.
+                if ($0 ~ /:[ \t]*$/) user = key
+                else if (key == "oauth_token") {
+                    user_tok[user] = 1
+                    any_user_tok = 1
+                }
+            }
+        }
+        END { flush() }
     '
 }
 
@@ -397,6 +437,10 @@ gh_hosts_with_token() {
             target = ENVIRON["GH_HOSTS_TARGET"] ":"
             token = ENVIRON["GH_HOSTS_TOKEN"]
         }
+        # Stay pending past a blank line: it has no indent to read, and a
+        # defaulted width inside a block of another width is unparseable YAML —
+        # gh dies at config load either way. Comments indent with the body.
+        pending && /^[ \t]*$/ { print; next }
         # Deferred by one line: the block body is the only place its indent can
         # be read from, and that is the line AFTER the host key.
         pending {
@@ -422,17 +466,19 @@ setup_gh() {
     local hosts="$HOME/.config/gh/hosts.yml"
     [ -f "$hosts" ] || return 0
 
-    local staged
-    staged="$(mktemp)"
-    # The staged file holds a bearer token: create it unreadable to anyone else
-    # BEFORE writing (mktemp is already 0600, but this file is copied into the
-    # container and the mode travels with it).
-    chmod 600 "$staged"
+    # Stage in a 0700 dir: the fill writes the token through an intermediate
+    # file that a plain `>` would create at the ambient umask (0644 by default).
+    local stage staged
+    stage="$(mktemp -d)"
+    # Baked in, not expanded at trap time: RETURN fires after the locals are
+    # gone. Same idiom as dc_up in dev/devcontainer.
+    # shellcheck disable=SC2064
+    trap "rm -rf '$stage'" RETURN
+    staged="$stage/hosts.yml"
     cat "$hosts" >"$staged"
 
     local host token
     while read -r host; do
-        [ -n "$host" ] || continue
         token="$(gh auth token -h "$host" 2>/dev/null || true)"
         if [ -z "$token" ]; then
             # Any tokenless host is fatal to gh as a whole, not just to that
@@ -440,20 +486,19 @@ setup_gh() {
             # hosts.yml at all keeps gh runnable and GH_TOKEN usable.
             echo "warning: host \`gh auth token -h $host\` yielded nothing (gh not installed, not logged in, or keyring unreadable)" >&2
             echo "         skipping gh config copy — run \`gh auth login\` on the host, or set GH_TOKEN in the container" >&2
-            rm -f "$staged"
             return 0
         fi
-        gh_hosts_with_token "$host" "$token" <"$staged" >"$staged.next"
-        mv "$staged.next" "$staged"
-        chmod 600 "$staged"
+        gh_hosts_with_token "$host" "$token" <"$staged" >"$stage/next"
+        mv "$stage/next" "$staged"
     done < <(gh_hosts_missing_token <"$hosts")
 
+    # The mode travels with docker cp, and the file holds a bearer token.
+    chmod 600 "$staged"
     dc_exec mkdir -p /home/vscode/.config/gh
     docker cp "$staged" "$(dc ps -q app)":/home/vscode/.config/gh/hosts.yml
     # docker cp preserves host UID; explicit chown makes us robust to
     # base images that don't honor USER_UID build args.
     dc exec -u root app chown vscode:vscode /home/vscode/.config/gh/hosts.yml
-    rm -f "$staged"
 }
 
 setup_claude_credentials() {
