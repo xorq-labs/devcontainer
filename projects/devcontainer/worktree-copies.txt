@@ -4,4 +4,7 @@
 # (`$(...)`, backticks, `~`, `$VAR`) are not. Entries must not contain spaces.
 .envrcs/.envrc.user
 .envrcs/.envrc.secrets
+# Dotenv fragments a .envrc.user may `dotenv_if_exists` — silently empty in a
+# worktree if not copied alongside it. Does not re-match .envrc.*.
+.envrcs/.env.*
 project.env
