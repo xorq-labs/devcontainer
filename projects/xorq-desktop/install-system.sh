@@ -25,8 +25,10 @@ rm -rf /var/lib/apt/lists/*
 # bake a seed tarball, then drop the live /nix tree (keeps the image small).
 # setup-env first-run unpacks the seed into the durable, project-scoped `nix`
 # volume. Shared logic lives in lib/nix-seed.sh, COPYd to
-# /usr/local/lib/devcontainer by the root Dockerfile (version/sha default to
-# 2.28.3 there; set NIX_VERSION/NIX_INSTALLER_SHA256 before the call to pin).
+# /usr/local/lib/devcontainer by the root Dockerfile (version/sha default to the
+# coupled pin there — never restate its value here, a copy in a comment is a
+# drift source and this one duly went stale; set NIX_VERSION/NIX_INSTALLER_SHA256
+# before the call to pin a different release).
 . /usr/local/lib/devcontainer/nix-seed.sh
 nix_build_install
 

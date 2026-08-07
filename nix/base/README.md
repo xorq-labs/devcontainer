@@ -104,12 +104,15 @@ baked base are mutually exclusive (a mount at `/nix` would shadow the baked
 store), so seed overlays always build on the classic root `Dockerfile`.
 
 **3. Pin the Nix release (optional).** `nix_build_install` defaults to the
-version/sha in `lib/nix-seed.sh`. To pin a different release, set both before
-the call in `install-system.sh` — they stay coupled so a version bump without
-its checksum fails loudly:
+version/sha in `lib/nix-seed.sh` — move that shared pin with
+`devcontainer bump-nix`, never by hand, since it is the only thing that rewrites
+the coupled checksum. To pin a *different* release for one overlay only, set both
+before the call in `install-system.sh` — they stay coupled so a version bump
+without its checksum fails loudly at `sha256sum -c`. No version literal appears
+below on purpose: a second copy of the pin in prose goes stale silently.
 
-    NIX_VERSION=2.28.3
-    NIX_INSTALLER_SHA256=…
+    NIX_VERSION=<x.y.z>
+    NIX_INSTALLER_SHA256=<sha256 of that release's install script>
     . /usr/local/lib/devcontainer/nix-seed.sh
     nix_build_install
 
