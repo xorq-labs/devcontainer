@@ -17,9 +17,14 @@
 #      shape included), including that a token counts only when it is one gh can
 #      reach for the ACTIVE user — another user's does not
 #   2. gh_hosts_with_token: the token lands in the named block, at that block's
-#      OWN indentation, and nothing else in the file changes
+#      OWN indentation — read from the first real body line, waiting past blank
+#      lines AND comments — and nothing else in the file changes
 #   3. setup_gh: fills a tokenless file, leaves an already-tokened one byte-
-#      identical, and copies NOTHING when the host cannot produce a token
+#      identical, and copies NOTHING when the host cannot produce a token; on
+#      that abort it removes a stale TOKENLESS copy already in the container
+#      (broken by definition) but never a tokened one (an in-container login);
+#      and the token lookup is stdin-guarded so a gh that reads stdin cannot
+#      eat the host list the fill loop is iterating
 #   4. the staged file reaches the container 0600, is staged in a private 0700
 #      directory (the fill writes the token through an intermediate file), and
 #      that directory does not outlive the call
@@ -41,6 +46,19 @@
 #     expectation, because the earlier version of this guard asserted only that
 #     `oauth_token` appeared SOMEWHERE in the block and stayed GREEN under
 #     exactly this behaviour — which is why the mixed-storage fixture exists.
+#
+# Second §2 pair, run 2026-08-07 after the review-pass hardening (comment-
+# tolerant indent inference, stale-container-copy removal, stdin-guarded token
+# lookup); gh_hosts_missing_token is unchanged, so the pair above stands:
+#   FORM-ONLY — renamed the awk variable `indent` to `pad` throughout
+#     gh_hosts_with_token's pending block. Green, 43/43 assertions, no drop.
+#   SEMANTIC — two halves, each a revert to what this branch previously shipped:
+#     (a) the pending-skip regex back to blank-lines-only,
+#             pending && /^[ \t]*$/ { print; next }
+#         RED, 41/43: both comment-placement assertions.
+#     (b) the abort path's `dc_exec rm -f` neutralized to `:` (warn and leave
+#         the broken copy behind). RED, 42/43: "a stale tokenless container
+#         copy is removed".
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -192,6 +210,28 @@ else
     echo "  SKIP: no python3+pyyaml — YAML validity of the blank-line fill not checked"
 fi
 
+# A comment directly after the host key is the blank-line problem wearing a
+# hat: a column-0 comment has no indent to read, so defaulting the width there
+# puts a 4-space key in a 2-space mapping — the broken-YAML failure again. The
+# insert stays pending past comments too and reads the width from the first
+# real body line.
+commented="$tmp/commented.yml"
+printf 'github.com:\n# pinned by IT\n  git_protocol: https\n' >"$commented"
+assert_eq "column-0 comment after the host key: indent still comes from the body" \
+    "github.com:
+# pinned by IT
+  oauth_token: gho_cmt
+  git_protocol: https" "$(gh_hosts_with_token github.com gho_cmt <"$commented")"
+
+# And a block that is ONLY a comment ends at EOF still pending — the END branch
+# answers with the default width, same as a body-less host key.
+comment_only="$tmp/comment-only.yml"
+printf 'github.com:\n# nothing else here\n' >"$comment_only"
+assert_eq "comment-only block: token still emitted, default indent" \
+    "github.com:
+# nothing else here
+    oauth_token: gho_conly" "$(gh_hosts_with_token github.com gho_conly <"$comment_only")"
+
 # Only the named block is touched.
 mixed_filled="$(gh_hosts_with_token github.com gho_only <"$mixed")"
 assert_eq "other hosts' blocks are untouched" \
@@ -236,7 +276,16 @@ dc() {
     [ "${1:-}" = "ps" ] && echo "fakecontainerid"
     return 0
 }
-dc_exec() { printf 'dc_exec %s\n' "$*" >>"$DC_LOG"; }
+# The container's hosts.yml, simulated: `dc_exec cat` reads it and `dc_exec rm`
+# deletes it — the two container-side operations the abort path performs.
+export CONTAINER_HOSTS="$tmp/container-hosts.yml"
+dc_exec() {
+    printf 'dc_exec %s\n' "$*" >>"$DC_LOG"
+    case "${1:-}" in
+        cat) if [ -f "$CONTAINER_HOSTS" ]; then cat "$CONTAINER_HOSTS"; fi ;;
+        rm) rm -f "$CONTAINER_HOSTS" ;;
+    esac
+}
 
 # `gh` is a real external command here, so it gets a PATH stub. It answers with
 # $GH_STUB_TOKEN, or fails like a logged-out / keyring-less host when that is
@@ -311,6 +360,24 @@ assert_not_contains "no host token: no hosts.yml is written" \
 assert_contains "no host token: the reason is reported on stderr" \
     "skipping gh config copy" "$(cat "$tmp/stderr")"
 
+# A stale copy already sitting in the container — the pre-fill code shipped
+# tokenless files, and /home/vscode outlives cold starts — is broken the very
+# way the fill prevents, and absent beats broken. The abort path removes it,
+# but ONLY when it is itself tokenless: a file with its tokens is an
+# in-container `gh auth login`, not ours to delete.
+cp "$keyring_shape" "$CONTAINER_HOSTS"
+GH_STUB_TOKEN="" run_setup_gh "$keyring_shape"
+assert_false "no host token: a stale tokenless container copy is removed" \
+    test -f "$CONTAINER_HOSTS"
+assert_contains "no host token: the removal is reported on stderr" \
+    "removed the container's stale tokenless hosts.yml" "$(cat "$tmp/stderr")"
+
+cp "$insecure_shape" "$CONTAINER_HOSTS"
+GH_STUB_TOKEN="" run_setup_gh "$keyring_shape"
+assert_true "no host token: an in-container tokened hosts.yml is left alone" \
+    test -f "$CONTAINER_HOSTS"
+rm -f "$CONTAINER_HOSTS"
+
 # Partial availability is the same case: gh answers for one host, so the other
 # would land tokenless and take gh down with it.
 cat >"$bin/gh" <<'EOF'
@@ -325,6 +392,20 @@ EOF
 chmod +x "$bin/gh"
 run_setup_gh "$mixed"
 assert_false "one host unresolvable: the whole copy is skipped" test -f "$CAPTURED"
+
+# The token lookup must not be fed the host list: it runs inside the loop that
+# reads that list on stdin, and a gh that reads stdin (auth flows do) would
+# swallow the remaining hosts and the fill would silently stop after one.
+cat >"$bin/gh" <<'EOF'
+#!/bin/sh
+# a stdin-hungry gh
+cat >/dev/null
+echo "gho_slurper"
+EOF
+chmod +x "$bin/gh"
+run_setup_gh "$mixed"
+assert_eq "a stdin-reading gh cannot eat the host list" \
+    "" "$(gh_hosts_missing_token <"$CAPTURED")"
 
 # No host config at all: nothing to do, and nothing copied.
 rm -f "$CAPTURED"

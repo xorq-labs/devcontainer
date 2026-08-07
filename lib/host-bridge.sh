@@ -437,10 +437,11 @@ gh_hosts_with_token() {
             target = ENVIRON["GH_HOSTS_TARGET"] ":"
             token = ENVIRON["GH_HOSTS_TOKEN"]
         }
-        # Stay pending past a blank line: it has no indent to read, and a
-        # defaulted width inside a block of another width is unparseable YAML —
-        # gh dies at config load either way. Comments indent with the body.
-        pending && /^[ \t]*$/ { print; next }
+        # Stay pending past blank lines AND comments: a blank has no indent to
+        # read, a column-0 comment reads as none, and a defaulted width inside
+        # a block of another width is unparseable YAML — gh dies at config
+        # load either way. Only a real body line can answer the question.
+        pending && /^[ \t]*(#|$)/ { print; next }
         # Deferred by one line: the block body is the only place its indent can
         # be read from, and that is the line AFTER the host key.
         pending {
@@ -477,15 +478,27 @@ setup_gh() {
     staged="$stage/hosts.yml"
     cat "$hosts" >"$staged"
 
-    local host token
+    local host token existing
     while read -r host; do
-        token="$(gh auth token -h "$host" 2>/dev/null || true)"
+        # stdin is the host list this loop is reading; gh must not see it — a
+        # gh that reads stdin would swallow the remaining hosts.
+        token="$(gh auth token -h "$host" </dev/null 2>/dev/null || true)"
         if [ -z "$token" ]; then
             # Any tokenless host is fatal to gh as a whole, not just to that
             # host, so a partial fill is not worth copying — leaving no
             # hosts.yml at all keeps gh runnable and GH_TOKEN usable.
             echo "warning: host \`gh auth token -h $host\` yielded nothing (gh not installed, not logged in, or keyring unreadable)" >&2
             echo "         skipping gh config copy — run \`gh auth login\` on the host, or set GH_TOKEN in the container" >&2
+            # A stale copy already in the container — the pre-fill code shipped
+            # tokenless files, and /home/vscode outlives cold starts — is
+            # broken the very way this fill prevents, and absent beats broken.
+            # Remove it ONLY when it is itself tokenless: a file with its
+            # tokens is an in-container `gh auth login`, not ours to delete.
+            existing="$(dc_exec cat /home/vscode/.config/gh/hosts.yml 2>/dev/null || true)"
+            if [ -n "$existing" ] && [ -n "$(gh_hosts_missing_token <<<"$existing")" ]; then
+                dc_exec rm -f /home/vscode/.config/gh/hosts.yml
+                echo "         removed the container's stale tokenless hosts.yml" >&2
+            fi
             return 0
         fi
         gh_hosts_with_token "$host" "$token" <"$staged" >"$stage/next"
