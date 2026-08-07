@@ -15,8 +15,8 @@
 # setting the variable before sourcing/calling. version+sha stay coupled on
 # purpose — `sha256sum -c` fails loudly if a version is bumped without its
 # matching checksum.
-NIX_VERSION="${NIX_VERSION:-2.28.3}"
-NIX_INSTALLER_SHA256="${NIX_INSTALLER_SHA256:-46b8d7165dceb471f4346366b3a93f1009407b99729b843b8664918f4cc800a0}"
+NIX_VERSION="${NIX_VERSION:-2.35.1}"
+NIX_INSTALLER_SHA256="${NIX_INSTALLER_SHA256:-34e0ef63ec1f3e552e15069660afd9a0a23f69009e340c33067595252888286c}"
 NIX_SEED_TAR="${NIX_SEED_TAR:-/nix-seed.tar}"
 # sha256 of the seed tarball (a checksum, not a Nix version); compared against
 # the volume's stamp on first run to decide whether to overlay fresh paths.
