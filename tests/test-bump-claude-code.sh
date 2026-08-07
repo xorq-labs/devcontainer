@@ -6,6 +6,13 @@
 # copy from a disposable sandbox ($SANDBOX/dev/bump-claude-code against
 # $SANDBOX/Dockerfile) and stub `npm` on PATH — no real Dockerfile is touched
 # and no network is required.
+#
+# Mutation used to prove the unreachable-endpoint guard fails (ADR-0005, #126):
+# change the `exit 1` after "could not determine the latest" in
+# dev/bump-claude-code to `exit 0`. Observed red:
+#   FAIL: --check fails when npm and the registry are both unreachable
+#   FAIL: a default bump also fails
+#   Results: 70 passed, 2 failed
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -45,6 +52,21 @@ echo '{"version":"7.7.7"}'
 EOF
 chmod +x "$SANDBOX/bin-fallback/npm" "$SANDBOX/bin-fallback/curl"
 
+# Third stub set: NOTHING answers — npm fails and so does the HTTPS fallback.
+# Ported from tests/test-bump-nix-base.sh's bin-badnet case (#126): --check
+# exits 0 whether or not the pin is current, but that is about the comparison,
+# not the network — a --check that cannot produce a report at all must fail.
+mkdir -p "$SANDBOX/bin-badnet"
+cat > "$SANDBOX/bin-badnet/npm" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+cat > "$SANDBOX/bin-badnet/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 6
+EOF
+chmod +x "$SANDBOX/bin-badnet/npm" "$SANDBOX/bin-badnet/curl"
+
 write_dockerfile() {
     printf 'FROM scratch\nARG CLAUDE_CODE_VERSION=%s\nRUN true\n' "$1" > "$DOCKERFILE"
 }
@@ -63,6 +85,13 @@ run_bump() {
 run_bump_fallback() {
     set +e
     out="$(PATH="$SANDBOX/bin-fallback:$PATH" "$BUMP" "$@" 2>&1)"
+    rc=$?
+    set -e
+}
+# Same, with the nothing-answers stub set.
+run_bump_badnet() {
+    set +e
+    out="$(PATH="$SANDBOX/bin-badnet:$PATH" "$BUMP" "$@" 2>&1)"
     rc=$?
     set -e
 }
@@ -189,6 +218,18 @@ run_bump_fallback
 assert_eq "exit 0" "0" "$rc"
 assert_contains "falls through to registry" "1.0.0 → 7.7.7" "$out"
 assert_eq "Dockerfile pin from fallback" "7.7.7" "$(pin)"
+
+# ---------- test: unreachable version source fails loudly ----------
+echo "--- bump-claude-code (version source unreachable) ---"
+write_dockerfile "1.0.0"
+run_bump_badnet --check
+assert_true "--check fails when npm and the registry are both unreachable" \
+    test "$rc" -ne 0
+assert_contains "and says it could not resolve a version" \
+    "could not determine the latest" "$out"
+run_bump_badnet
+assert_eq "a default bump also fails" "1" "$rc"
+assert_eq "Dockerfile untouched" "1.0.0" "$(pin)"
 
 # ---------- test: idempotent (explicit, already current) ----------
 echo "--- bump-claude-code (idempotent explicit) ---"

@@ -18,6 +18,13 @@
 # serves both endpoints the script hits: the GitHub releases API (latest
 # version) and the release-download URLs (deterministic per-URL content, so the
 # expected sha256 is computable in the test).
+#
+# Mutation used to prove the unreachable-endpoint guard fails (ADR-0005, #126):
+# change the `exit 1` after "could not determine the latest hadolint version"
+# in dev/bump-hadolint to `exit 0`. Observed red:
+#   FAIL: --check fails when the version endpoint is unreachable
+#   FAIL: a default bump also fails
+#   Results: 124 passed, 2 failed
 set -euo pipefail
 
 # --- inlined test harness ---------------------------------------------------
@@ -101,7 +108,8 @@ SRC="$DEV_BASE/dev/bump-hadolint"
 SANDBOX="$(mktemp -d)"
 _cleanup_dirs+=("$SANDBOX")
 mkdir -p "$SANDBOX/dev" "$SANDBOX/projects/devcontainer" \
-    "$SANDBOX/bin" "$SANDBOX/bin-badnet" "$SANDBOX/bin-empty" "$SANDBOX/bin-noarm"
+    "$SANDBOX/bin" "$SANDBOX/bin-badnet" "$SANDBOX/bin-empty" "$SANDBOX/bin-noarm" \
+    "$SANDBOX/bin-noapi"
 cp "$SRC" "$SANDBOX/dev/bump-hadolint"
 BUMP="$SANDBOX/dev/bump-hadolint"
 INSTALL_SYS="$SANDBOX/projects/devcontainer/install-system.sh"
@@ -186,8 +194,16 @@ case "$url" in
     *) exit 22 ;;
 esac
 EOF
+# Nothing reachable at all — ported from tests/test-bump-nix-base.sh's
+# bin-badnet case (#126): --check exits 0 whether or not the versions match,
+# but that is about the comparison, not the network — a --check that cannot
+# produce a report at all must fail.
+cat > "$SANDBOX/bin-noapi/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 6
+EOF
 chmod +x "$SANDBOX/bin/curl" "$SANDBOX/bin-badnet/curl" \
-    "$SANDBOX/bin-empty/curl" "$SANDBOX/bin-noarm/curl"
+    "$SANDBOX/bin-empty/curl" "$SANDBOX/bin-noarm/curl" "$SANDBOX/bin-noapi/curl"
 
 # Expected sha for (version, asset) = sha of the stub's deterministic content.
 expected_sha() {
@@ -355,10 +371,12 @@ assert_eq "exit 0" "0" "$rc"
 assert_contains "reports already pinned" "already pinned to 2.5.0" "$out"
 assert_eq "install-system.sh unchanged" "$before" "$(cat "$INSTALL_SYS")"
 
-# ---------- test: --check is a REPORT — always exit 0, sibling shape ----------
+# ---------- test: --check is a REPORT — exit 0 on drift, sibling shape -------
 # `--check` matches bump-nix/bump-claude-code exactly: current, latest-or-
 # requested, and a next-step line, at the %-11s label column, exiting 0 whether
 # or not anything drifted. "A newer hadolint exists" is news, not a failure.
+# That is a promise about the comparison, not the network: a --check that
+# cannot produce a report at all still fails (proven below, #126).
 echo "--- bump-hadolint (--check reports drift, exit 0) ---"
 reset_files
 run_bump --check
@@ -389,6 +407,21 @@ assert_not_contains "says nothing about checksums" "sha" "$out"
 run_with bin-badnet --check
 assert_eq "exit 0 with every download broken" "0" "$rc"
 assert_not_contains "never attempted a download" "could not download" "$out"
+
+# ---------- test: unreachable version endpoint fails loudly ----------
+# Ported from tests/test-bump-nix-base.sh's bin-badnet case (#126): "exit 0
+# on drift" is about the comparison, not the network — a --check that cannot
+# resolve a version has no report to give and must say so, non-zero.
+echo "--- bump-hadolint (version endpoint unreachable) ---"
+reset_files
+run_with bin-noapi --check
+assert_true "--check fails when the version endpoint is unreachable" \
+    test "$rc" -ne 0
+assert_contains "and says it could not resolve a version" \
+    "could not determine the latest hadolint version" "$out"
+run_with bin-noapi
+assert_eq "a default bump also fails" "1" "$rc"
+assert_eq "version untouched" "1.0.0" "$(pin_version)"
 
 # ---------- test: --check surfaces a pre-commit rev drift, still exit 0 ------
 # The hook-rev line appears only for a real inconsistency (hook rev != the

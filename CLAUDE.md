@@ -215,7 +215,16 @@ taxonomy and reads as `test:`.
   `CLAUDE_CODE_VERSION` and `nix/base/pkgs/claude-code.nix`; bump via
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
 - `NIX_VERSION` and `NIX_INSTALLER_SHA256` in `lib/nix-seed.sh` are a coupled
-  pair; bump via `dev/bump-nix` (`tests/test-bump-nix.sh`).
+  pair; bump via `dev/bump-nix`, never by hand — no test can verify the
+  installer checksum (that needs the real artifact), so the tool is the guard,
+  and it resolves versions from the GitHub /tags endpoint because NixOS/nix
+  publishes no releases; /releases/latest 404s, which left the tool dead — and
+  the coupling unguarded — for as long as nothing ran it against the real
+  network (#126). It takes the highest stable `X.Y.Z`, not the first entry
+  (GitHub guarantees no /tags ordering), and refuses to resolve BACKWARDS — a
+  truncated listing would otherwise rewrite the pair older, with a valid
+  checksum, and call it a bump; an explicit version still downgrades on
+  request (tool: dev/bump-nix; test: tests/test-bump-nix.sh).
 - `HADOLINT_VERSION` and BOTH per-arch checksums (`HADOLINT_SHA256_AMD64`,
   `HADOLINT_SHA256_ARM64`) in `projects/devcontainer/install-system.sh` are a
   coupled triple, and the `.pre-commit-config.yaml` hadolint rev is a fourth
@@ -226,11 +235,13 @@ taxonomy and reads as `test:`.
   sha in particular had no guard at all, and a half-bump breaks the arm64
   container build at `sha256sum -c` while the tree stays green.
   Its two read-only flags are not interchangeable: `--check` is a report
-  (current vs latest, no download, always exits 0 — the shape `bump-nix` and
-  `bump-claude-code` use), `--verify` is the gate (fetches the committed
+  (current vs latest, no download, exit 0 whether or not the versions match —
+  the shape `bump-nix` and `bump-claude-code` use; drift is news, not a
+  failure, but a `--check` that cannot resolve a version has no report to give
+  and exits non-zero, #126), `--verify` is the gate (fetches the committed
   version's release, checks both per-arch checksums, non-zero on a mismatch
   OR on a failed fetch). Use `--verify` when you want an answer you can gate
-  on; `--check` never fails.
+  on; `--check`'s exit says nothing about drift.
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and

@@ -275,10 +275,11 @@ consumers actually build on:
 
 ghcr serves this package anonymously, so the tool needs only `curl` — no
 docker, no `read:packages`. Like `bump-hadolint`, its two read-only flags
-answer different questions: `--check` is a report (always exits 0 — "a newer
-base exists" is not a failure), `--verify` is a gate that fails unless the
-committed pin resolves to a multi-arch **manifest list**, and fails on an
-unreachable registry rather than passing unchecked.
+answer different questions: `--check` is a report (exit 0 whether or not the
+pin is current — "a newer base exists" is not a failure — but non-zero on an
+unreachable registry, since then there is no report to give), `--verify` is a
+gate that fails unless the committed pin resolves to a multi-arch **manifest
+list**, and fails on an unreachable registry rather than passing unchecked.
 
 That manifest-list check is the reason to prefer the tool over a hand edit.
 `imagetools inspect` prints the per-arch digests directly beneath the
