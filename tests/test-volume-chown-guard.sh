@@ -33,8 +33,13 @@
 #   8. the compose query emits kind-qualified volume AND bind targets, checked
 #      by running dev/devcontainer's own python snippet against a document
 #   9. the dev/devcontainer driver line still matches the lib's function
+#  10. both image routes ship the transcript bind's parent, created AND then
+#      chowned, so the daemon never has to create it as root — the half of
+#      #106 the ancestor walk cannot cover, because an entry path that skips
+#      setup() (VS Code "Reopen in Container") never runs the walk at all. The
+#      directory is derived from docker-compose.yml, not written down here.
 #
-# Verified (ADR-0005 §2), seven mutations. Counts and assertion names below are
+# Verified (ADR-0005 §2), eleven mutations. Counts and assertion names below are
 # transcribed from the runs — see the METHOD note at the end, because three
 # earlier versions of this record were wrong.
 #   1. mount_point_targets' filter reverted to the pre-#106 `type == "volume"`
@@ -70,6 +75,22 @@
 #   7. the whole `bind)` dispatch arm deleted — 3 red, including the kind-set
 #      comparison, which is what proves that guard derives both sides rather
 #      than restating a vocabulary.
+#   8. `/projects` dropped from the root Dockerfile's mkdir, back to the
+#      pre-#106 `mkdir -p ... /home/vscode/.claude` — 2 red, both in item 10.
+#      Two rather than one because the chown probe reports nothing once the
+#      mkdir is gone: there is no creation for a later chown to cover.
+#   9. the nix tail build's RUN deleted entirely — 2 red, the same pair for
+#      that route. The routes are checked independently, so neither mutation
+#      is masked by the other file being correct.
+#  10. that RUN's `&& chown` dropped, leaving only the mkdir — 1 red, "chowns
+#      it AFTER creating it". This is the one that pays for the ordering logic
+#      in `precreated`: both Dockerfiles chown -R /home/vscode ABOVE these
+#      lines, so a coverage test that ignored position would read that remap
+#      as ownership and stay green on an image shipping the dir root-owned.
+#  11. the compose target moved to .claude/transcripts/<key> with both
+#      Dockerfiles left alone — 4 red, and the failure names print
+#      `/home/vscode/.claude/transcripts`, which is what shows the expectation
+#      is read out of compose rather than restated in the assertions.
 #
 # METHOD: measure each mutation in a FRESH copy of the tree, and transcribe the
 # numbers from the run rather than reasoning about them. Three earlier versions
@@ -88,7 +109,7 @@
 # tests/mutation-coverage automates this (fresh copy per mutation, plus it
 # flags a mutation that changed nothing). It is not in this tree — it ships on
 # the branch behind PR #124.
-#   (mutation runs 2026-08-04)
+#   (mutation runs 2026-08-04; items 8-11 on 2026-08-10, fresh copy each)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -450,5 +471,81 @@ sh -c "$script" volume-perms "volume:/home/vscode/.cache/uv"
 # environment-independent.
 assert_contains "injected script: mount points arrive in \"\$@\" and resolve under /home/vscode" \
     "vscode:vscode /home/vscode/.cache" "$(log)"
+
+# ---- 10. both image routes pre-create the transcript bind's parent ----
+# The ancestor walk repairs that directory after the daemon has created it as
+# root; shipping it in the image means it is never root-owned to begin with,
+# which is the only thing that covers an entry path that never runs setup()
+# (VS Code "Reopen in Container", a bare `docker compose up`). Two images build
+# that path, so this is a three-file coupling — compose plus both Dockerfiles.
+#
+# DERIVED, not restated (ADR-0005): the directory is read out of
+# docker-compose.yml as the parent of the one mount target that interpolates
+# DEV_CONTAINER_PROJECT_KEY — that variable is what makes the target a
+# per-project subdirectory — so moving or renaming the transcript mount moves
+# this guard with it instead of leaving it asserting a stale literal.
+echo "--- transcript bind parent pre-created in both image routes ---"
+
+bind_target="$(awk '/^[[:space:]]*target:[[:space:]]/ && /DEV_CONTAINER_PROJECT_KEY/ {print $2}' \
+    "$DEV_BASE/docker-compose.yml")"
+assert_eq "exactly one compose target interpolates DEV_CONTAINER_PROJECT_KEY" \
+    1 "$(printf '%s' "$bind_target" | grep -c . || true)"
+# Cut at the interpolation and drop the trailing slash: the key is the leaf, so
+# what remains is the parent the daemon would otherwise create.
+bind_parent="${bind_target%%\$\{*}"
+bind_parent="${bind_parent%/}"
+assert_true "the transcript bind's parent derives to a path under /home/vscode" \
+    bash -c '[[ "$1" == /home/vscode/?* ]]' _ "$bind_parent"
+
+# precreated <dockerfile> <path> — prints `mkdir` when some mkdir creates
+# <path>, and `chown` when a LATER command gives it to the container user,
+# directly or by -R on an ancestor. Ordering is load-bearing and is why this
+# does not just grep for two words: BOTH Dockerfiles chown -R /home/vscode
+# ABOVE these lines (the UID remap), and a chown that runs before the mkdir
+# cannot own a directory that does not exist yet. Reading it as coverage would
+# leave the guard passing on an image whose dir ships root-owned — precisely
+# the state being guarded against.
+precreated() {
+    python3 - "$1" "$2" <<'PY'
+import re, sys
+
+# Join continuations first, as tests/lib/dockerfile.sh does, so a wrapped RUN
+# is one string. Commands are cut at &&, || and ; so one RUN's argv cannot bleed
+# into the next command's.
+text = open(sys.argv[1]).read().replace("\\\n", " ")
+path = sys.argv[2]
+
+def operands(cmd):
+    return [w.strip('"\'') for w in cmd.split()[1:] if not w.startswith("-")]
+
+mkdir_at = next((m.start() for m in re.finditer(r"mkdir[^&|;\n]*", text)
+                 if path in operands(m.group(0))), None)
+if mkdir_at is None:
+    sys.exit(0)
+print("mkdir")
+
+for m in re.finditer(r"chown[^&|;\n]*", text):
+    if m.start() < mkdir_at:
+        continue
+    words = m.group(0).split()
+    recursive = any(w.startswith("-") and "R" in w for w in words)
+    for target in (t.rstrip("/") for t in operands(m.group(0))[1:]):
+        if target == path or (recursive and (path + "/").startswith(target + "/")):
+            print("chown")
+            sys.exit(0)
+PY
+}
+
+for dockerfile in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
+    route="${dockerfile#"$DEV_BASE/"}"
+    coverage="$(precreated "$dockerfile" "$bind_parent")"
+    assert_contains "$route creates $bind_parent" "mkdir" "$coverage"
+    assert_contains "$route chowns it AFTER creating it" "chown" "$coverage"
+done
+
+# Anti-vacuity: a parser that answered "mkdir" for anything would pass both
+# routes above while checking nothing.
+assert_eq "the parser reports nothing for a path no Dockerfile creates" \
+    "" "$(precreated "$DEV_BASE/Dockerfile" "$bind_parent-absent")"
 
 finish

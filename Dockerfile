@@ -88,7 +88,17 @@ RUN printf '. /usr/local/lib/devcontainer/claude-code-token-env.sh\n' \
 # No baked .credentials.json symlink: setup-claude seeds a private per-container
 # token into the claude-home volume from the :ro host profile store
 # (docs/adr/0001-devcontainer-private-token-isolation.md). Just create the dirs.
-RUN mkdir -p /home/vscode/.cache /home/vscode/.ssh /home/vscode/.claude \
+#
+# .claude/projects is here for a second reason: it is the parent of the
+# transcript bind (docker-compose.yml mounts the host log dir at
+# .claude/projects/<key>), so the daemon creates it as root if the image does
+# not ship it — the #106 defect. The ancestor walk in lib/volume-perms.sh
+# repairs that after the fact; creating it here means it is never wrong in the
+# first place, including on entry paths that never run `dev/devcontainer setup`
+# (VS Code "Reopen in Container", a bare `docker compose up`). A fresh
+# claude-home volume seeds from this path, so the volume inherits the dir
+# vscode-owned and the daemon has nothing left to create.
+RUN mkdir -p /home/vscode/.cache /home/vscode/.ssh /home/vscode/.claude/projects \
     && chown -R vscode:vscode /home/vscode/.cache /home/vscode/.ssh /home/vscode/.claude \
     && chmod 700 /home/vscode/.ssh
 

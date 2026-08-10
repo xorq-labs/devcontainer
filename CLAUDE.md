@@ -270,6 +270,20 @@ taxonomy and reads as `test:`.
   `mount_point_targets` decides what the lib ever sees; the query itself needs
   docker, but the python snippet inside it is lifted out and run against a
   synthetic config document (test: `tests/test-volume-chown-guard.sh`).
+- BOTH image routes pre-create the transcript bind's parent
+  (`~/.claude/projects`) and chown it AFTER creating it, so a fresh
+  `claude-home` volume seeds it user-owned and the daemon never creates it as
+  root. This is belt to the ancestor walk's braces, and it covers what the walk
+  cannot: the walk runs in `setup()`, so an entry path that never calls
+  `dev/devcontainer` — VS Code "Reopen in Container" (#43), a bare `docker
+  compose up` — gets the root-owned directory and the #106 failure back. The
+  ordering is load-bearing: both Dockerfiles `chown -R /home/vscode` during the
+  UID remap, ABOVE these lines, where the directory does not exist yet. The nix
+  route carries it in the tail build rather than `nix/base/flake.nix` on
+  purpose — the base pre-creates the other home dirs, but a fix there reaches
+  nobody until a republish AND a `BASE_IMAGE` repin (#83), while the tail
+  rebuilds per project (test: `tests/test-volume-chown-guard.sh`, which derives
+  the directory from the compose target rather than restating it).
 - Lock discipline: per-worktree lock on fd 9, repo-scoped build lock on fd 8;
   any helper backgrounded inside the locked region must be spawned with
   `9>&-` or it holds the worktree lock forever (`test:
