@@ -44,7 +44,7 @@
 #      the workflow<->tool coupling — both build workflows must invoke the
 #      checker, and the checker must derive the path rather than restate it.
 #
-# Verified (ADR-0005 §2), fourteen mutations. Counts and assertion names below are
+# Verified (ADR-0005 §2), eighteen mutations. Counts and assertion names below are
 # transcribed from the runs — see the METHOD note at the end, because three
 # earlier versions of this record were wrong.
 #   1. mount_point_targets' filter reverted to the pre-#106 `type == "volume"`
@@ -108,6 +108,33 @@
 #      execs it directly, so a lost mode bit is a CI failure with a confusing
 #      message; this is the #129 shape, caught hermetically.
 #
+# Items 15-18 are the FOUR FAIL-OPENS an independent review of item 10 found,
+# each reproduced here (58/0 green while the image was broken) before being
+# closed, then re-measured. Item 10 as first written could be satisfied by a
+# comment, by a chown to the wrong owner, and by a workflow that ran the
+# checker nowhere — three restatements of the same lesson this file already
+# carried twice, which is the argument for reviewing a guard rather than
+# trusting that its author read it carefully.
+#  15. the nix tail's RUN replaced by a COMMENT naming the same mkdir and
+#      chown (the likeliest future edit — the file's own comment calls
+#      flake.nix "the obvious home" for it) — was GREEN at 58/0 with the
+#      directory shipped by nobody; now 2 red. `precreated` read comment lines
+#      as code: the #97 shape ("a comment naming the path satisfied textual
+#      containment while the file went genuinely unhashed"), recurring inside
+#      a guard written by someone who had just read that ledger entry.
+#  16. the nix chown's owner changed to `root:root`, same path, same position
+#      — was GREEN at 58/0; now 1 red. The check accepted any chown and never
+#      looked at operand 0.
+#  17. a LATER `RUN chown root:root <path>` appended to the root Dockerfile,
+#      leaving the correct block untouched — was GREEN at 58/0; now 1 red.
+#      Only the last writer of ownership is what the image ships, so the walk
+#      keeps looking rather than returning at the first match.
+#  18. the checker's `run:` step deleted from docker-build.yml while its
+#      trigger-path entry gained a trailing comment — was GREEN at 58/0,
+#      because the unanchored grep matched the paths entry. Now 1 red: the
+#      assertion is anchored on a `run:` line. The trigger-path entry added in
+#      the same commit is what made the old grep satisfiable without the step.
+#
 # METHOD: measure each mutation in a FRESH copy of the tree, and transcribe the
 # numbers from the run rather than reasoning about them. Three earlier versions
 # of this record were wrong — counts inflated, and one mutation credited with
@@ -125,7 +152,8 @@
 # tests/mutation-coverage automates this (fresh copy per mutation, plus it
 # flags a mutation that changed nothing). It is not in this tree — it ships on
 # the branch behind PR #124.
-#   (mutation runs 2026-08-04; items 8-14 on 2026-08-10, fresh copy each)
+#   (mutation runs 2026-08-04; items 8-18 on 2026-08-10, fresh copy each;
+#    8-14 re-measured after 15-18 changed the parser, counts unchanged)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -513,23 +541,36 @@ bind_parent="${bind_parent%/}"
 assert_true "the transcript bind's parent derives to a path under /home/vscode" \
     bash -c '[[ "$1" == /home/vscode/?* ]]' _ "$bind_parent"
 
-# precreated <dockerfile> <path> — prints `mkdir` when some mkdir creates
-# <path>, and `chown` when a LATER command gives it to the container user,
-# directly or by -R on an ancestor. Ordering is load-bearing and is why this
-# does not just grep for two words: BOTH Dockerfiles chown -R /home/vscode
-# ABOVE these lines (the UID remap), and a chown that runs before the mkdir
-# cannot own a directory that does not exist yet. Reading it as coverage would
-# leave the guard passing on an image whose dir ships root-owned — precisely
-# the state being guarded against.
+# precreated <dockerfile> <path> <owner> — prints `mkdir` when some mkdir
+# creates <path>, and `chown` when the LAST command to change its ownership
+# afterwards gives it to <owner>, directly or by -R on an ancestor.
+#
+# Three things it must get right, each one a measured fail-open when it did not
+# (mutations 15-17):
+#   - COMMENTS ARE NOT CODE. Dockerfile comment lines are dropped before
+#     continuations are joined, exactly as the builder does. Without this a
+#     comment naming the mkdir satisfied the assertion while the RUN was gone —
+#     the #97 shape the ledger records, recurring inside its own guard.
+#   - ORDER. BOTH Dockerfiles chown -R /home/vscode ABOVE these lines (the UID
+#     remap), where the directory does not exist yet, so a position-blind check
+#     would read that as coverage.
+#   - THE OWNER, AND THE LAST WRITER OF IT. `chown root:root` satisfies "a
+#     chown happened"; so does a correct chown followed by a later one that
+#     takes the directory away again. Only the final owner is what the image
+#     ships, and it is compared against the compose `user:` — derived, not a
+#     literal.
+# Nothing containing the substring "chown" may be printed on the failing paths:
+# the caller uses assert_contains, so a diagnostic like "chown-by:root" would
+# pass the very assertion it was meant to fail.
 precreated() {
-    python3 - "$1" "$2" <<'PY'
+    python3 - "$1" "$2" "$3" <<'PY'
 import re, sys
 
-# Join continuations first, as tests/lib/dockerfile.sh does, so a wrapped RUN
-# is one string. Commands are cut at &&, || and ; so one RUN's argv cannot bleed
-# into the next command's.
-text = open(sys.argv[1]).read().replace("\\\n", " ")
-path = sys.argv[2]
+# Comment lines first, then continuations: a `#` line inside a wrapped RUN is
+# not part of the command, and joining first would splice it into one.
+text = "\n".join(ln for ln in open(sys.argv[1]).read().split("\n")
+                 if not ln.lstrip().startswith("#")).replace("\\\n", " ")
+path, owner = sys.argv[2], sys.argv[3]
 
 def operands(cmd):
     return [w.strip('"\'') for w in cmd.split()[1:] if not w.startswith("-")]
@@ -540,29 +581,44 @@ if mkdir_at is None:
     sys.exit(0)
 print("mkdir")
 
+final = None
 for m in re.finditer(r"chown[^&|;\n]*", text):
     if m.start() < mkdir_at:
         continue
     words = m.group(0).split()
     recursive = any(w.startswith("-") and "R" in w for w in words)
-    for target in (t.rstrip("/") for t in operands(m.group(0))[1:]):
+    ops = operands(m.group(0))
+    if not ops:
+        continue
+    for target in (t.rstrip("/") for t in ops[1:]):
         if target == path or (recursive and (path + "/").startswith(target + "/")):
-            print("chown")
-            sys.exit(0)
+            final = ops[0]          # last writer wins, so keep looking
+# The group half is not checked: compose declares a user, not a group, so
+# deriving an expectation for it would mean inventing one here.
+if final is not None and final.split(":")[0] == owner:
+    print("chown")
 PY
 }
 
+# Who must own it is derived too: the compose service's `user:` is the identity
+# the container runs as, so it is the one that has to be able to write there.
+compose_user="$(awk '/^[[:space:]]*user:[[:space:]]/ {print $2; exit}' \
+    "$DEV_BASE/docker-compose.yml")"
+assert_nonempty "the compose service user was derived from docker-compose.yml" \
+    "$compose_user"
+
 for dockerfile in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
     route="${dockerfile#"$DEV_BASE/"}"
-    coverage="$(precreated "$dockerfile" "$bind_parent")"
+    coverage="$(precreated "$dockerfile" "$bind_parent" "$compose_user")"
     assert_contains "$route creates $bind_parent" "mkdir" "$coverage"
-    assert_contains "$route chowns it AFTER creating it" "chown" "$coverage"
+    assert_contains "$route leaves it owned by '$compose_user' after creating it" \
+        "chown" "$coverage"
 done
 
 # Anti-vacuity: a parser that answered "mkdir" for anything would pass both
 # routes above while checking nothing.
 assert_eq "the parser reports nothing for a path no Dockerfile creates" \
-    "" "$(precreated "$DEV_BASE/Dockerfile" "$bind_parent-absent")"
+    "" "$(precreated "$DEV_BASE/Dockerfile" "$bind_parent-absent" "$compose_user")"
 
 # Everything above reads Dockerfile TEXT, which is a proxy for what the built
 # image ships. The fact itself needs a daemon, so it is typed `ci:` and lives in
@@ -571,9 +627,15 @@ assert_eq "the parser reports nothing for a path no Dockerfile creates" \
 # not a guard, which is the #83 shape (a step nobody owned, duly undone).
 checker="$DEV_BASE/dev/check-image-mount-parents"
 assert_true "the ci: half exists and is executable" test -x "$checker"
+# Anchored on a `run:` step, not a bare mention: the checker's own path is also
+# a TRIGGER-PATH entry in both workflows, so an unanchored grep is satisfied by
+# the file that merely lists it while the step that runs it is gone (mutation
+# 18 — the assertion whose entire job is "a checker no job runs is not a
+# guard", passing on a workflow that runs it nowhere).
 for workflow in docker-build.yml nix-base.yml; do
-    assert_true "$workflow runs dev/check-image-mount-parents on the image it built" \
-        grep -q 'dev/check-image-mount-parents ' "$DEV_BASE/.github/workflows/$workflow"
+    assert_true "$workflow has a run: step invoking dev/check-image-mount-parents" \
+        grep -qE '^[[:space:]]*run:[[:space:]]+dev/check-image-mount-parents[[:space:]]' \
+        "$DEV_BASE/.github/workflows/$workflow"
 done
 # The checker must DERIVE the directory as this suite does, not restate it: a
 # hardcoded literal there is a fourth encoding that goes stale silently, since

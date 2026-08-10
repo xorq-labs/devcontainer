@@ -271,12 +271,16 @@ taxonomy and reads as `test:`.
   docker, but the python snippet inside it is lifted out and run against a
   synthetic config document (test: `tests/test-volume-chown-guard.sh`).
 - BOTH image routes pre-create the transcript bind's parent
-  (`~/.claude/projects`) and chown it AFTER creating it, so a fresh
-  `claude-home` volume seeds it user-owned and the daemon never creates it as
-  root. This is belt to the ancestor walk's braces, and it covers what the walk
-  cannot: the walk runs in `setup()`, so an entry path that never calls
-  `dev/devcontainer` — VS Code "Reopen in Container" (#43), a bare `docker
-  compose up` — gets the root-owned directory and the #106 failure back. The
+  (`~/.claude/projects`) and chown it to the compose `user:` AFTER creating it,
+  so a fresh `claude-home` volume seeds it user-owned and the daemon never
+  creates it as root. This is belt to the ancestor walk's braces, and it covers
+  what the walk cannot: the walk runs in `setup()`, so an entry path that never
+  calls `dev/devcontainer` — VS Code "Reopen in Container" (#43), a bare `docker
+  compose up` — gets the root-owned directory and the #106 failure back. It
+  covers that for a FRESH volume only: a `claude-home` that already holds a
+  root-owned `projects/` is untouched by a rebuild and still needs the walk (or
+  a `clean`/`reset`), so this narrows who can hit #106, it does not retire the
+  walk. The
   ordering is load-bearing: both Dockerfiles `chown -R /home/vscode` during the
   UID remap, ABOVE these lines, where the directory does not exist yet. The nix
   route carries it in the tail build rather than `nix/base/flake.nix` on

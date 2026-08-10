@@ -55,8 +55,14 @@ RUN if [ "$USER_GID" != "1000" ]; then groupmod -g "$USER_GID" vscode; fi \
 # on USER_UID != 1000, so at the default UID it does not run and this dir would
 # stay root-owned. One empty dir, so this is not the fat-layer case the guard
 # exists to avoid.
+#
+# By NAME, not "$USER_UID:$USER_GID": the remap above has already renumbered
+# vscode, so the name resolves to whatever UID this build asked for, and it
+# states the same identity compose runs the container as (`user: vscode`) —
+# which is what lets the guard compare the owner here against the compose file
+# instead of accepting any chown at all.
 RUN mkdir -p /home/vscode/.claude/projects \
-    && chown "$USER_UID:$USER_GID" /home/vscode/.claude/projects
+    && chown vscode:vscode /home/vscode/.claude/projects
 
 # Shared helpers an overlay can source. Copied before install-system runs so a
 # build-time install-system.sh can source it too (e.g. nix-seed.sh). Inert for

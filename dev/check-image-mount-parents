@@ -60,6 +60,23 @@ user="$(awk '/^[[:space:]]*user:[[:space:]]/ {print $2; exit}' "$compose")"
 }
 
 echo "checking $image: $parent must be writable by '$user' (derived from $(basename "$compose"))"
+
+# Pre-flight so infrastructure failures are not reported as the #106 diagnosis.
+# A missing image, or a `--user` docker cannot resolve, exits non-zero from the
+# probe below exactly as an unwritable directory does, and pointing a CI reader
+# at the wrong file is the whole cost of a check like this being wrong.
+docker image inspect "$image" >/dev/null 2>&1 || {
+    echo "::error::no such image: $image (this is a CI wiring problem, not a" \
+        "#106 regression — the build step above did not produce this tag)" >&2
+    exit 1
+}
+if ! docker run --rm --user "$user" "$image" true 2>/dev/null; then
+    echo "::error::cannot run $image as '$user' at all — the image has no such" \
+        "user, or no working entrypoint. A CI wiring problem, not a #106" \
+        "regression." >&2
+    exit 1
+fi
+
 docker run --rm "$image" sh -c "stat -c '%n %U:%G %a' '$parent'" || {
     echo "::error::$image does not ship $parent at all. Compose mounts the" \
         "transcript bind inside it, so the daemon will create it as root and" \
