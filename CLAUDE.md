@@ -282,8 +282,14 @@ taxonomy and reads as `test:`.
   route carries it in the tail build rather than `nix/base/flake.nix` on
   purpose — the base pre-creates the other home dirs, but a fix there reaches
   nobody until a republish AND a `BASE_IMAGE` repin (#83), while the tail
-  rebuilds per project (test: `tests/test-volume-chown-guard.sh`, which derives
-  the directory from the compose target rather than restating it).
+  rebuilds per project (`test: tests/test-volume-chown-guard.sh` reads the
+  Dockerfile text — that a `mkdir` exists and a LATER `chown` covers it, which
+  is a proxy for what the image ships; `ci:` docker-build.yml and nix-base.yml
+  both run `dev/check-image-mount-parents`, which derives the directory and the
+  owner from `docker-compose.yml` and runs #106's own `mkdir` probe as that user
+  against the built image — the fact needs a daemon, so the hermetic suite holds
+  only the workflow↔tool coupling and the checker's refusal to hardcode the
+  path).
 - Lock discipline: per-worktree lock on fd 9, repo-scoped build lock on fd 8;
   any helper backgrounded inside the locked region must be spawned with
   `9>&-` or it holds the worktree lock forever (`test:

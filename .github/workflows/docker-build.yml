@@ -13,6 +13,9 @@ on:
       # Filters the repo-root build context, so it can break a COPY without
       # any COPY source changing.
       - .dockerignore
+      # Not a build input: the post-build check. Listed so an edit to it is
+      # exercised by a build rather than first running on someone else's PR.
+      - dev/check-image-mount-parents
   pull_request:
     branches: [main]
     paths:
@@ -25,6 +28,9 @@ on:
       # Filters the repo-root build context, so it can break a COPY without
       # any COPY source changing.
       - .dockerignore
+      # Not a build input: the post-build check. Listed so an edit to it is
+      # exercised by a build rather than first running on someone else's PR.
+      - dev/check-image-mount-parents
 
 jobs:
   build:
@@ -39,3 +45,11 @@ jobs:
             --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
             -t devcontainer-ci:test \
             .
+
+      # The image half of #106: tests/test-volume-chown-guard.sh can only read
+      # the Dockerfile text, so the fact that the built image really ships
+      # ~/.claude/projects writable by the container user is checkable only
+      # here. The checker derives both the directory and the user from
+      # docker-compose.yml and runs the mkdir the #106 report ran.
+      - name: Transcript bind parent ships writable
+        run: dev/check-image-mount-parents devcontainer-ci:test

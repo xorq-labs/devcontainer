@@ -38,8 +38,13 @@
 #      #106 the ancestor walk cannot cover, because an entry path that skips
 #      setup() (VS Code "Reopen in Container") never runs the walk at all. The
 #      directory is derived from docker-compose.yml, not written down here.
+#      This reads Dockerfile TEXT, a proxy: whether the BUILT image ships the
+#      directory writable needs a daemon and is typed `ci:`
+#      (dev/check-image-mount-parents). What this suite holds of that half is
+#      the workflow<->tool coupling — both build workflows must invoke the
+#      checker, and the checker must derive the path rather than restate it.
 #
-# Verified (ADR-0005 §2), eleven mutations. Counts and assertion names below are
+# Verified (ADR-0005 §2), fourteen mutations. Counts and assertion names below are
 # transcribed from the runs — see the METHOD note at the end, because three
 # earlier versions of this record were wrong.
 #   1. mount_point_targets' filter reverted to the pre-#106 `type == "volume"`
@@ -91,6 +96,17 @@
 #      Dockerfiles left alone — 4 red, and the failure names print
 #      `/home/vscode/.claude/transcripts`, which is what shows the expectation
 #      is read out of compose rather than restated in the assertions.
+#  12. the checker's step deleted from docker-build.yml — 1 red. The two
+#      workflows are asserted separately, so silently dropping the check from
+#      one route cannot hide behind the other still running it.
+#  13. the checker's derivation replaced by the hardcoded literal it derives —
+#      1 red, "does not hardcode the directory it checks". Note what this
+#      mutation does NOT break: the checker still passes against today's
+#      images, which is exactly why a literal there would go unnoticed until
+#      the mount moved.
+#  14. the checker made non-executable — 1 red. `run: dev/check-image-mount-parents`
+#      execs it directly, so a lost mode bit is a CI failure with a confusing
+#      message; this is the #129 shape, caught hermetically.
 #
 # METHOD: measure each mutation in a FRESH copy of the tree, and transcribe the
 # numbers from the run rather than reasoning about them. Three earlier versions
@@ -109,7 +125,7 @@
 # tests/mutation-coverage automates this (fresh copy per mutation, plus it
 # flags a mutation that changed nothing). It is not in this tree — it ships on
 # the branch behind PR #124.
-#   (mutation runs 2026-08-04; items 8-11 on 2026-08-10, fresh copy each)
+#   (mutation runs 2026-08-04; items 8-14 on 2026-08-10, fresh copy each)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -547,5 +563,23 @@ done
 # routes above while checking nothing.
 assert_eq "the parser reports nothing for a path no Dockerfile creates" \
     "" "$(precreated "$DEV_BASE/Dockerfile" "$bind_parent-absent")"
+
+# Everything above reads Dockerfile TEXT, which is a proxy for what the built
+# image ships. The fact itself needs a daemon, so it is typed `ci:` and lives in
+# dev/check-image-mount-parents, invoked by both build workflows. That
+# workflow<->tool coupling is what this suite can hold: a checker no job runs is
+# not a guard, which is the #83 shape (a step nobody owned, duly undone).
+checker="$DEV_BASE/dev/check-image-mount-parents"
+assert_true "the ci: half exists and is executable" test -x "$checker"
+for workflow in docker-build.yml nix-base.yml; do
+    assert_true "$workflow runs dev/check-image-mount-parents on the image it built" \
+        grep -q 'dev/check-image-mount-parents ' "$DEV_BASE/.github/workflows/$workflow"
+done
+# The checker must DERIVE the directory as this suite does, not restate it: a
+# hardcoded literal there is a fourth encoding that goes stale silently, since
+# nothing would fail until the mount moved AND someone noticed the check was
+# asserting the old path.
+assert_false "the checker does not hardcode the directory it checks" \
+    grep -qF "$bind_parent" "$checker"
 
 finish
