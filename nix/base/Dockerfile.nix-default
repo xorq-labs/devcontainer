@@ -44,23 +44,14 @@ RUN if [ "$USER_GID" != "1000" ]; then groupmod -g "$USER_GID" vscode; fi \
         chown -R "$USER_UID:$USER_GID" /home/vscode; \
     fi
 
-# The transcript bind's parent, mirroring the root Dockerfile's mkdir. The Nix
-# base pre-creates the home dirs (nix/base/flake.nix fakeRootCommands) but not
-# this one, and adding it there would reach nobody until a republish AND a
-# BASE_IMAGE repin — so it lives in the tail build, which every nix-route image
-# rebuilds anyway. Without it the daemon creates .claude/projects as root to
-# host the bind that compose mounts at .claude/projects/<key> (#106).
+# The transcript bind's parent, mirroring the root Dockerfile's mkdir (#106).
+# Here rather than in nix/base/flake.nix, where the sibling home dirs are
+# pre-created: a fix in the base reaches nobody until a republish AND a
+# BASE_IMAGE repin (#83), while the tail rebuilds per project.
 #
-# Explicitly chowned rather than left to the remap above: that chown is guarded
-# on USER_UID != 1000, so at the default UID it does not run and this dir would
-# stay root-owned. One empty dir, so this is not the fat-layer case the guard
-# exists to avoid.
-#
-# By NAME, not "$USER_UID:$USER_GID": the remap above has already renumbered
-# vscode, so the name resolves to whatever UID this build asked for, and it
-# states the same identity compose runs the container as (`user: vscode`) —
-# which is what lets the guard compare the owner here against the compose file
-# instead of accepting any chown at all.
+# Chowned explicitly because the remap above is guarded on USER_UID != 1000, so
+# at the default UID it does not run. By NAME, since the remap has already
+# renumbered vscode and the name is the identity compose runs as (`user:`).
 RUN mkdir -p /home/vscode/.claude/projects \
     && chown vscode:vscode /home/vscode/.claude/projects
 

@@ -89,20 +89,13 @@ RUN printf '. /usr/local/lib/devcontainer/claude-code-token-env.sh\n' \
 # token into the claude-home volume from the :ro host profile store
 # (docs/adr/0001-devcontainer-private-token-isolation.md). Just create the dirs.
 #
-# .claude/projects is here for a second reason: it is the parent of the
-# transcript bind (docker-compose.yml mounts the host log dir at
-# .claude/projects/<key>), so the daemon creates it as root if the image does
-# not ship it — the #106 defect. The ancestor walk in lib/volume-perms.sh
-# repairs that after the fact; creating it here means a FRESH claude-home
-# volume is never wrong in the first place, including on entry paths that never
-# run `dev/devcontainer setup` (VS Code "Reopen in Container", a bare `docker
-# compose up`). Only fresh: an existing volume already holding a root-owned
-# projects/ is unaffected by a rebuild and still needs the walk, a `clean` or a
-# `reset`.
-#
-# The daemon still creates the <key> mount point itself inside the volume, and
-# still as root — but nothing needs to write THAT: it is shadowed by the bind
-# at runtime, and what #106 was about is creating siblings next to it.
+# .claude/projects is here for a second reason: compose mounts the transcript
+# bind at .claude/projects/<key>, so the daemon creates the parent as root if
+# the image does not ship it (#106). lib/volume-perms.sh repairs that after the
+# fact, but only from setup(); shipping it here covers entry paths that never
+# run dev/devcontainer at all. A FRESH claude-home volume seeds from this path
+# — an existing one holding a root-owned projects/ still needs the walk, a
+# clean or a reset.
 RUN mkdir -p /home/vscode/.cache /home/vscode/.ssh /home/vscode/.claude/projects \
     && chown -R vscode:vscode /home/vscode/.cache /home/vscode/.ssh /home/vscode/.claude \
     && chmod 700 /home/vscode/.ssh
