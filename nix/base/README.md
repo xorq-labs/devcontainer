@@ -104,12 +104,15 @@ baked base are mutually exclusive (a mount at `/nix` would shadow the baked
 store), so seed overlays always build on the classic root `Dockerfile`.
 
 **3. Pin the Nix release (optional).** `nix_build_install` defaults to the
-version/sha in `lib/nix-seed.sh`. To pin a different release, set both before
-the call in `install-system.sh` — they stay coupled so a version bump without
-its checksum fails loudly:
+version/sha in `lib/nix-seed.sh` — move that shared pin with
+`devcontainer bump-nix`, never by hand, since it is the only thing that rewrites
+the coupled checksum. To pin a *different* release for one overlay only, set both
+before the call in `install-system.sh` — they stay coupled so a version bump
+without its checksum fails loudly at `sha256sum -c`. No version literal appears
+below on purpose: a second copy of the pin in prose goes stale silently.
 
-    NIX_VERSION=2.28.3
-    NIX_INSTALLER_SHA256=…
+    NIX_VERSION=<x.y.z>
+    NIX_INSTALLER_SHA256=<sha256 of that release's install script>
     . /usr/local/lib/devcontainer/nix-seed.sh
     nix_build_install
 
@@ -275,10 +278,11 @@ consumers actually build on:
 
 ghcr serves this package anonymously, so the tool needs only `curl` — no
 docker, no `read:packages`. Like `bump-hadolint`, its two read-only flags
-answer different questions: `--check` is a report (always exits 0 — "a newer
-base exists" is not a failure), `--verify` is a gate that fails unless the
-committed pin resolves to a multi-arch **manifest list**, and fails on an
-unreachable registry rather than passing unchecked.
+answer different questions: `--check` is a report (exit 0 whether or not the
+pin is current — "a newer base exists" is not a failure — but non-zero on an
+unreachable registry, since then there is no report to give), `--verify` is a
+gate that fails unless the committed pin resolves to a multi-arch **manifest
+list**, and fails on an unreachable registry rather than passing unchecked.
 
 That manifest-list check is the reason to prefer the tool over a hand edit.
 `imagetools inspect` prints the per-arch digests directly beneath the

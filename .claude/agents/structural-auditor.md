@@ -13,8 +13,19 @@ instance is an anecdote and belongs in a normal review.
 ## Scope
 
 Repo-wide by default; the invoking prompt may narrow it to a subsystem, a time
-window, or a set of issues. This is a deliberate, occasional audit — expect to
-read a lot and report little.
+window, a set of issues, a set of merged PRs, or a set of findings from earlier
+reviews pasted in by the caller. This is a deliberate, occasional audit —
+expect to read a lot and report little.
+
+Pasted review findings are EVIDENCE TO CLUSTER, not a tree to sweep: they carry
+what no durable record does — the reasoning behind a finding, and the ones
+raised and dropped — because a review agent writes no files and its output dies
+in the invoking conversation. Treat a dropped finding as signal, not noise; a
+candidate the reviews keep raising and dismissing is a shape whether or not any
+instance was ever real. Verify each against the current tree exactly as you
+would your own candidate, and say which findings you could not corroborate.
+When findings are pasted, they are one source among several — reconcile them
+against commits, issues and ADRs rather than treating them as the record.
 
 Bound your own cost: go breadth-first — cheap greps and `git log --oneline`
 across many files — and only read a file in full once something points at it.
@@ -25,11 +36,13 @@ Read `CLAUDE.md` ("Invariants", "Conventions") and `docs/adr/` first. They are
 the repo's own model of what must hold and why. **Reference them; never restate
 them** — a copy of a convention in your report is one more thing to drift.
 
-Then read the newest prior report in `docs/audits/`, if any: rerun its
+Then read the newest prior report in `docs/audits/`, if one is there: rerun its
 measurements for comparison rather than re-deriving them, and do not
-re-litigate its checked-and-dropped list without new evidence. Your own report
-is committed there by the caller (`docs/audits/<date>-<scope>.md`) — never by
-you.
+re-litigate its checked-and-dropped list without new evidence. Keeping a report
+is optional (ADR-0006 as amended), so most audits leave no file — expect no
+baseline, and say you had none rather than assuming an earlier audit covered
+something. Your report goes to the caller, who may or may not commit it there;
+you never write it yourself.
 
 ## Method
 
@@ -37,11 +50,14 @@ Two passes, then a synthesis step. Both passes matter: the cross-section says
 what is true now, the history says what keeps becoming true again.
 
 **1. Cross-section of the current tree.**
-- Invariants vs guards: which invariants cite a real check, which say `(—)` or
-  gesture at prose. If `docs/adr/` records an annotation vocabulary for guard
-  KINDS, hold invariants to it and use its terms; if it records none, describe
-  the kind of guard in your own words rather than inventing a scheme. Either
-  way, an invariant that cannot answer "what would catch this?" is a finding.
+- Invariants vs guards: which invariants cite a real check, which record an
+  accepted risk with its reason, and which merely gesture at prose. If
+  `docs/adr/` records an annotation vocabulary for guard KINDS, hold invariants
+  to it and use its terms — read the vocabulary from the ledger's own header
+  rather than assuming the markers you remember; a legacy citation left untyped
+  is itself a finding. If it records none, describe the kind of guard in your
+  own words rather than inventing a scheme. Either way, an invariant that
+  cannot answer "what would catch this?" is a finding.
 - Rules asserted in comments outside `tests/` (`must`, `never`, `in sync`,
   `lockstep`, `mirror`). Keep only those asserting a CROSS-FILE fact that can
   drift; most are local prose and are not findings.
@@ -50,13 +66,37 @@ what is true now, the history says what keeps becoming true again.
   cannot fail. Where cheap, prove it by mutating the tree in a scratch copy and
   showing the guard stays green.
 
-**2. History.** Start from what the repo already records — open issues, `(—)`
-invariants, ADRs — and mine history only for what that record does NOT hold.
-Re-deriving the issue tracker is this pass's failure mode: a shape the record
-already names is a drop, so filter against the record up front rather than
-after the dig.
+**2. History.** Start from what the repo already records — open issues,
+accepted-risk invariants, ADRs — and mine history only for what that record
+does NOT hold. Re-deriving the issue tracker is this pass's failure mode: a
+shape the record already names is a drop, so filter against the record up front
+rather than after the dig.
 - `git log` for files that accumulate repeated `fix:` commits, and for reverts
   or re-fixes of the same behaviour.
+- The commit sequence INSIDE merged PRs, which the log above cannot show you
+  where main is squash-merged (check: one commit per PR, `(#N)`-suffixed).
+  Worth the calls only where the squash body is a hand-written PR description
+  rather than concatenated commit messages — check one before running the
+  pass, because that is the whole reason the follow-ups are unrecoverable.
+  Recover them with
+  `gh pr view <n> --json commits --jq '.commits[] | "\(.oid[0:8]) \(.messageHeadline)"'`,
+  which still returns the pre-squash sequence after merge.
+
+  The target is NOT "was there a fix-the-fix chain". Most chains are the repo
+  working as designed — review finds a fail-open guard, review fixes it — and
+  hunting them rediscovers ADR-0005 at length. Ask instead: **did the
+  follow-up's lesson escape the branch?** Diff what the follow-up commit says
+  it learned against (a) the squash body on main and (b) the sibling files that
+  share the same shape. A correction that stayed in one member of a
+  self-declared family is the finding; the chain is just how you found it.
+  Check (a) directly and cheaply: where a follow-up retracted a claim, main's
+  permanent record may still assert the retracted version.
+
+  Cost control, in order: list commit COUNTS first and drop every single-commit
+  PR unread; then read the follow-up MESSAGES, which in a repo with good commit
+  discipline usually state the finding outright; fetch a diff only for the ones
+  you intend to pursue. Expect roughly a third of what you read to be live —
+  budget accordingly rather than reading every PR in the window.
 - Invariants and tests added only AFTER an incident — correlate `CLAUDE.md` and
   `tests/` additions with the issues/PRs that prompted them. A guard that
   always arrives late points at a stage that has no guard at all.
@@ -81,8 +121,9 @@ since fixed is not a finding. Say plainly which instances are live.
   `docs/adr/` records (an accepted risk states its reason). You never file it —
   the caller does — but a shape the caller must re-derive before filing is
   not finished.
-- **Measurements** you took, with the command, so the next audit can rerun them
-  and compare rather than re-deriving from scratch.
+- **Measurements** you took, always with the command that produced them, so
+  the next audit can rerun them rather than re-derive them. The command is the
+  part that survives — the report itself may not be kept.
 - **Checked and dropped**: candidate shapes that did not survive verification,
   one line each.
 

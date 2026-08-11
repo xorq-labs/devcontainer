@@ -13,8 +13,11 @@ set -euo pipefail
 #
 #   --check  is a REPORT, exactly like bump-nix --check and bump-claude-code
 #            --check: it prints current vs latest (or vs an explicitly
-#            requested version) and ALWAYS exits 0. "A newer hadolint exists"
-#            is news, not a failure. It performs no download.
+#            requested version) and exits 0 whether or not they match. "A
+#            newer hadolint exists" is news, not a failure. It performs no
+#            download. That promise is about the comparison, not the network:
+#            when no version can be resolved there is no report to give, and
+#            it fails (#126).
 #
 #   --verify is a GATE: it fetches the release for the CURRENTLY COMMITTED
 #            version (or an explicit one) and checks BOTH committed per-arch
@@ -159,7 +162,7 @@ if $pc_present && [ "$pc_current" != "$new" ]; then pc_drift=true; fi
 pc_inconsistent=false
 if $pc_present && [ "$pc_current" != "$current" ]; then pc_inconsistent=true; fi
 
-# --- --check: report the current/target versions, never edit, always exit 0 --
+# --- --check: report the current/target versions, never edit, exit 0 on drift
 #
 # Byte-for-byte the shape of `bump-nix --check` and `bump-claude-code --check`,
 # down to the %-11s label column: this is a family of three commands and they

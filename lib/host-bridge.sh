@@ -354,15 +354,193 @@ setup_git() {
     fi
 }
 
-setup_gh() {
+# gh stores its OAuth token in the OS keyring wherever one is available, so a
+# host hosts.yml routinely carries the account stanza and NO token. Copying that
+# in is worse than copying nothing: gh's multi-account migration runs at CONFIG
+# LOAD, goes to the keyring for the missing token, and the container has no
+# dbus-launch to reach one — so the migration refuses and EVERY gh command dies
+# before it starts, `gh --version` included, with GH_TOKEN never consulted. An
+# absent hosts.yml leaves gh working and GH_TOKEN usable.
+#
+# So setup_gh materializes the host's token into the copy. The two helpers below
+# are text-only, which is what makes them testable without docker or a real gh
+# (tests/test-gh-hosts-token.sh).
+
+# Print the host keys that need filling. Reads a hosts.yml on stdin.
+#
+# A host is already fine when it has a token gh can reach without the keyring:
+# one at host level, or one under the user named by `user:`. A token belonging
+# to some OTHER user does not count — the migration still goes to the keyring
+# for the active one, which is the whole failure. That distinction is why this
+# tracks the users stanza instead of grepping for any `oauth_token` at all.
+gh_hosts_missing_token() {
+    awk '
+        function flush(   ok) {
+            if (host == "") return
+            # No `user:` key at all: any in-file token is the only candidate.
+            ok = host_tok || (active != "" && (active in user_tok)) ||
+                 (active == "" && any_user_tok)
+            if (!ok) print host
+        }
+        /^[^ \t#][^:]*:[ \t]*$/ {
+            flush()
+            host = $0
+            sub(/:[ \t]*$/, "", host)
+            base = -1; host_tok = 0; active = ""
+            in_users = 0; user = ""; any_user_tok = 0
+            delete user_tok
+            next
+        }
+        host == "" { next }
+        /^[ \t]*$/ { next }
+        /^[ \t]*#/ { next }
+        {
+            ind = match($0, /[^ \t]/) - 1
+            if (base < 0) base = ind
+            key = $0
+            sub(/^[ \t]*/, "", key)
+            sub(/[ \t]*:.*$/, "", key)
+            if (ind <= base) {
+                in_users = (key == "users")
+                if (key == "oauth_token") host_tok = 1
+                else if (key == "user") {
+                    active = $0
+                    sub(/^[ \t]*user[ \t]*:[ \t]*/, "", active)
+                    sub(/[ \t]*$/, "", active)
+                }
+            } else if (in_users) {
+                # Inside the stanza a bare key is a username; anything deeper
+                # that says oauth_token belongs to the last one seen.
+                if ($0 ~ /:[ \t]*$/) user = key
+                else if (key == "oauth_token") {
+                    user_tok[user] = 1
+                    any_user_tok = 1
+                }
+            }
+        }
+        END { flush() }
+    '
+}
+
+# Emit a hosts.yml (stdin -> stdout) with `oauth_token: <token>` added to
+# <host>'s block. Three choices worth stating:
+#   - HOST level, not under users.<name> where gh's own migration would put it:
+#     that form works with no users stanza at all, and still satisfies the
+#     migration on a half-migrated file (checked against gh 2.x).
+#   - indentation read from the block's own body, because YAML requires the keys
+#     of one mapping to agree — a hard-coded width corrupts any other file.
+#   - token by environment, not argv: argv is world-readable through ps, and
+#     `awk -v` would interpret backslash escapes in the value.
+gh_hosts_with_token() {
+    GH_HOSTS_TARGET="$1" GH_HOSTS_TOKEN="$2" awk '
+        BEGIN {
+            target = ENVIRON["GH_HOSTS_TARGET"] ":"
+            token = ENVIRON["GH_HOSTS_TOKEN"]
+        }
+        # Stay pending past blank lines AND comments: a blank has no indent to
+        # read, a column-0 comment reads as none, and a defaulted width inside
+        # a block of another width is unparseable YAML — gh dies at config
+        # load either way. Only a real body line can answer the question.
+        pending && /^[ \t]*(#|$)/ { print; next }
+        # Deferred by one line: the block body is the only place its indent can
+        # be read from, and that is the line AFTER the host key.
+        pending {
+            indent = "    "
+            if ($0 ~ /^[ \t]+[^ \t]/) {
+                indent = $0
+                sub(/[^ \t].*$/, "", indent)
+            }
+            printf "%soauth_token: %s\n", indent, token
+            pending = 0
+        }
+        { print }
+        {
+            line = $0
+            sub(/[ \t]*$/, "", line)
+            if (line == target) pending = 1
+        }
+        END { if (pending) printf "    oauth_token: %s\n", token }
+    '
+}
+
+# Copy half of setup_gh: bridge the host's hosts.yml, filling keyring tokens.
+# Split out from setup_gh so the credential-helper half below runs on EVERY
+# outcome — this half has three (bridged, aborted, nothing to bridge) and two of
+# them return early.
+gh_bridge_hosts_config() {
     local hosts="$HOME/.config/gh/hosts.yml"
-    if [ -f "$hosts" ]; then
-        dc_exec mkdir -p /home/vscode/.config/gh
-        docker cp "$hosts" "$(dc ps -q app)":/home/vscode/.config/gh/hosts.yml
-        # docker cp preserves host UID; explicit chown makes us robust to
-        # base images that don't honor USER_UID build args.
-        dc exec -u root app chown vscode:vscode /home/vscode/.config/gh/hosts.yml
-    fi
+    [ -f "$hosts" ] || return 0
+
+    # Stage in a 0700 dir: the fill writes the token through an intermediate
+    # file that a plain `>` would create at the ambient umask (0644 by default).
+    local stage staged
+    stage="$(mktemp -d)"
+    # Baked in, not expanded at trap time: RETURN fires after the locals are
+    # gone. Same idiom as dc_up in dev/devcontainer.
+    # shellcheck disable=SC2064
+    trap "rm -rf '$stage'" RETURN
+    staged="$stage/hosts.yml"
+    cat "$hosts" >"$staged"
+
+    local host token existing
+    while read -r host; do
+        # stdin is the host list this loop is reading; gh must not see it — a
+        # gh that reads stdin would swallow the remaining hosts.
+        token="$(gh auth token -h "$host" </dev/null 2>/dev/null || true)"
+        if [ -z "$token" ]; then
+            # Any tokenless host is fatal to gh as a whole, not just to that
+            # host, so a partial fill is not worth copying — leaving no
+            # hosts.yml at all keeps gh runnable and GH_TOKEN usable.
+            echo "warning: host \`gh auth token -h $host\` yielded nothing (gh not installed, not logged in, or keyring unreadable)" >&2
+            echo "         skipping gh config copy — run \`gh auth login\` on the host, or set GH_TOKEN in the container" >&2
+            # A stale copy already in the container — the pre-fill code shipped
+            # tokenless files, and /home/vscode outlives cold starts — is
+            # broken the very way this fill prevents, and absent beats broken.
+            # Remove it ONLY when it is itself tokenless: a file with its
+            # tokens is an in-container `gh auth login`, not ours to delete.
+            existing="$(dc_exec cat /home/vscode/.config/gh/hosts.yml 2>/dev/null || true)"
+            if [ -n "$existing" ] && [ -n "$(gh_hosts_missing_token <<<"$existing")" ]; then
+                dc_exec rm -f /home/vscode/.config/gh/hosts.yml
+                echo "         removed the container's stale tokenless hosts.yml" >&2
+            fi
+            return 0
+        fi
+        gh_hosts_with_token "$host" "$token" <"$staged" >"$stage/next"
+        mv "$stage/next" "$staged"
+    done < <(gh_hosts_missing_token <"$hosts")
+
+    # The mode travels with docker cp, and the file holds a bearer token.
+    chmod 600 "$staged"
+    dc_exec mkdir -p /home/vscode/.config/gh
+    docker cp "$staged" "$(dc ps -q app)":/home/vscode/.config/gh/hosts.yml
+    # docker cp preserves host UID; explicit chown makes us robust to
+    # base images that don't honor USER_UID build args.
+    dc exec -u root app chown vscode:vscode /home/vscode/.config/gh/hosts.yml
+}
+
+setup_gh() {
+    gh_bridge_hosts_config
+
+    # Bridging hosts.yml authenticates the `gh` CLI only — git gets no
+    # credential helper, so `git push` over HTTPS fails while `gh auth status`
+    # reads green. `gh auth setup-git` over a hand-written credential.<host>
+    # .helper: it wires every host gh knows and keeps the token off disk. The
+    # container's ~/.gitconfig is ephemeral, so this re-applies every entry;
+    # repeats are free (gh writes it with --replace-all).
+    #
+    # Wired wherever gh can authenticate AT ALL, not only where we bridged a
+    # file: an env-token-only container gets a working helper, and both the
+    # tokenless abort above and mountless runtimes (CI) land exactly there. The
+    # gate runs in the container (only it sees its own GH_TOKEN) and in the SAME
+    # exec as the action, so covering those paths costs one round trip, not two.
+    # Exiting 0 when neither holds is a NOISE guard, not safety — gh refuses by
+    # itself; the warning would just fire every entry naming nothing actionable.
+    dc_exec sh -c '
+        [ -f /home/vscode/.config/gh/hosts.yml ] ||
+            [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] ||
+            exit 0
+        exec gh auth setup-git
+    ' || echo "warning: 'gh auth setup-git' failed in the container — git push over HTTPS won't authenticate" >&2
 }
 
 setup_claude_credentials() {
@@ -390,8 +568,16 @@ setup_claude() {
     local container_project_key="$DEV_CONTAINER_PROJECT_KEY"
 
     # Named volume root comes up root-owned; fix so vscode can write. Top-level
-    # is enough — setup-claude creates the contents as vscode. (There is no
-    # longer a credentials/ bind mount to avoid recursing into.)
+    # only, deliberately: setup-claude creates the contents as vscode, and a
+    # recursive chown here would cross into the transcript bind mounted at
+    # .claude/projects/<key> and rewrite ownership on the host side.
+    #
+    # It is NOT sufficient on its own. `.claude/projects` is created by the
+    # DAEMON as root to host that bind, so nothing below this line repairs it —
+    # that is dev_chown_mount_points' ancestor walk (lib/volume-perms.sh),
+    # which runs in setup() earlier in this same locked region (#106). setup()
+    # is cold-start only, so a container already running when that fix landed
+    # keeps the root-owned dir until its next recreate.
     dc exec -u root app chown vscode:vscode /home/vscode/.claude
 
     dc exec \

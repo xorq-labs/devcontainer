@@ -12,11 +12,19 @@
 # unrelated build on main would fail. An absent check looks identical to a
 # passing one — this test converts it into a red one.
 #
-# Three input classes are checked, matching the sibling: default-context COPY
+# Four input classes are checked, matching the sibling: default-context COPY
 # sources of the root Dockerfile; the additional build context that
 # `COPY --from=project ...` reads (CI supplies ./defaults, derived from the
-# workflow's own --build-context flag rather than hardcoded); and
-# .dockerignore.
+# workflow's own --build-context flag rather than hardcoded); .dockerignore;
+# and the workflow file itself, whose edits change what the build does and
+# must therefore trigger it (#109).
+#
+# Verified (ADR-0005 §2), audit round: deleting `- .github/workflows/docker-build.yml`
+# from both paths lists turns this red on ".github/workflows/docker-build.yml is
+# itself a trigger path" (14 passed, 1 failed). That was main's actual state:
+# PR #93, which existed to fix this workflow's trigger paths, ran only `Bash
+# tests` and `pre-commit` — `gh pr checks 93` vs `gh pr checks 87`, whose
+# self-listing twin ran Build (amd64)/(arm64) (mutation run 2026-08-04).
 #
 # Verified (ADR-0005 §2), review round: deleting `- Dockerfile` from BOTH paths
 # lists turns this red on "Dockerfile is itself a trigger path" (13 passed, 1
@@ -112,6 +120,20 @@ else
     _fail "${project_ctx}/** covers the --from=project build context" \
         "the classic build reads ./${project_ctx} as the 'project' context," \
         "so a change there must trigger the workflow."
+fi
+
+# The workflow file is itself a build input: it holds the docker build command,
+# its --build-context and its --build-args. nix-base.yml has always listed
+# itself; docker-build.yml did not, so PR #93 — which existed to fix that
+# workflow's trigger paths — merged without ever running the classic build.
+# Derived from the workflow this suite already points at, not restated.
+workflow_rel="${workflow#"$DEV_BASE"/}"
+if covered "$workflow_rel"; then
+    _pass "$workflow_rel is itself a trigger path"
+else
+    _fail "$workflow_rel is itself a trigger path" \
+        "the workflow defines the classic build — its build command, contexts and args —" \
+        "so a change to it must re-run the verification it configures."
 fi
 
 # Not a COPY source, but it filters the repo-root context the build uses:
