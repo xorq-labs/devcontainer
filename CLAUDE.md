@@ -267,13 +267,19 @@ taxonomy and reads as `test:`.
   prevents is bounded because the glob, not the workflow, enumerates suites).
 - Container-side root logic lives in `lib/*.sh` and is INJECTED per run via
   `dc exec ... sh -c "$script" <argv0> <args...>` — a runtime input: no
-  rebuild, no fingerprint entry unless it is also COPYed
-  (`tests/test-volume-chown-guard.sh` pins the volume-perms driver line).
+  rebuild, no fingerprint entry unless it is also COPYed. The `<argv0>`
+  operand is load-bearing and was itself unguarded: without it the first mount
+  point becomes `$0` and is silently never chowned
+  (`test: tests/test-volume-chown-guard.sh` pins the driver line, reads the
+  executed injection line, and asserts the argv0 is present).
 - `setup()` runs on EVERY cold start (gated only on `is_running`), so its
   steps must be idempotent and cheap. The named-volume chown is guarded by one
   owner+group stat, sound because `chown -R` is post-order: an interrupted
-  walk leaves the mount point root-owned and retries next start
-  (`tests/test-volume-chown-guard.sh`).
+  walk leaves the mount point root-owned and retries next start. That the
+  chown is *called* from `setup()` at all is part of the invariant and was
+  mutable-green until the audit — the suite exercised the lib without checking
+  production reached it (`test: tests/test-volume-chown-guard.sh`, which now
+  extracts `setup()`'s body and asserts the call).
 - Lock discipline: per-worktree lock on fd 9, repo-scoped build lock on fd 8;
   any helper backgrounded inside the locked region must be spawned with
   `9>&-` or it holds the worktree lock forever (`test:
