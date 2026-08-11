@@ -778,25 +778,35 @@ require_tty() {
 # this line would silently run without the host mounts.
 generate_host_mounts_override
 
-# Named-volume mount targets from the merged compose config — these come
-# up root-owned and need chowning before user-mode setup runs. Deriving
+# Mount targets from the merged compose config, as `<kind>:<target>` — these
+# come up root-owned and need chowning before user-mode setup runs. Deriving
 # from compose means projects only declare volumes in compose.override.yml.
-named_volume_targets() {
+#
+# Binds are emitted alongside volumes because only their ANCESTORS are repaired
+# (lib/volume-perms.sh never DISPATCHES a bind into its recursive branch, and
+# its ancestor walk never chowns a bind mount point or anything under one — but
+# see #115 below for what that does not cover). A bind nested under a named
+# volume — the
+# transcript bind at ~/.claude/projects/<key>, inside claude-home — makes the
+# daemon create the intervening directories as root, and nothing else repairs
+# them (#106). The recursion rooted at a volume is a separate matter: it still
+# descends through a bind nested under that volume (#115).
+mount_point_targets() {
     local cfg
     cfg="$(dc config --format=json)" || {
-        echo "error: 'docker compose config' failed — cannot derive named-volume mount targets" >&2
+        echo "error: 'docker compose config' failed — cannot derive mount targets" >&2
         return 1
     }
     printf '%s' "$cfg" | python3 -c '
 import json, sys
 cfg = json.load(sys.stdin)
 for v in cfg.get("services", {}).get("app", {}).get("volumes") or []:
-    if v.get("type") == "volume" and v.get("target"):
-        print(v["target"])
+    if v.get("type") in ("volume", "bind") and v.get("target"):
+        print(v["type"] + ":" + v["target"])
 '
 }
 
-# Chown the named-volume mount points to the container user. The logic lives in
+# Chown the mount points to the container user. The logic lives in
 # lib/volume-perms.sh (unit-tested by tests/test-volume-chown-guard.sh) and is
 # injected into the container as the `sh -c` script with the mount points as
 # positional args — it runs in the container, but nothing COPYs it into the
@@ -805,12 +815,12 @@ for v in cfg.get("services", {}).get("app", {}).get("volumes") or []:
 # Note this is called on EVERY cold start, not just the first (setup() is gated
 # only on `is_running`), which is why the recursive chown is guarded inside the
 # lib rather than run unconditionally.
-chown_named_volume_targets() {
+chown_mount_points() {
     local targets_out
-    # Command substitution, not a pipe: named_volume_targets fails loudly when
+    # Command substitution, not a pipe: mount_point_targets fails loudly when
     # `dc config` does, and `|| return 1` propagates that instead of letting the
     # downstream exit status mask it.
-    targets_out="$(named_volume_targets)" || return 1
+    targets_out="$(mount_point_targets)" || return 1
 
     local targets=() t
     while IFS= read -r t; do
@@ -821,18 +831,18 @@ chown_named_volume_targets() {
     local script
     script="$(cat "$DEV_BASE_DIR/lib/volume-perms.sh")" || return 1
     script="$script"'
-dev_chown_volume_targets vscode vscode /home/vscode "$@"'
+dev_chown_mount_points vscode vscode /home/vscode "$@"'
 
     # `sh -c <script> <argv0> <args...>`: the first operand after the script is
     # $0, so the mount points land in "$@" for the driver line above.
     dc exec -T -u root app sh -c "$script" volume-perms "${targets[@]}"
 }
 
-# First-run setup: chown root-owned named-volume mount points, set up the
+# First-run setup: chown root-owned mount points, set up the
 # host-path symlink for tools that persist absolute paths, then delegate
 # to the project's setup-env first-run.
 setup() {
-    chown_named_volume_targets
+    chown_mount_points
 
     if [ "$DEV_WORKSPACE" != "$DEV_CONTAINER_WORKSPACE" ] \
         && [ "$DEV_WORKSPACE" != "$DEV_MAIN_TREE" ]; then

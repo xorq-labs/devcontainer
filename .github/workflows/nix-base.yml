@@ -46,6 +46,9 @@ on:
       # COPY without any COPY source changing.
       - .dockerignore
       - .github/workflows/nix-base.yml
+      # Not a build input: the post-build check. Listed so an edit to it is
+      # exercised by a build rather than first running on someone else's PR.
+      - dev/check-image-mount-parents
   pull_request:
     paths:
       - nix/base/**
@@ -62,6 +65,9 @@ on:
       # COPY without any COPY source changing.
       - .dockerignore
       - .github/workflows/nix-base.yml
+      # Not a build input: the post-build check. Listed so an edit to it is
+      # exercised by a build rather than first running on someone else's PR.
+      - dev/check-image-mount-parents
   workflow_dispatch:
 
 env:
@@ -119,6 +125,14 @@ jobs:
             --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
             -t nix-base-tail:ci .
           docker run --rm nix-base-tail:ci sh -c 'claude --version && test -x /usr/local/bin/setup-env'
+
+      # The image half of #106, per arch: the nix route pre-creates
+      # ~/.claude/projects in the tail build (the base ships the sibling home
+      # dirs but not this one), and only a built image can confirm it landed
+      # writable. Same checker as docker-build.yml; it derives the directory
+      # and the user from docker-compose.yml.
+      - name: Transcript bind parent ships writable
+        run: dev/check-image-mount-parents nix-base-tail:ci
 
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'

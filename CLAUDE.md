@@ -267,13 +267,65 @@ taxonomy and reads as `test:`.
   prevents is bounded because the glob, not the workflow, enumerates suites).
 - Container-side root logic lives in `lib/*.sh` and is INJECTED per run via
   `dc exec ... sh -c "$script" <argv0> <args...>` — a runtime input: no
-  rebuild, no fingerprint entry unless it is also COPYed
-  (`tests/test-volume-chown-guard.sh` pins the volume-perms driver line).
+  rebuild, no fingerprint entry unless it is also COPYed (test:
+  `tests/test-volume-chown-guard.sh` pins the volume-perms driver line).
 - `setup()` runs on EVERY cold start (gated only on `is_running`), so its
   steps must be idempotent and cheap. The named-volume chown is guarded by one
   owner+group stat, sound because `chown -R` is post-order: an interrupted
   walk leaves the mount point root-owned and retries next start
-  (`tests/test-volume-chown-guard.sh`).
+  (test: `tests/test-volume-chown-guard.sh`).
+- Mount-point ownership repair is dispatched on the compose mount TYPE: a
+  `volume` gets the guarded recursive chown plus its ancestors, a `bind` gets
+  ancestors ONLY, anything else gets nothing. The dispatcher never routes a
+  bind INTO the recursive branch, and the ANCESTOR WALK never chowns a bind
+  mount point nor anything under one — it can reach both,
+  which `docker-compose.yml` really does arrange (`DEV_MAIN_GIT` nests inside
+  `DEV_MAIN_TREE`, both bound at their host paths) — though only when the HOST
+  checkout sits under the container home prefix, which is not exotic: this
+  repo's own main checkout is `/home/vscode/repos/github/devcontainer`.
+  Everything at or below a bind mount point is the host side. Binds cannot
+  simply be excluded from the walk instead: the daemon creates a bind target's
+  missing parents as root exactly as it does a volume's, and that is what left
+  `~/.claude/projects` unwritable (#106)
+  (test: `tests/test-volume-chown-guard.sh`).
+- Those two sentences are about the DISPATCHER and the ANCESTOR WALK. Neither
+  says a bind is never recursed into, because it is: `chown -R` rooted at a
+  volume has no mount awareness and descends through any bind nested under
+  that volume — the transcript bind inside `claude-home`, i.e. the #106
+  topology itself (`unguarded`: predates the ancestor-walk work and is latent
+  only incidentally — both images pre-create `~/.claude` user-owned and
+  `setup_claude` re-chowns the top every up, so the guard's precondition (a
+  volume root not already user-owned) is not normally met. Closing it means
+  replacing `chown -R` with a pruned `find`, which also rewrites the
+  post-order rationale the cold-start guard rests on — filed as #115 with the
+  options. `-xdev` is the tempting variant and is worse: it stops at every
+  filesystem boundary, changing behaviour for reasons unrelated to this
+  invariant. The suite pins the current, unsafe behaviour rather than
+  asserting the safe one).
+- The chown driver reads mount points from `dc config`, so the compose query in
+  `mount_point_targets` decides what the lib ever sees; the query itself needs
+  docker, but the python snippet inside it is lifted out and run against a
+  synthetic config document (test: `tests/test-volume-chown-guard.sh`).
+- BOTH image routes pre-create the transcript bind's parent
+  (`~/.claude/projects`) and chown it to the compose `user:`, so a FRESH
+  `claude-home` volume seeds it user-owned and the daemon never creates it as
+  root. This covers what the ancestor walk cannot — the walk runs in `setup()`,
+  so an entry path that never calls `dev/devcontainer` (VS Code "Reopen in
+  Container", #43) would get #106 back — but only for a fresh volume: an
+  existing one still needs the walk, a `clean` or a `reset`. The nix route
+  carries it in the tail build, not `nix/base/flake.nix`, because a fix in the
+  base reaches nobody until a republish AND a repin (#83)
+  (`ci:` docker-build.yml and nix-base.yml run `dev/check-image-mount-parents`,
+  which derives directory and owner from `docker-compose.yml` and runs #106's
+  own `mkdir` probe against the built image; `test:
+  tests/test-volume-chown-guard.sh` holds only what keeps that check reachable
+  — both workflows invoke it, it is executable, it does not hardcode what it
+  derives, and `docker-compose.yml` is a trigger path of docker-build.yml, or a
+  compose-side move of the mount rebuilds nothing. The suite deliberately does
+  not re-derive the fact from Dockerfile text: it did, and that parser had four
+  measured fail-opens. Where a `ci:` check can observe the artefact, a hermetic
+  restatement of the same fact is not a second guard but a second thing to get
+  wrong).
 - Lock discipline: per-worktree lock on fd 9, repo-scoped build lock on fd 8;
   any helper backgrounded inside the locked region must be spawned with
   `9>&-` or it holds the worktree lock forever (`test:

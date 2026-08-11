@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# CI check: the parent of the transcript bind must ship in a built image owned
+# by the container user, so the daemon never has to create it as root (#106).
+#
+# Why this is not in tests/: it needs a built image, so it cannot live in the
+# hermetic suite (tests/run-all globs tests/*.sh and would run it with no
+# docker). tests/test-volume-chown-guard.sh section 10 reads the Dockerfile
+# TEXT — that a mkdir exists and a later chown covers it — which is a proxy.
+# This runs the actual failing operation against the actual image, so it is the
+# `ci:` half of that invariant rather than a second textual restatement.
+#
+# The probe is the one from the #106 report: mkdir as the container user inside
+# the directory. A stat comparison would pass on a dir owned by a same-named
+# user with no write bit; only the mkdir answers the question that was asked.
+#
+# Both the directory and the user are DERIVED from docker-compose.yml — the
+# transcript mount's target and the service's `user:` — so nothing here is a
+# third encoding of either, and moving the mount moves this check with it.
+#
+# Usage: dev/check-image-mount-parents <image-ref>
+set -euo pipefail
+
+image="${1:-}"
+if [ -z "$image" ] || [ "$image" = "-h" ] || [ "$image" = "--help" ]; then
+    echo "usage: check-image-mount-parents <image-ref>" >&2
+    [ -n "$image" ] || exit 2
+    exit 0
+fi
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+compose="$base/docker-compose.yml"
+[ -f "$compose" ] || {
+    echo "error: no docker-compose.yml at $compose" >&2
+    exit 1
+}
+
+# The transcript mount is the one whose target interpolates
+# DEV_CONTAINER_PROJECT_KEY: that variable is what makes the target a
+# per-project subdirectory, so its parent is the directory the daemon creates.
+target="$(awk '/^[[:space:]]*target:[[:space:]]/ && /DEV_CONTAINER_PROJECT_KEY/ {print $2}' "$compose")"
+if [ "$(printf '%s' "$target" | grep -c . || true)" != 1 ]; then
+    echo "error: expected exactly one compose target interpolating" \
+        "DEV_CONTAINER_PROJECT_KEY, got: ${target:-<none>}" >&2
+    exit 1
+fi
+parent="${target%%\$\{*}"
+parent="${parent%/}"
+case "$parent" in
+    /*/?*) ;;
+    *)
+        echo "error: derived a nonsense parent directory from $compose: '$parent'" >&2
+        exit 1
+        ;;
+esac
+
+user="$(awk '/^[[:space:]]*user:[[:space:]]/ {print $2; exit}' "$compose")"
+[ -n "$user" ] || {
+    echo "error: no 'user:' in $compose — cannot tell who must own $parent" >&2
+    exit 1
+}
+
+echo "checking $image: $parent must be writable by '$user' (derived from $(basename "$compose"))"
+
+# Pre-flight so infrastructure failures are not reported as the #106 diagnosis.
+# A missing image, or a `--user` docker cannot resolve, exits non-zero from the
+# probe below exactly as an unwritable directory does, and pointing a CI reader
+# at the wrong file is the whole cost of a check like this being wrong.
+docker image inspect "$image" >/dev/null 2>&1 || {
+    echo "::error::no such image: $image (this is a CI wiring problem, not a" \
+        "#106 regression — the build step above did not produce this tag)" >&2
+    exit 1
+}
+if ! docker run --rm --user "$user" "$image" true 2>/dev/null; then
+    echo "::error::cannot run $image as '$user' at all — the image has no such" \
+        "user, or no working entrypoint. A CI wiring problem, not a #106" \
+        "regression." >&2
+    exit 1
+fi
+
+docker run --rm "$image" sh -c "stat -c '%n %U:%G %a' '$parent'" || {
+    echo "::error::$image does not ship $parent at all. Compose mounts the" \
+        "transcript bind inside it, so the daemon will create it as root and" \
+        "the container user will not be able to create sibling project keys" \
+        "(#106)." >&2
+    exit 1
+}
+
+if ! docker run --rm --user "$user" "$image" \
+    sh -c "mkdir '$parent/.mount-parent-probe' && rmdir '$parent/.mount-parent-probe'"; then
+    echo "::error::$parent is not writable by '$user' in $image. That is the" \
+        "#106 failure: Claude cannot create a project key it was not given," \
+        "including its memory directory. Fix the mkdir/chown in the" \
+        "Dockerfile for this route." >&2
+    exit 1
+fi
+
+echo "ok: $parent ships writable by '$user'"

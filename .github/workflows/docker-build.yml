@@ -16,6 +16,16 @@ on:
       # This file defines the build itself: change the docker build command,
       # a --build-context or a --build-arg and the verification must re-run.
       - .github/workflows/docker-build.yml
+      # Neither of these is a build input; both feed the post-build check.
+      # The checker itself, so an edit to it is exercised by a build rather
+      # than first running on someone else's PR — and docker-compose.yml,
+      # which the checker DERIVES the checked directory from: move the
+      # transcript mount without touching a Dockerfile and nothing would
+      # rebuild, so nothing would re-derive. Listed here, on the ~2 minute
+      # classic build, and deliberately NOT in nix-base.yml, where it would
+      # set off an hour-long two-arch build for the same answer.
+      - dev/check-image-mount-parents
+      - docker-compose.yml
   pull_request:
     branches: [main]
     paths:
@@ -31,6 +41,16 @@ on:
       # This file defines the build itself: change the docker build command,
       # a --build-context or a --build-arg and the verification must re-run.
       - .github/workflows/docker-build.yml
+      # Neither of these is a build input; both feed the post-build check.
+      # The checker itself, so an edit to it is exercised by a build rather
+      # than first running on someone else's PR — and docker-compose.yml,
+      # which the checker DERIVES the checked directory from: move the
+      # transcript mount without touching a Dockerfile and nothing would
+      # rebuild, so nothing would re-derive. Listed here, on the ~2 minute
+      # classic build, and deliberately NOT in nix-base.yml, where it would
+      # set off an hour-long two-arch build for the same answer.
+      - dev/check-image-mount-parents
+      - docker-compose.yml
 
 jobs:
   build:
@@ -45,3 +65,11 @@ jobs:
             --build-arg DEV_CONTAINER_WORKSPACE=/workspaces/src \
             -t devcontainer-ci:test \
             .
+
+      # The image half of #106: tests/test-volume-chown-guard.sh can only read
+      # the Dockerfile text, so the fact that the built image really ships
+      # ~/.claude/projects writable by the container user is checkable only
+      # here. The checker derives both the directory and the user from
+      # docker-compose.yml and runs the mkdir the #106 report ran.
+      - name: Transcript bind parent ships writable
+        run: dev/check-image-mount-parents devcontainer-ci:test

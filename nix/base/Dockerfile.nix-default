@@ -44,6 +44,17 @@ RUN if [ "$USER_GID" != "1000" ]; then groupmod -g "$USER_GID" vscode; fi \
         chown -R "$USER_UID:$USER_GID" /home/vscode; \
     fi
 
+# The transcript bind's parent, mirroring the root Dockerfile's mkdir (#106).
+# Here rather than in nix/base/flake.nix, where the sibling home dirs are
+# pre-created: a fix in the base reaches nobody until a republish AND a
+# BASE_IMAGE repin (#83), while the tail rebuilds per project.
+#
+# Chowned explicitly because the remap above is guarded on USER_UID != 1000, so
+# at the default UID it does not run. By NAME, since the remap has already
+# renumbered vscode and the name is the identity compose runs as (`user:`).
+RUN mkdir -p /home/vscode/.claude/projects \
+    && chown vscode:vscode /home/vscode/.claude/projects
+
 # Shared helpers an overlay can source. Copied before install-system runs so a
 # build-time install-system.sh can source it too (e.g. nix-seed.sh). Inert for
 # overlays that don't use it.
