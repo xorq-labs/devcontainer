@@ -8,6 +8,12 @@
 # entry makes the guard pass while the workflow is broken — so there is one
 # implementation and a fix lands in every guard at once.
 
+# Accepted duplication: there is one hand-written guard per build workflow
+# (test-docker-build-trigger-paths.sh, test-nix-base-trigger-paths.sh), and a
+# third build workflow would mean a third near-copy. Not worth generalising at
+# two instances — the shared parsing already lives here, which is where the
+# fail-open risk was. Revisit if a third `docker build` workflow appears.
+#
 # workflow_event_paths <workflow> <event>
 #
 # Emit one entry per line from the `paths:` list of the given `on:` event.

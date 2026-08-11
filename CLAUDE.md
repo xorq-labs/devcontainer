@@ -20,6 +20,18 @@ Commits run shellcheck, ruff, yamllint, and hadolint via pre-commit. Config is i
 pre-commit run --all-files
 ```
 
+That bare name resolves in both places: `.tools/bin/` on the host (the
+`uv tool install` above), and PATH in the container, where
+`projects/devcontainer/install-system.sh` installs it. Never reach for
+`.tools/bin/pre-commit` by path from inside a container. A worktree ships with
+no `.tools/`, and where a host copy IS visible — the main checkout, which
+compose bind-mounts at its host path — its uv shim is unexecutable there. The
+shebang names `.tools/uvx/pre-commit/bin/python`, which the container can see:
+it is a symlink to a uv-managed host interpreter (under `~/.local/share/uv/` by
+default) that no mount carries, so it dangles. The shim therefore passes `-x`
+and still fails to exec, which is why `is_runnable()` in `dev/hooks/pre-commit`
+will not trust `-x` alone and runs `--version` too.
+
 ## Testing
 
 Suites live in `tests/*.sh` and share a harness (`tests/lib/harness.sh`:
@@ -64,8 +76,9 @@ an interactive question. Current records: ADR-0001 (private credential
 seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
 `.claude/agents/` in git; per-subdir state symlinks), ADR-0005 (guard
 taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
-reserved by #81), and nix/base/README.md
-"Design decisions" for the base-image record.
+reserved by #81), ADR-0006 (structural auditing as prompted agents, not metric
+tooling; amended 2026-08-04 so committing an audit report is optional), and
+nix/base/README.md "Design decisions" for the base-image record.
 
 ## Invariants
 
@@ -138,8 +151,16 @@ taxonomy and reads as `test:`.
 - `NIX_USER` in `lib/nix-seed.sh` owns the profile path every nix overlay
   repeats as `EXTRA_PATH: "/home/<NIX_USER>/.nix-profile/bin"` (compose can't
   read the bash var), `templates/nix/` included, so a rename there strands the
-  copies and nix-seeded containers lose their tools from `PATH`
-  (test: tests/test-nix-user-sync.sh).
+  copies and nix-seeded containers lose their tools from `PATH`. `NIX_USER`
+  must ALSO equal the container user the image creates, which is a bare
+  literal in both Dockerfiles (no `ARG USERNAME`) plus `nix/base/flake.nix`'s
+  `Env HOME` — guarding only the overlay copies left that upstream half
+  silent, so renaming the container user kept every downstream assertion green
+  while the seed symlinked a profile into a home nobody owns
+  (`test: tests/test-nix-user-sync.sh` — the overlay copies derive from
+  `NIX_USER`; the container-user half requires each route's `HOME` declaration
+  to exist and checks every committed `home/<user>` literal in both Dockerfiles
+  and the flake, so a partial rename fails too).
 - Publishing the Nix base does not deliver it: consumers build on the
   `BASE_IMAGE` digest in `nix/base/compose.nix-base.yml`, so a publish without
   a repin reaches nobody. The `pin` job in `.github/workflows/nix-base.yml`
@@ -157,8 +178,9 @@ taxonomy and reads as `test:`.
 - Those same trigger paths must cover every tail-build input — default-context
   `COPY` sources in `nix/base/Dockerfile.nix-default`, the `--build-context`
   dir the `--from=project` COPYs read, and `.dockerignore`, which is no COPY
-  source but filters the repo-root context the tail build uses — and `push`
-  must equal `pull_request`. The
+  source but filters the repo-root context the tail build uses, and the
+  workflow file itself, which holds the build command and its contexts — and
+  `push` must equal `pull_request`. The
   workflow's own header states this rule and it drifted anyway —
   `lib/claude-code-token-env.sh` was COPYed, allowlisted in `.dockerignore` and
   hashed by `image_config_files()`, but unlisted here (#86), so a PR touching
@@ -168,9 +190,12 @@ taxonomy and reads as `test:`.
 - `docker-build.yml`'s trigger paths hand-mirror the same input classes for
   the classic build — the root `Dockerfile`'s default-context `COPY` sources,
   the `--build-context` dir the `--from=project` COPYs read, and
-  `.dockerignore` — with `push` equal to `pull_request`. The list omitted
-  `.dockerignore` (#92), so a deny pattern newly matching a COPY source could
-  merge green with no classic build run
+  `.dockerignore`, and THE WORKFLOW FILE ITSELF — with `push` equal to
+  `pull_request`. The list omitted `.dockerignore` (#92), so a deny pattern
+  newly matching a COPY source could merge green with no classic build run;
+  it then omitted itself, so PR #93 — which existed to fix these very trigger
+  paths — merged without ever running the classic build, the third instance of
+  "nothing failed, the verification just never ran"
   (test: `tests/test-docker-build-trigger-paths.sh`).
 - `nix/base/flake.nix`'s `Env` hand-maintains PATH and no other variable *of
   the base's* (it also sets `HOME` and `SSL_CERT_FILE`, additions
@@ -190,7 +215,16 @@ taxonomy and reads as `test:`.
   `CLAUDE_CODE_VERSION` and `nix/base/pkgs/claude-code.nix`; bump via
   `dev/bump-claude-code` (`tests/test-claude-code-pin-sync.sh`).
 - `NIX_VERSION` and `NIX_INSTALLER_SHA256` in `lib/nix-seed.sh` are a coupled
-  pair; bump via `dev/bump-nix` (`tests/test-bump-nix.sh`).
+  pair; bump via `dev/bump-nix`, never by hand — no test can verify the
+  installer checksum (that needs the real artifact), so the tool is the guard,
+  and it resolves versions from the GitHub /tags endpoint because NixOS/nix
+  publishes no releases; /releases/latest 404s, which left the tool dead — and
+  the coupling unguarded — for as long as nothing ran it against the real
+  network (#126). It takes the highest stable `X.Y.Z`, not the first entry
+  (GitHub guarantees no /tags ordering), and refuses to resolve BACKWARDS — a
+  truncated listing would otherwise rewrite the pair older, with a valid
+  checksum, and call it a bump; an explicit version still downgrades on
+  request (tool: dev/bump-nix; test: tests/test-bump-nix.sh).
 - `HADOLINT_VERSION` and BOTH per-arch checksums (`HADOLINT_SHA256_AMD64`,
   `HADOLINT_SHA256_ARM64`) in `projects/devcontainer/install-system.sh` are a
   coupled triple, and the `.pre-commit-config.yaml` hadolint rev is a fourth
@@ -201,11 +235,13 @@ taxonomy and reads as `test:`.
   sha in particular had no guard at all, and a half-bump breaks the arm64
   container build at `sha256sum -c` while the tree stays green.
   Its two read-only flags are not interchangeable: `--check` is a report
-  (current vs latest, no download, always exits 0 — the shape `bump-nix` and
-  `bump-claude-code` use), `--verify` is the gate (fetches the committed
+  (current vs latest, no download, exit 0 whether or not the versions match —
+  the shape `bump-nix` and `bump-claude-code` use; drift is news, not a
+  failure, but a `--check` that cannot resolve a version has no report to give
+  and exits non-zero, #126), `--verify` is the gate (fetches the committed
   version's release, checks both per-arch checksums, non-zero on a mismatch
   OR on a failed fetch). Use `--verify` when you want an answer you can gate
-  on; `--check` never fails.
+  on; `--check`'s exit says nothing about drift.
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and
@@ -368,6 +404,25 @@ taxonomy and reads as `test:`.
   a `.gitignore` entirely (unguarded: ephemeral and harness-managed; nothing
   authors agent files there, and the commit-time hook still fires if one
   does).
+- The host bridge owns git identity and git credentials as a pair: `setup_git`
+  copies name/email, and `setup_gh` must wire the credential helper
+  (`gh auth setup-git`) — bridge only the `hosts.yml` and `gh auth status`
+  reads green in every container while `git push` over HTTPS fails. The rule is
+  WHEREVER GH CAN AUTHENTICATE AT ALL, not wherever a file was bridged: gh
+  authenticates from a `hosts.yml` OR from `GH_TOKEN`/`GITHUB_TOKEN`, and
+  `gh auth git-credential` serves either. Scoping the wiring to the copy path
+  instead — as this first shipped — silently excluded two configurations the
+  copy half returns early on: the tokenless abort (#136), a documented recovery
+  state that deliberately leaves the container on `GH_TOKEN`, and mountless
+  runtimes (CI, Codespaces) that bridge nothing. Hence the split into
+  `gh_bridge_hosts_config` with the wiring after it. The gate runs INSIDE the
+  container in the SAME `dc_exec` as the action — only the container sees its
+  own `GH_TOKEN`, which nothing here sets — so those paths cost one round trip,
+  not a probe plus one. Exiting 0 when neither holds is a noise guard, not
+  safety: gh refuses by itself, so the alternative is a warning on every entry
+  naming nothing actionable. The container's `~/.gitconfig` is ephemeral, so
+  the helper re-applies every entry; repeats are free (`--replace-all`)
+  (test: tests/test-host-bridge-gh.sh).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).
@@ -447,5 +502,35 @@ taxonomy and reads as `test:`.
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
 - Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift. hadolint additionally carries two per-arch checksums in `install-system.sh` that no test can verify — bump it with `devcontainer bump-hadolint` rather than by hand, and use `devcontainer bump-hadolint --verify` to confirm the committed checksums really are the release's.
 - Any convention that spans two files gets a drift-guard test when it is introduced (existing examples: `tests/test-claude-code-pin-sync.sh`, `tests/test-lint-config-sync.sh`, `tests/test-classic-args-sync.sh`, `tests/test-completions-sync.sh`, `tests/test-dockerignore-lib-allowlist.sh`). A convention only its author knows about will drift.
-- Guards follow ADR-0005. Type every new invariant's guard (see the Invariants header for the vocabulary). When adding or materially changing a guard, break the invariant once, watch the guard go red, and record the mutation in the test's header comment. Prefer generating the second copy from the first, then deriving the expectation by parsing the source of truth at check time; restate-and-compare is the fallback, not the default.
-- A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume.
+  This is followed roughly half the time. Authors do guard couplings they both
+  recognise and scope correctly, at introduction:
+  #41 shipped `tests/test-claude-code-pin-sync.sh` and
+  `tests/test-nix-base-pin.sh` in the same commit as the pins they guard, #55
+  shipped `tests/test-token-env-snippet.sh` with the strip-list coupling, #74
+  shipped `tests/test-worktree-claude-layout.sh` with the layout, #57 shipped
+  `tests/test-devcontainer-sessions.sh` with the Python re-implementation.
+  What escapes splits three ways, and four attempts at a single moral for it
+  were each falsified in review — so it is recorded as a classification, each
+  claim carrying the commit that evidences it.
+  1. **Prose stood in for a guard.** `71b6e03` (#33) added reciprocal "keep in
+     sync" comments at both linter-pin sites plus a Conventions note, and no
+     test; `343632a` states the tail-build rule in `nix-base.yml`'s own header,
+     which then drifted (#86); ADR-0003 recorded the live-`.gitignore`
+     migration that nothing checked (#91).
+  2. **Genuinely unrecognised.** dispatch↔completions carried no sync comment
+     at any revision before `143bbf7` (#72) — checked at `c4b1110`, `96f0eb5`,
+     `fc2ca02` and `143bbf7^`. Nobody wrote it down because nobody saw it.
+  3. **Guarded, but too narrowly for a copy that propagates.** `e54a37e` (#37)
+     shipped the `# match NIX_USER in lib/nix-seed.sh` comment AND
+     `tests/test-init-nix.sh` asserting `EXTRA_PATH` matches `NIX_USER`'s home
+     — a real at-introduction guard, scoped to the scaffold. The committed
+     overlay copies were outside it, and `xorq-desktop`'s carried no NIX_USER
+     mention at all, so #99 was a coverage fix, not a first guard.
+  Review therefore has to do all three jobs: notice the unseen coupling, refuse
+  a comment offered in place of a test, and ask whether a real guard covers
+  every copy. Treat "a comment will do" as never sufficient — normative, not an
+  observed law: `NIX_USER` never actually drifted, and its coverage gap was
+  found by an audit before any incident.
+
+- Guards follow ADR-0005. Type every new invariant's guard (see the Invariants header for the vocabulary). When adding or materially changing a guard, record a mutation PAIR in the test's header comment (ADR-0005 §2, amended 2026-08-04): a FORM-ONLY change to the source it parses, which must leave it green with no drop in assertion count, and a SEMANTIC change expressed in a form you did not write — comment the call out rather than deleting it — which must turn it red. One mutation aimed at the invariant confirms the hole you just closed and misses the parsing assumption you did not know you had made — no fail-open in this repo has ever been found by the guard's own author, and #93's and #110's guards carried recorded §2 runs and grew them anyway. Where the byte form IS the invariant (the `BASE_IMAGE` pin), record that instead of running the form-only half, and say which invariant makes it so. Prefer generating the second copy from the first, then deriving the expectation by parsing the source of truth at check time; restate-and-compare is the fallback, not the default.
+- A structural audit (the `structural-auditor` agent) is closed only when each surviving shape is filed as an issue, landed in a PR, or recorded as an accepted `unguarded:` invariant — a report is not a disposal. An audit finding that dies in its conversation is the fixed-but-open issue problem in a new costume. Committing the report itself to `docs/audits/` is optional (ADR-0006 required it until the 2026-08-04 amendment dropped it), which makes those three dispositions the only durable trace an audit is required to leave — and the amendment accepts, explicitly, that audit-to-audit measurement continuity is unguarded as a result.

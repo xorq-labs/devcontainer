@@ -119,6 +119,8 @@ the kinds with `;`, one annotation per layer, still one line.
 
 ### 2. A new guard must be shown to fail
 
+*Amended 2026-08-04 — see "record a mutation PAIR" below.*
+
 When adding or materially changing a drift guard, break the invariant and
 observe the guard go red. Record the mutation in the test's header comment —
 one line, e.g. *"Verified: deleting the path from both lists turns this red."*
@@ -186,3 +188,73 @@ was insufficient, why two rediscoveries happened) is the load-bearing part.
 **Require mutation testing in CI.** Rejected as premature — it means running the
 suite against deliberately broken trees, which is a meaningful harness
 investment. A recorded manual mutation captures most of the value now.
+
+## Amendment (2026-08-04): record a mutation PAIR, one aimed at the input
+
+**Status: Accepted.**
+
+One mutation is not enough. "Break the invariant" aims the mutation at the thing
+the author is already thinking about, so the §2 run confirms the hole they just
+closed and misses the parsing assumption they did not know they had made.
+
+The evidence is named cases, not a statistic. No fail-open in this repo has
+been found by the guard's own author — every one came from a reviewer or an
+auditor: a `[[ ]]` dispatch arm invisible to a strict-shape parser (#96), COPY
+coverage satisfied by a comment (#97), a pin anchor restated rather than read
+(#95), a workflow omitting itself from its own trigger paths (#109), and — in
+the PR that existed to fix this class — five successive rounds of comment- and
+spelling-blind parses (#110).
+
+The first three predate this ADR, so their authors never ran §2 at all. That is
+the weaker half of the case. The stronger half is #93's and #110's guards, which
+DID carry recorded §2 runs and grew fail-opens anyway — a single mutation aimed
+at the invariant is not enough even when it is performed.
+
+A count is deliberately NOT quoted here. The first version of this amendment
+claimed "12 of 19", then "16 of 24", and the command it published to reproduce
+that returned 3, because a later edit dropped the branch loop it depended on.
+The population spans open branches and moves hourly; the marker (`round`) is
+also a floor, since records like "two mutations, both previously green" document
+an externally-found hole without using the word. An ADR arguing for measurement
+rigor should not publish a number that cannot be re-derived — the named cases
+above are stable and checkable, and they carry the argument.
+
+So record **two** mutations:
+
+1. **Form-only.** Reformat the source the guard parses without changing its
+   meaning: wrap a line, requote, swap YAML flow spelling for block, change
+   case, add a comment that mentions the identifier. The guard must stay
+   **green** *and its assertion count must not fall*. A silent drop is the
+   fail-open — this is what an evaporating `mapfile` looks like.
+2. **Semantic, expressed in a form you did not write.** Disable the thing by
+   commenting it out rather than deleting it; set the key in block form rather
+   than flow. The guard must go **red**.
+
+**Exception — guards whose invariant IS the byte form.** Where the fact being
+guarded is that a line keeps an exact shape (the `BASE_IMAGE` pin's four
+encodings), a form-only mutation correctly turns the guard red: format
+sensitivity is the point. Record that instead of running the form-only half,
+and say which invariant makes it so.
+
+Cost: two extra runs per new or materially-changed guard. Compare an
+assertion count only against the paired run on the same machine — suites with
+environment-conditional assertions (absent `zsh`/`fish`) report different
+absolute totals elsewhere.
+
+Not proposed: a new rung, and a new annotation kind for coverage or wiring.
+Coverage is already rung-2-able — §3's own rung-2 example (parsing a
+Dockerfile's COPYs rather than listing them) *is* set-derivation. Wiring is a
+fact to state in the invariant, not a kind of guard; mixing it into
+`test:`/`tool:`/`ci:`/`structural`/`unguarded` would confuse the guard-kind
+axis with the fact axis.
+
+## Amendment (2026-08-04): the rung is a property of an assertion
+
+**Status: Accepted.**
+
+Read the ladder per ASSERTION, not per suite. A suite can be rung 2 on the fact
+and rung 3 on the call: `tests/test-volume-chown-guard.sh` derives the chown
+semantics by running the real lib, while pinning the driver line as a literal.
+Annotating the suite as `test:` says nothing about which of its assertions are
+derived, and a single derived check will otherwise vouch for its restated
+neighbours.

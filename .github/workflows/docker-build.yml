@@ -13,6 +13,9 @@ on:
       # Filters the repo-root build context, so it can break a COPY without
       # any COPY source changing.
       - .dockerignore
+      # This file defines the build itself: change the docker build command,
+      # a --build-context or a --build-arg and the verification must re-run.
+      - .github/workflows/docker-build.yml
       # Not a build input: the post-build check. Listed so an edit to it is
       # exercised by a build rather than first running on someone else's PR.
       - dev/check-image-mount-parents
@@ -28,6 +31,9 @@ on:
       # Filters the repo-root build context, so it can break a COPY without
       # any COPY source changing.
       - .dockerignore
+      # This file defines the build itself: change the docker build command,
+      # a --build-context or a --build-arg and the verification must re-run.
+      - .github/workflows/docker-build.yml
       # Not a build input: the post-build check. Listed so an edit to it is
       # exercised by a build rather than first running on someone else's PR.
       - dev/check-image-mount-parents
