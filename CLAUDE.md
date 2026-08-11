@@ -322,14 +322,22 @@ taxonomy and reads as `test:`.
   route carries it in the tail build rather than `nix/base/flake.nix` on
   purpose — the base pre-creates the other home dirs, but a fix there reaches
   nobody until a republish AND a `BASE_IMAGE` repin (#83), while the tail
-  rebuilds per project (`test: tests/test-volume-chown-guard.sh` reads the
-  Dockerfile text — that a `mkdir` exists and a LATER `chown` covers it, which
-  is a proxy for what the image ships; `ci:` docker-build.yml and nix-base.yml
-  both run `dev/check-image-mount-parents`, which derives the directory and the
-  owner from `docker-compose.yml` and runs #106's own `mkdir` probe as that user
-  against the built image — the fact needs a daemon, so the hermetic suite holds
-  only the workflow↔tool coupling and the checker's refusal to hardcode the
-  path).
+  rebuilds per project (`ci:` docker-build.yml and nix-base.yml both run
+  `dev/check-image-mount-parents`, which derives the directory and the owner
+  from `docker-compose.yml` and runs #106's own `mkdir` probe as that user
+  against the built image; `test: tests/test-volume-chown-guard.sh` holds only
+  what keeps that check REACHABLE — both workflows invoke it, it is executable,
+  it does not hardcode what it derives, and `docker-compose.yml` is a trigger
+  path of docker-build.yml, since a compose-side move of the mount would
+  otherwise rebuild nothing and the checker would never re-derive. That trigger
+  entry is in the classic workflow only: it is a ~2 minute build, and a red
+  there blocks a PR as well as a red in the hour-long two-arch nix one would.
+  The suite deliberately does NOT re-derive the fact from the Dockerfiles'
+  text: it did, and that parser had four measured fail-opens (a comment naming
+  the commands, a chown to the wrong owner, a later chown taking ownership
+  back, and an unanchored workflow grep) — where a `ci:` check can observe the
+  artefact, a hermetic restatement of the same fact is not a second guard but a
+  second thing to get wrong).
 - Lock discipline: per-worktree lock on fd 9, repo-scoped build lock on fd 8;
   any helper backgrounded inside the locked region must be spawned with
   `9>&-` or it holds the worktree lock forever (`test:

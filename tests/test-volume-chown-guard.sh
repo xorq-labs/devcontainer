@@ -33,18 +33,15 @@
 #   8. the compose query emits kind-qualified volume AND bind targets, checked
 #      by running dev/devcontainer's own python snippet against a document
 #   9. the dev/devcontainer driver line still matches the lib's function
-#  10. both image routes ship the transcript bind's parent, created AND then
-#      chowned, so the daemon never has to create it as root — the half of
-#      #106 the ancestor walk cannot cover, because an entry path that skips
-#      setup() (VS Code "Reopen in Container") never runs the walk at all. The
-#      directory is derived from docker-compose.yml, not written down here.
-#      This reads Dockerfile TEXT, a proxy: whether the BUILT image ships the
-#      directory writable needs a daemon and is typed `ci:`
-#      (dev/check-image-mount-parents). What this suite holds of that half is
-#      the workflow<->tool coupling — both build workflows must invoke the
-#      checker, and the checker must derive the path rather than restate it.
+#  10. the image half of #106 is WIRED AND REACHABLE: both build workflows
+#      invoke dev/check-image-mount-parents, it is executable, it derives the
+#      directory rather than restating it, and docker-build.yml triggers on
+#      docker-compose.yml — the file the checker derives FROM, and no build
+#      input, so nothing else would list it. The fact itself (an image ships
+#      the directory writable) needs a daemon and is typed `ci:`; this suite
+#      holds only what keeps that check running.
 #
-# Verified (ADR-0005 §2), eighteen mutations. Counts and assertion names below are
+# Verified (ADR-0005 §2), twelve mutations. Counts and assertion names below are
 # transcribed from the runs — see the METHOD note at the end, because three
 # earlier versions of this record were wrong.
 #   1. mount_point_targets' filter reverted to the pre-#106 `type == "volume"`
@@ -80,60 +77,38 @@
 #   7. the whole `bind)` dispatch arm deleted — 3 red, including the kind-set
 #      comparison, which is what proves that guard derives both sides rather
 #      than restating a vocabulary.
-#   8. `/projects` dropped from the root Dockerfile's mkdir, back to the
-#      pre-#106 `mkdir -p ... /home/vscode/.claude` — 2 red, both in item 10.
-#      Two rather than one because the chown probe reports nothing once the
-#      mkdir is gone: there is no creation for a later chown to cover.
-#   9. the nix tail build's RUN deleted entirely — 2 red, the same pair for
-#      that route. The routes are checked independently, so neither mutation
-#      is masked by the other file being correct.
-#  10. that RUN's `&& chown` dropped, leaving only the mkdir — 1 red, "chowns
-#      it AFTER creating it". This is the one that pays for the ordering logic
-#      in `precreated`: both Dockerfiles chown -R /home/vscode ABOVE these
-#      lines, so a coverage test that ignored position would read that remap
-#      as ownership and stay green on an image shipping the dir root-owned.
-#  11. the compose target moved to .claude/transcripts/<key> with both
-#      Dockerfiles left alone — 4 red, and the failure names print
-#      `/home/vscode/.claude/transcripts`, which is what shows the expectation
-#      is read out of compose rather than restated in the assertions.
-#  12. the checker's step deleted from docker-build.yml — 1 red. The two
-#      workflows are asserted separately, so silently dropping the check from
-#      one route cannot hide behind the other still running it.
-#  13. the checker's derivation replaced by the hardcoded literal it derives —
-#      1 red, "does not hardcode the directory it checks". Note what this
-#      mutation does NOT break: the checker still passes against today's
-#      images, which is exactly why a literal there would go unnoticed until
-#      the mount moved.
-#  14. the checker made non-executable — 1 red. `run: dev/check-image-mount-parents`
+#   8. the checker's `run:` step deleted from docker-build.yml — 1 red. The
+#      two workflows are asserted separately, so dropping the check from one
+#      route cannot hide behind the other still running it.
+#   9. the same deletion, plus a trailing comment on the trigger-path entry so
+#      the checker's name still appears in the file — 1 red. This is the
+#      fail-open version of that assertion (an unanchored grep matched the
+#      paths line), closed by anchoring on `run:`; the paths entry that made it
+#      satisfiable was added by this very change.
+#  10. the checker's derivation replaced by the hardcoded literal it derives —
+#      1 red. Note what this mutation does NOT break: the checker still passes
+#      against today's images, which is why a literal there would go unnoticed
+#      until the mount moved.
+#  11. the checker made non-executable — 1 red. `run: dev/check-image-mount-parents`
 #      execs it directly, so a lost mode bit is a CI failure with a confusing
 #      message; this is the #129 shape, caught hermetically.
+#  12. `- docker-compose.yml` removed from docker-build.yml's trigger paths —
+#      2 red, one per event list. Without it a compose-side move of the
+#      transcript mount rebuilds nothing, so the checker never re-derives and
+#      the `ci:` half silently stops covering that direction.
 #
-# Items 15-18 are the FOUR FAIL-OPENS an independent review of item 10 found,
-# each reproduced here (58/0 green while the image was broken) before being
-# closed, then re-measured. Item 10 as first written could be satisfied by a
-# comment, by a chown to the wrong owner, and by a workflow that ran the
-# checker nowhere — three restatements of the same lesson this file already
-# carried twice, which is the argument for reviewing a guard rather than
-# trusting that its author read it carefully.
-#  15. the nix tail's RUN replaced by a COMMENT naming the same mkdir and
-#      chown (the likeliest future edit — the file's own comment calls
-#      flake.nix "the obvious home" for it) — was GREEN at 58/0 with the
-#      directory shipped by nobody; now 2 red. `precreated` read comment lines
-#      as code: the #97 shape ("a comment naming the path satisfied textual
-#      containment while the file went genuinely unhashed"), recurring inside
-#      a guard written by someone who had just read that ledger entry.
-#  16. the nix chown's owner changed to `root:root`, same path, same position
-#      — was GREEN at 58/0; now 1 red. The check accepted any chown and never
-#      looked at operand 0.
-#  17. a LATER `RUN chown root:root <path>` appended to the root Dockerfile,
-#      leaving the correct block untouched — was GREEN at 58/0; now 1 red.
-#      Only the last writer of ownership is what the image ships, so the walk
-#      keeps looking rather than returning at the first match.
-#  18. the checker's `run:` step deleted from docker-build.yml while its
-#      trigger-path entry gained a trailing comment — was GREEN at 58/0,
-#      because the unanchored grep matched the paths entry. Now 1 red: the
-#      assertion is anchored on a `run:` line. The trigger-path entry added in
-#      the same commit is what made the old grep satisfiable without the step.
+# WHAT WAS DELETED, and why it is worth recording rather than quietly dropping:
+# an earlier version of item 10 parsed both Dockerfiles for the mkdir/chown, as
+# a hermetic proxy for what the image ships. That parser had FOUR measured
+# fail-opens (a comment naming the commands satisfied it; `chown root:root`
+# satisfied it; a later chown taking ownership away again satisfied it; and the
+# workflow assertion above). All four were found by review, not by its author.
+# Once dev/check-image-mount-parents existed the parser was measuring a proxy
+# for something being measured directly, so it was removed with its seven
+# mutation records — ~110 lines, and every defect this change had after the
+# Dockerfile edit itself. The lesson kept: where a `ci:` check can observe the
+# artefact, a hermetic re-derivation of the same fact from source text is not a
+# second guard, it is a second thing to get wrong.
 #
 # METHOD: measure each mutation in a FRESH copy of the tree, and transcribe the
 # numbers from the run rather than reasoning about them. Three earlier versions
@@ -152,8 +127,8 @@
 # tests/mutation-coverage automates this (fresh copy per mutation, plus it
 # flags a mutation that changed nothing). It is not in this tree — it ships on
 # the branch behind PR #124.
-#   (mutation runs 2026-08-04; items 8-18 on 2026-08-10, fresh copy each;
-#    8-14 re-measured after 15-18 changed the parser, counts unchanged)
+#   (mutation runs 2026-08-04; items 8-12 on 2026-08-11, fresh copy each,
+#    re-measured after the Dockerfile-text parser was deleted)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -516,122 +491,55 @@ sh -c "$script" volume-perms "volume:/home/vscode/.cache/uv"
 assert_contains "injected script: mount points arrive in \"\$@\" and resolve under /home/vscode" \
     "vscode:vscode /home/vscode/.cache" "$(log)"
 
-# ---- 10. both image routes pre-create the transcript bind's parent ----
-# The ancestor walk repairs that directory after the daemon has created it as
-# root; shipping it in the image means it is never root-owned to begin with,
-# which is the only thing that covers an entry path that never runs setup()
-# (VS Code "Reopen in Container", a bare `docker compose up`). Two images build
-# that path, so this is a three-file coupling — compose plus both Dockerfiles.
+# ---- 10. the image half of #106 is checked against real images ----
+# Shipping the directory in the image is what covers an entry path that never
+# runs setup() (VS Code "Reopen in Container", a bare `docker compose up`).
+# Whether an IMAGE ships it writable cannot be answered without a daemon, so
+# that fact is typed `ci:` and lives in dev/check-image-mount-parents, which
+# runs #106's own mkdir probe against the built image.
 #
-# DERIVED, not restated (ADR-0005): the directory is read out of
-# docker-compose.yml as the parent of the one mount target that interpolates
-# DEV_CONTAINER_PROJECT_KEY — that variable is what makes the target a
-# per-project subdirectory — so moving or renaming the transcript mount moves
-# this guard with it instead of leaving it asserting a stale literal.
-echo "--- transcript bind parent pre-created in both image routes ---"
+# This suite deliberately does NOT parse the Dockerfiles for the mkdir/chown.
+# It did, and that parser was the single worst component of this change: four
+# separate fail-opens (a comment naming the commands satisfied it; a chown to
+# the wrong owner satisfied it; a later chown taking ownership away again
+# satisfied it; the workflow assertion was satisfied by a trigger-path entry),
+# every one of them found by review rather than by its author, and every one in
+# the proxy rather than in the thing being proxied. Deleting it removed ~110
+# lines and every defect this change has had since the Dockerfile edit itself.
+#
+# What is left here is the coupling that keeps the `ci:` half REACHABLE, which
+# is the part a hermetic suite can actually hold:
+#   - both build workflows invoke the checker (a checker no job runs is not a
+#     guard — the #83 shape, a step nobody owned and duly went undone)
+#   - docker-build.yml triggers on docker-compose.yml, because the checker
+#     DERIVES the directory from it: move the transcript mount without touching
+#     a Dockerfile and nothing would rebuild, so nothing would re-derive. That
+#     entry is in the classic workflow only — it is a ~2 minute build, and a red
+#     there blocks the PR just as well as a red in the hour-long two-arch nix
+#     one, which is why the compose file is NOT worth listing there
+#   - the checker does not hardcode what it derives
+echo "--- the ci: half of #106 is wired and reachable ---"
 
+# Derived the same way the checker derives it: the transcript mount is the one
+# whose target interpolates DEV_CONTAINER_PROJECT_KEY (that variable is what
+# makes the target a per-project subdirectory), and its parent is the directory
+# the daemon would otherwise create as root.
 bind_target="$(awk '/^[[:space:]]*target:[[:space:]]/ && /DEV_CONTAINER_PROJECT_KEY/ {print $2}' \
     "$DEV_BASE/docker-compose.yml")"
 assert_eq "exactly one compose target interpolates DEV_CONTAINER_PROJECT_KEY" \
     1 "$(printf '%s' "$bind_target" | grep -c . || true)"
-# Cut at the interpolation and drop the trailing slash: the key is the leaf, so
-# what remains is the parent the daemon would otherwise create.
 bind_parent="${bind_target%%\$\{*}"
 bind_parent="${bind_parent%/}"
 assert_true "the transcript bind's parent derives to a path under /home/vscode" \
     bash -c '[[ "$1" == /home/vscode/?* ]]' _ "$bind_parent"
 
-# precreated <dockerfile> <path> <owner> — prints `mkdir` when some mkdir
-# creates <path>, and `chown` when the LAST command to change its ownership
-# afterwards gives it to <owner>, directly or by -R on an ancestor.
-#
-# Three things it must get right, each one a measured fail-open when it did not
-# (mutations 15-17):
-#   - COMMENTS ARE NOT CODE. Dockerfile comment lines are dropped before
-#     continuations are joined, exactly as the builder does. Without this a
-#     comment naming the mkdir satisfied the assertion while the RUN was gone —
-#     the #97 shape the ledger records, recurring inside its own guard.
-#   - ORDER. BOTH Dockerfiles chown -R /home/vscode ABOVE these lines (the UID
-#     remap), where the directory does not exist yet, so a position-blind check
-#     would read that as coverage.
-#   - THE OWNER, AND THE LAST WRITER OF IT. `chown root:root` satisfies "a
-#     chown happened"; so does a correct chown followed by a later one that
-#     takes the directory away again. Only the final owner is what the image
-#     ships, and it is compared against the compose `user:` — derived, not a
-#     literal.
-# Nothing containing the substring "chown" may be printed on the failing paths:
-# the caller uses assert_contains, so a diagnostic like "chown-by:root" would
-# pass the very assertion it was meant to fail.
-precreated() {
-    python3 - "$1" "$2" "$3" <<'PY'
-import re, sys
-
-# Comment lines first, then continuations: a `#` line inside a wrapped RUN is
-# not part of the command, and joining first would splice it into one.
-text = "\n".join(ln for ln in open(sys.argv[1]).read().split("\n")
-                 if not ln.lstrip().startswith("#")).replace("\\\n", " ")
-path, owner = sys.argv[2], sys.argv[3]
-
-def operands(cmd):
-    return [w.strip('"\'') for w in cmd.split()[1:] if not w.startswith("-")]
-
-mkdir_at = next((m.start() for m in re.finditer(r"mkdir[^&|;\n]*", text)
-                 if path in operands(m.group(0))), None)
-if mkdir_at is None:
-    sys.exit(0)
-print("mkdir")
-
-final = None
-for m in re.finditer(r"chown[^&|;\n]*", text):
-    if m.start() < mkdir_at:
-        continue
-    words = m.group(0).split()
-    recursive = any(w.startswith("-") and "R" in w for w in words)
-    ops = operands(m.group(0))
-    if not ops:
-        continue
-    for target in (t.rstrip("/") for t in ops[1:]):
-        if target == path or (recursive and (path + "/").startswith(target + "/")):
-            final = ops[0]          # last writer wins, so keep looking
-# The group half is not checked: compose declares a user, not a group, so
-# deriving an expectation for it would mean inventing one here.
-if final is not None and final.split(":")[0] == owner:
-    print("chown")
-PY
-}
-
-# Who must own it is derived too: the compose service's `user:` is the identity
-# the container runs as, so it is the one that has to be able to write there.
-compose_user="$(awk '/^[[:space:]]*user:[[:space:]]/ {print $2; exit}' \
-    "$DEV_BASE/docker-compose.yml")"
-assert_nonempty "the compose service user was derived from docker-compose.yml" \
-    "$compose_user"
-
-for dockerfile in "$DEV_BASE/Dockerfile" "$DEV_BASE/nix/base/Dockerfile.nix-default"; do
-    route="${dockerfile#"$DEV_BASE/"}"
-    coverage="$(precreated "$dockerfile" "$bind_parent" "$compose_user")"
-    assert_contains "$route creates $bind_parent" "mkdir" "$coverage"
-    assert_contains "$route leaves it owned by '$compose_user' after creating it" \
-        "chown" "$coverage"
-done
-
-# Anti-vacuity: a parser that answered "mkdir" for anything would pass both
-# routes above while checking nothing.
-assert_eq "the parser reports nothing for a path no Dockerfile creates" \
-    "" "$(precreated "$DEV_BASE/Dockerfile" "$bind_parent-absent" "$compose_user")"
-
-# Everything above reads Dockerfile TEXT, which is a proxy for what the built
-# image ships. The fact itself needs a daemon, so it is typed `ci:` and lives in
-# dev/check-image-mount-parents, invoked by both build workflows. That
-# workflow<->tool coupling is what this suite can hold: a checker no job runs is
-# not a guard, which is the #83 shape (a step nobody owned, duly undone).
 checker="$DEV_BASE/dev/check-image-mount-parents"
 assert_true "the ci: half exists and is executable" test -x "$checker"
 # Anchored on a `run:` step, not a bare mention: the checker's own path is also
 # a TRIGGER-PATH entry in both workflows, so an unanchored grep is satisfied by
 # the file that merely lists it while the step that runs it is gone (mutation
-# 18 — the assertion whose entire job is "a checker no job runs is not a
-# guard", passing on a workflow that runs it nowhere).
+# 9 — the assertion whose entire job is "a checker no job runs is not a guard",
+# passing on a workflow that runs it nowhere).
 for workflow in docker-build.yml nix-base.yml; do
     assert_true "$workflow has a run: step invoking dev/check-image-mount-parents" \
         grep -qE '^[[:space:]]*run:[[:space:]]+dev/check-image-mount-parents[[:space:]]' \
@@ -643,5 +551,17 @@ done
 # asserting the old path.
 assert_false "the checker does not hardcode the directory it checks" \
     grep -qF "$bind_parent" "$checker"
+
+# The checker reads docker-compose.yml at run time, so a compose-side move of
+# the mount only reaches it if a build re-runs. docker-compose.yml is no build
+# INPUT — nothing COPYs it — which is exactly why it would not otherwise be
+# listed, and why this needs its own assertion rather than riding on
+# tests/test-docker-build-trigger-paths.sh.
+for event in push pull_request; do
+    assert_true "docker-build.yml triggers on docker-compose.yml ($event)" \
+        bash -c '
+            sed -n "/^  $2:/,/^  [a-z_]*:/p" "$1" | grep -qE "^ +- docker-compose\.yml$"
+        ' _ "$DEV_BASE/.github/workflows/docker-build.yml" "$event"
+done
 
 finish

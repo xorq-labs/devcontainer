@@ -16,9 +16,16 @@ on:
       # This file defines the build itself: change the docker build command,
       # a --build-context or a --build-arg and the verification must re-run.
       - .github/workflows/docker-build.yml
-      # Not a build input: the post-build check. Listed so an edit to it is
-      # exercised by a build rather than first running on someone else's PR.
+      # Neither of these is a build input; both feed the post-build check.
+      # The checker itself, so an edit to it is exercised by a build rather
+      # than first running on someone else's PR — and docker-compose.yml,
+      # which the checker DERIVES the checked directory from: move the
+      # transcript mount without touching a Dockerfile and nothing would
+      # rebuild, so nothing would re-derive. Listed here, on the ~2 minute
+      # classic build, and deliberately NOT in nix-base.yml, where it would
+      # set off an hour-long two-arch build for the same answer.
       - dev/check-image-mount-parents
+      - docker-compose.yml
   pull_request:
     branches: [main]
     paths:
@@ -34,9 +41,16 @@ on:
       # This file defines the build itself: change the docker build command,
       # a --build-context or a --build-arg and the verification must re-run.
       - .github/workflows/docker-build.yml
-      # Not a build input: the post-build check. Listed so an edit to it is
-      # exercised by a build rather than first running on someone else's PR.
+      # Neither of these is a build input; both feed the post-build check.
+      # The checker itself, so an edit to it is exercised by a build rather
+      # than first running on someone else's PR — and docker-compose.yml,
+      # which the checker DERIVES the checked directory from: move the
+      # transcript mount without touching a Dockerfile and nothing would
+      # rebuild, so nothing would re-derive. Listed here, on the ~2 minute
+      # classic build, and deliberately NOT in nix-base.yml, where it would
+      # set off an hour-long two-arch build for the same answer.
       - dev/check-image-mount-parents
+      - docker-compose.yml
 
 jobs:
   build:
