@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bump the pinned kenn-io toolkit versions in nix/kenn/sources.json.
+#
+# Usage:
+#   devcontainer bump-kenn                    # bump every tool to its latest release
+#   devcontainer bump-kenn --tool kata kwt    # only these tools
+#   devcontainer bump-kenn --pin kata=0.14.3  # hold one at an explicit version
+#   devcontainer bump-kenn --check            # report drift, don't edit (exit 1 if stale)
+#
+# Unlike bump-claude-code there is no Dockerfile pin to edit: the toolkit is
+# consumed from the nix/kenn flake (host direnv shells; optionally the Nix
+# base). All pins — versions and per-platform SRI hashes — live in
+# sources.json, and update.py derives the hashes from the releases' published
+# checksum manifests without downloading any tarballs. It also handles the
+# upstream inconsistencies (kwt's checksums.txt naming, forge's "./"-prefixed
+# entries, kata's homebrew_* decoy assets); see nix/kenn/README.md.
+
+base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+updater="$base/nix/kenn/update.py"
+
+[ -f "$updater" ] || { echo "error: $updater not found" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "error: python3 is required" >&2; exit 1; }
+
+exec python3 "$updater" "$@"

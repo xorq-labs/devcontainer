@@ -2,5 +2,6 @@
 # Copy to .envrc.user and customize.
 
 source_env .envrc.user.uv
+# source_env .envrc.user.kenn   # opt-in: kenn-io toolkit + shared worktree state
 
 PATH_add $direnv_root/../devcontainer/dev

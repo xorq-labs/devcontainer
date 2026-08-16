@@ -1,0 +1,37 @@
+# kenn-io toolkit (kata, kwt, roborev, agentsview, ...) for host-side work.
+# Sourced from .envrc.user — opt in via the commented line in
+# .envrc.user.template.
+#
+# DEVCONTAINER_HOME: where this framework is checked out. Defaults to the
+# current checkout when sourced inside the framework repo itself, otherwise
+# to ~/repos/github/devcontainer; export it in .envrc.user to override.
+if [ -z "${DEVCONTAINER_HOME:-}" ]; then
+    if [ -d "${direnv_root}/nix/kenn" ]; then
+        DEVCONTAINER_HOME="${direnv_root}"
+    else
+        DEVCONTAINER_HOME="${HOME}/repos/github/devcontainer"
+    fi
+fi
+export DEVCONTAINER_HOME
+
+# Tools from the nix/kenn flake; nix-direnv caches the shell so re-entry is
+# instant. Guarded: warn rather than break the env on a stale checkout.
+if [ -d "${DEVCONTAINER_HOME}/nix/kenn" ]; then
+    use flake "${DEVCONTAINER_HOME}/nix/kenn"
+else
+    log_error "kenn flake not found under ${DEVCONTAINER_HOME}/nix/kenn — update the devcontainer checkout or export DEVCONTAINER_HOME"
+fi
+
+# Shared worktree-state root. Projects that bind-mount ~/.kwt into their
+# containers (host-mounts.txt) get one kwt registry and one worktree tree
+# on both sides.
+export KWT_HOME="${HOME}/.kwt"
+
+# Relative worktree linkage: sibling worktrees resolve on both sides of the
+# repo bind mount. Complements new-worktree's lock — the lock prevents damage
+# from container-side prune, this removes the cause. Env-scoped: no gitconfig
+# file is touched, and it covers new-worktree itself since dev/ runs in this
+# same environment.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=worktree.useRelativePaths
+export GIT_CONFIG_VALUE_0=true
