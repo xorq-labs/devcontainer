@@ -23,6 +23,7 @@ import binascii
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -63,9 +64,12 @@ def github_token() -> str | None:
     for var in ("GH_TOKEN", "GITHUB_TOKEN"):
         if os.environ.get(var):
             return os.environ[var]
+    gh = shutil.which("gh")
+    if not gh:
+        return None
     try:
-        out = subprocess.run(
-            ["gh", "auth", "token"], capture_output=True, text=True, timeout=10
+        out = subprocess.run(  # noqa: S603 -- fixed argv, no shell, resolved path
+            [gh, "auth", "token"], capture_output=True, text=True, timeout=10
         )
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
@@ -75,10 +79,15 @@ def github_token() -> str | None:
 
 
 def http_get(url: str, token: str | None = None) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "kenn-io-flake-updater"})
+    if not url.startswith("https://"):
+        msg = f"refusing non-https URL: {url}"
+        raise ValueError(msg)
+    req = urllib.request.Request(  # noqa: S310 -- scheme enforced above
+        url, headers={"User-Agent": "kenn-io-flake-updater"}
+    )
     if token and "api.github.com" in url:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
         return resp.read()
 
 
@@ -105,9 +114,7 @@ def fetch_checksums(repo: str, version: str, token: str | None) -> dict[str, str
             if exc.code != 404:
                 raise
     if text is None:
-        raise RuntimeError(
-            f"{repo} v{version}: no {' or '.join(CHECKSUM_FILES)} in the release"
-        )
+        raise RuntimeError(f"{repo} v{version}: no {' or '.join(CHECKSUM_FILES)} in the release")
 
     sums: dict[str, str] = {}
     for line in text.splitlines():
@@ -157,11 +164,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tool", nargs="+", choices=sorted(TOOLS), metavar="NAME")
     ap.add_argument(
-        "--pin", action="append", default=[], metavar="REPO=VERSION",
+        "--pin",
+        action="append",
+        default=[],
+        metavar="REPO=VERSION",
         help="hold a tool at an explicit version instead of resolving latest",
     )
     ap.add_argument(
-        "--check", action="store_true",
+        "--check",
+        action="store_true",
         help="do not write; exit 1 if sources.json differs from upstream",
     )
     args = ap.parse_args()
