@@ -7,10 +7,9 @@ Reusable dev container setup with worktree support, project overlays, and host c
 ```bash
 cp .envrcs/.envrc.user.uv .envrcs/.envrc.user
 direnv allow
-uv tool install pre-commit
 ```
 
-This installs pre-commit into `.tools/bin/` (project-local, not `~/.local/bin`). The git hook at `dev/hooks/pre-commit` is symlinked into `.git/hooks/` automatically by direnv (via `symlink_hooks` in `lib/git.sh`). Do not run `pre-commit install` — it will overwrite the custom hook.
+`direnv allow` installs pre-commit into `.tools/bin/` (project-local, not `~/.local/bin`) if it isn't there yet — see the `uv tool install pre-commit` guard in `.envrc.user.uv`. The git hook at `dev/hooks/pre-commit` is symlinked into `.git/hooks/` automatically by the same direnv pass (via `symlink_hooks` in `lib/git.sh`). Do not run `pre-commit install` — it will overwrite the custom hook.
 
 ## Pre-commit hooks
 
