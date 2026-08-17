@@ -7,7 +7,15 @@ set -euo pipefail
 #   devcontainer bump-kenn                    # bump every tool to its latest release
 #   devcontainer bump-kenn --tool kata kwt    # only these tools
 #   devcontainer bump-kenn --pin kata=0.14.3  # hold one at an explicit version
-#   devcontainer bump-kenn --check            # report drift, don't edit (exit 1 if stale)
+#   devcontainer bump-kenn --check            # report committed vs latest, don't edit
+#   devcontainer bump-kenn --verify           # gate the committed pins (CI)
+#
+# --check and --verify are not interchangeable, and follow the same split as
+# bump-hadolint and bump-nix-base: --check is a report (drift is news, not a
+# failure — exit 0 whether or not a newer release exists, non-zero only when a
+# version could not be resolved at all), --verify is the gate (re-derives every
+# committed version's hashes from the release's checksum manifest, non-zero on
+# any mismatch or on an unreachable upstream).
 #
 # Unlike bump-claude-code there is no Dockerfile pin to edit: the toolkit is
 # consumed from the nix/kenn flake (host direnv shells; optionally the Nix

@@ -54,8 +54,29 @@ statement about ELv2.
 ./update.py                    # bump everything to latest
 ./update.py --tool kata forge  # only these
 ./update.py --pin kata=0.14.3  # hold one back
-./update.py --check            # exit 1 if stale (for CI)
+./update.py --check            # report committed vs latest, never edit
+./update.py --verify           # gate the committed pins (for CI)
 ```
+
+Or `devcontainer bump-kenn <same args>` — `dev/bump-kenn` is a thin wrapper
+that finds this script from anywhere.
+
+`--check` and `--verify` are not interchangeable, and follow the same split as
+`dev/bump-hadolint` and `dev/bump-nix-base`:
+
+- **`--check` is a report.** Drift is news, not a failure — it exits 0 whether
+  or not a newer release exists, and non-zero only when it has no report to
+  give (a version it could not resolve at all).
+- **`--verify` is the gate.** It ignores latest-ness entirely and re-derives
+  every *committed* version's entry from that release's published manifest,
+  failing on a wrong hash, a vanished asset, an unresolvable release, or an
+  entry for a tool `TOOLS` no longer lists. An unreachable upstream fails
+  rather than passing unchecked.
+
+`TOOLS` in `update.py`, `toolMeta` in `packages.nix`, `sources.json`'s keys and
+`flake.nix`'s `systems` are four encodings of one tool set, and nothing here
+evaluates the flake in CI — `tests/test-bump-kenn.sh` is the drift guard, and
+also pins the exit contract above.
 
 `update.py` is both the bootstrap and the update path — generating the first 28
 hashes and refreshing them are the same operation, so there was never a
@@ -78,7 +99,8 @@ These are all real and all cost a debugging round if ignored:
   never globbed.
 
 Releases move fast (roborev was at v0.64.0, agentsview v0.40.1 when this was
-written). Wire `--check` into CI if you care about drift.
+written). Wire `--verify` into CI to gate the pins, and `--check` into a
+scheduled job if you want to be told about drift without failing on it.
 
 ## Design notes
 
@@ -123,10 +145,12 @@ Built and verified with Nix 2.20.6 on `x86_64-linux`:
 - **`kenn-forge` wrapper** emitted correctly with git appended to `PATH`.
 - **The scoped unfree predicate works** — `kenn-forge` evaluates and builds
   with no `allowUnfree` from the caller.
-- `update.py` tested in all modes (`--check` both stale and clean, `--tool`,
-  `--pin` against an older tag); one hash re-verified by downloading and
-  hashing the tarball, and the `kata` x86_64-linux hash independently matches
-  the one in `shntnu/nixos-config`.
+- `update.py` tested in all modes (`--check` both stale and clean, `--verify`
+  clean and against a tampered hash, `--tool`, `--pin` against an older tag);
+  one hash re-verified by downloading and hashing the tarball, and the `kata`
+  x86_64-linux hash independently matches the one in `shntnu/nixos-config`.
+  `tests/test-bump-kenn.sh` re-runs the mode and quirk coverage hermetically
+  against a canned upstream on every `tests/run-all`.
 
 Also built: `kenn-io-toolkit` (6 binaries, no `kenn-forge`),
 `kenn-io-toolkit-all` (all 7), and the `update` app — whose

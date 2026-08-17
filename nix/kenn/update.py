@@ -12,7 +12,20 @@ Usage:
     ./update.py                       # bump everything to latest
     ./update.py --tool kata forge     # only these
     ./update.py --pin kata=0.14.3     # hold one at a version
-    ./update.py --check               # exit 1 if sources.json is stale (CI)
+    ./update.py --check               # report committed vs latest, never edit
+    ./update.py --verify              # gate the committed pins (CI)
+
+--check and --verify follow the same split as dev/bump-hadolint and
+dev/bump-nix-base, and are NOT interchangeable:
+
+  --check  is a report. Drift is news, not a failure — it exits 0 whether or
+           not a newer release exists, and non-zero only when it has no report
+           to give (a version it could not resolve at all).
+  --verify is the gate. It re-derives every COMMITTED version's entry from that
+           release's published checksum manifest and fails on any disagreement
+           — a wrong hash, a vanished asset, an unresolvable release, or an
+           entry for a tool this script no longer knows about. An unreachable
+           upstream fails rather than passing unchecked.
 """
 
 from __future__ import annotations
@@ -160,35 +173,102 @@ def build_entry(repo: str, version: str, token: str | None) -> dict:
     }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--tool", nargs="+", choices=sorted(TOOLS), metavar="NAME")
-    ap.add_argument(
-        "--pin",
-        action="append",
-        default=[],
-        metavar="REPO=VERSION",
-        help="hold a tool at an explicit version instead of resolving latest",
-    )
-    ap.add_argument(
-        "--check",
-        action="store_true",
-        help="do not write; exit 1 if sources.json differs from upstream",
-    )
-    args = ap.parse_args()
+def parse_pins(specs: list[str]) -> dict[str, str]:
+    """Parse `--pin REPO=VERSION` arguments.
 
-    pins = dict(p.split("=", 1) for p in args.pin)
-    unknown = set(pins) - set(TOOLS)
-    if unknown:
-        log(f"unknown tool(s) in --pin: {', '.join(sorted(unknown))}")
-        return 2
+    Both halves are required: a bare `--pin kata` used to die with a raw
+    ValueError traceback, and `--pin kata=` used to fall through to "resolve
+    latest", silently doing the opposite of what pinning asks for.
+    """
+    pins: dict[str, str] = {}
+    for spec in specs:
+        repo, sep, version = spec.partition("=")
+        if not sep or not repo or not version:
+            msg = f"--pin expects REPO=VERSION, got: {spec!r}"
+            raise ValueError(msg)
+        # Tags are `vX.Y.Z` upstream but stored bare; accept either spelling.
+        pins[repo] = version.removeprefix("v")
+    return pins
 
-    existing = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
-    targets = args.tool or sorted(TOOLS)
-    result = dict(existing)
-    token = github_token()
-    if not token:
-        log("note: no GitHub token found; using unauthenticated API (60 req/hr)")
+
+def obsolete_entries(existing: dict) -> list[str]:
+    """Committed entries for tools this script no longer knows about.
+
+    sources.json, TOOLS here, and toolMeta in packages.nix are three encodings
+    of one tool set (see tests/test-bump-kenn.sh). A leftover entry keeps the
+    flake shipping a tool nobody maintains a pin story for.
+    """
+    return sorted(set(existing) - set(TOOLS))
+
+
+def do_check(existing: dict, targets: list[str], pins: dict[str, str], token: str | None) -> int:
+    """Report committed vs latest without editing. Drift is news, not a failure."""
+    failed: list[str] = []
+    behind = 0
+    for repo in targets:
+        try:
+            latest = pins.get(repo) or latest_version(repo, token)
+        except Exception as exc:  # noqa: BLE001 - one bad repo must not stop the rest
+            log(f"  {repo:<12} FAILED - {exc}")
+            failed.append(repo)
+            continue
+        current = existing.get(repo, {}).get("version")
+        if current == latest:
+            log(f"  {repo:<12} v{current:<10} up to date")
+        else:
+            behind += 1
+            log(f"  {repo:<12} v{current or '-':<10} -> v{latest}")
+
+    for repo in obsolete_entries(existing):
+        behind += 1
+        log(f"  {repo:<12} committed but no longer in TOOLS")
+
+    if failed:
+        # No report to give — that is the failure, not the drift (#126).
+        log(f"\n{len(failed)} tool(s) could not be resolved: {', '.join(failed)}")
+        return 1
+    log(f"\n{behind} pin(s) out of date; run ./update.py" if behind else "\nall pins are current")
+    return 0
+
+
+def do_verify(existing: dict, targets: list[str], token: str | None) -> int:
+    """Gate the COMMITTED pins against the published checksum manifests."""
+    failed: list[str] = []
+    for repo in targets:
+        entry = existing.get(repo)
+        if not entry:
+            log(f"  {repo:<12} FAILED - not pinned in {SOURCES.name}")
+            failed.append(repo)
+            continue
+        try:
+            fresh = build_entry(repo, entry["version"], token)
+        except Exception as exc:  # noqa: BLE001 - one bad repo must not stop the rest
+            log(f"  {repo:<12} FAILED - {exc}")
+            failed.append(repo)
+            continue
+        if fresh == entry:
+            log(f"  {repo:<12} v{entry['version']:<10} {len(fresh['platforms'])} platforms  OK")
+        else:
+            log(f"  {repo:<12} v{entry['version']:<10} MISMATCH - committed pins disagree with the release")
+            failed.append(repo)
+
+    for repo in obsolete_entries(existing):
+        log(f"  {repo:<12} FAILED - committed but no longer in TOOLS")
+        failed.append(repo)
+
+    if failed:
+        log(f"\n{len(failed)} tool(s) failed verification: {', '.join(sorted(set(failed)))}")
+        return 1
+    log("\nall committed pins verified against upstream")
+    return 0
+
+
+def do_write(existing: dict, targets: list[str], pins: dict[str, str], token: str | None) -> int:
+    # Drop entries for tools TOOLS no longer lists rather than carrying them
+    # forward untouched, which left them invisible to every later --check.
+    result = {repo: entry for repo, entry in existing.items() if repo in TOOLS}
+    for repo in obsolete_entries(existing):
+        log(f"  {repo:<12} dropped (no longer in TOOLS)")
 
     failed: list[str] = []
     for repo in targets:
@@ -208,20 +288,58 @@ def main() -> int:
     if failed:
         log(f"\n{len(failed)} tool(s) failed: {', '.join(failed)}")
 
-    result = dict(sorted(result.items()))
-    rendered = json.dumps(result, indent=2, sort_keys=False) + "\n"
-
-    if args.check:
-        current = SOURCES.read_text() if SOURCES.exists() else ""
-        if current != rendered:
-            log("\nsources.json is out of date; run ./update.py")
-            return 1
-        log("\nsources.json is up to date")
-        return 1 if failed else 0
-
-    SOURCES.write_text(rendered)
+    SOURCES.write_text(json.dumps(dict(sorted(result.items())), indent=2, sort_keys=False) + "\n")
     log(f"\nwrote {SOURCES}")
     return 1 if failed else 0
+
+
+def main() -> int:
+    # Raw: the docstring's usage block and the --check/--verify contract below
+    # it are line-formatted on purpose; the default formatter reflows them into
+    # one unreadable paragraph.
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--tool", nargs="+", choices=sorted(TOOLS), metavar="NAME")
+    ap.add_argument(
+        "--pin",
+        action="append",
+        default=[],
+        metavar="REPO=VERSION",
+        help="hold a tool at an explicit version instead of resolving latest",
+    )
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--check",
+        action="store_true",
+        help="report committed vs latest without editing (exit 0 whether or not they differ)",
+    )
+    mode.add_argument(
+        "--verify",
+        action="store_true",
+        help="gate the committed pins against the published checksum manifests (non-zero on any mismatch)",
+    )
+    args = ap.parse_args()
+
+    try:
+        pins = parse_pins(args.pin)
+    except ValueError as exc:
+        log(str(exc))
+        return 2
+    unknown = set(pins) - set(TOOLS)
+    if unknown:
+        log(f"unknown tool(s) in --pin: {', '.join(sorted(unknown))}")
+        return 2
+
+    existing = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
+    targets = args.tool or sorted(TOOLS)
+    token = github_token()
+    if not token:
+        log("note: no GitHub token found; using unauthenticated API (60 req/hr)")
+
+    if args.verify:
+        return do_verify(existing, targets, token)
+    if args.check:
+        return do_check(existing, targets, pins, token)
+    return do_write(existing, targets, pins, token)
 
 
 if __name__ == "__main__":

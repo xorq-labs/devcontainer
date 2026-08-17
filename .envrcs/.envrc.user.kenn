@@ -32,6 +32,14 @@ export KWT_HOME="${HOME}/.kwt"
 # from container-side prune, this removes the cause. Env-scoped: no gitconfig
 # file is touched, and it covers new-worktree itself since dev/ runs in this
 # same environment.
-export GIT_CONFIG_COUNT=1
-export GIT_CONFIG_KEY_0=worktree.useRelativePaths
-export GIT_CONFIG_VALUE_0=true
+#
+# Appended to any GIT_CONFIG_* already in the environment rather than
+# assigning slot 0: .envrc.secrets (or the user's own shell) may have set
+# entries first, and a bare GIT_CONFIG_COUNT=1 silently drops them. direnv
+# re-evaluates from the original environment on every reload, so this cannot
+# accumulate slots across reloads.
+_kenn_git_config_slot="${GIT_CONFIG_COUNT:-0}"
+export "GIT_CONFIG_KEY_${_kenn_git_config_slot}=worktree.useRelativePaths"
+export "GIT_CONFIG_VALUE_${_kenn_git_config_slot}=true"
+export GIT_CONFIG_COUNT=$((_kenn_git_config_slot + 1))
+unset _kenn_git_config_slot

@@ -241,6 +241,32 @@ taxonomy and reads as `test:`.
   version's release, checks both per-arch checksums, non-zero on a mismatch
   OR on a failed fetch). Use `--verify` when you want an answer you can gate
   on; `--check`'s exit says nothing about drift.
+- The kenn-io toolkit set is written FOUR times: `TOOLS` in
+  `nix/kenn/update.py` (repo -> binary name), `toolMeta` in
+  `nix/kenn/packages.nix`, `nix/kenn/sources.json`'s keys, and — for the
+  platform half — `systems` in `nix/kenn/flake.nix` against `PLATFORMS` in
+  `update.py`. The binary name `kenn-forge` is a fifth copy in two more
+  places, the default-join filter in `packages.nix` and the
+  `allowUnfreePredicate` in `flake.nix`, both OWNED by `TOOLS["forge"]`.
+  Divergence is invisible here: no workflow evaluates this flake and
+  `tests/run-all` is nix-free, so a repo added to `TOOLS` without a `toolMeta`
+  entry regenerates `sources.json` cleanly and first surfaces as `attribute
+  missing` in a consumer's `use flake` — somebody's broken direnv, not a red
+  build (`test: tests/test-bump-kenn.sh`, which derives every expectation from
+  its source at check time; the `toolMeta` reader is brace-depth-tracked and
+  cross-checked against the block's own `lib.licenses.` count so an
+  under-parse diverges two independent signals instead of passing).
+- `dev/bump-kenn`'s read-only flags carry the same non-interchangeable split
+  as `bump-hadolint`'s, and got it backwards on the way in: `--check` is the
+  report (committed vs latest, exit 0 whether or not a newer release exists,
+  non-zero only when a version could not be resolved), `--verify` is the gate
+  (re-derives every committed version's entry from the release's published
+  checksum manifest; non-zero on a wrong hash, a vanished asset, an
+  unresolvable release, an entry for a tool `TOOLS` dropped, or an
+  unreachable upstream). Unlike hadolint's, both flags are hermetically
+  testable — `update.py`'s only network entry point is `http_get`, so the
+  suite loads the real module and replaces it (`test:
+  tests/test-bump-kenn.sh`).
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and

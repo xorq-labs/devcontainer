@@ -7,11 +7,22 @@ PATH_add "${direnv_root}/.tools/bin"
 # whatever pre-commit is on PATH (a container's, a nix profile's, ...) —
 # untested against this repo and possibly missing fixes this repo relies on.
 # Re-checked on every direnv reload; cheap once installed (`--version` only).
-if ! "${direnv_root}/.tools/bin/pre-commit" --version >/dev/null 2>&1; then
-    if command -v uv >/dev/null 2>&1; then
-        uv tool install pre-commit
-    else
+#
+# Host only. The main checkout is bind-mounted into containers at its host
+# path, and the uv shim's interpreter symlink dangles there (CLAUDE.md,
+# "Pre-commit hooks") — so the probe below always fails inside a container,
+# and installing from there would rewrite the SHARED .tools/uvx tree with
+# container-side paths, breaking it for the host in the other direction.
+if [ ! -e /.dockerenv ] && ! "${direnv_root}/.tools/bin/pre-commit" --version >/dev/null 2>&1; then
+    if ! command -v uv >/dev/null 2>&1; then
         log_error "uv not found — install it, then run 'uv tool install pre-commit'"
+    elif [ -e "${direnv_root}/.tools/bin/pre-commit" ]; then
+        # Present but unrunnable — a stale venv from a moved or removed
+        # interpreter. A plain `uv tool install` no-ops on an already-installed
+        # tool, so it would leave the broken shim in place forever.
+        uv tool install --reinstall pre-commit
+    else
+        uv tool install pre-commit
     fi
 fi
 
