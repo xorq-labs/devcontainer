@@ -104,6 +104,13 @@ The hook runs on every Linux build and no-ops on the static ones (verified).
 **`git` is wrapped in** for `kenn-forge`, `roborev` and `kwt`, the three that
 unambiguously shell out to it. Via `--suffix`, so your own git takes precedence.
 
+**Shell completions** are generated at build time from each binary's own
+`completion bash|zsh|fish` and land under `$out/share`. All six free tools
+support it; `kenn-forge` has no `completion` subcommand upstream, so it's
+excluded. `devShells.default` exports `XDG_DATA_DIRS` to point at them, since
+listing the package alone doesn't; consumers building their own devShell
+around `kenn-io-toolkit-all` need the same one-line export.
+
 ## Verification status
 
 Built and verified with Nix 2.20.6 on `x86_64-linux`:

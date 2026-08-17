@@ -115,6 +115,12 @@
               pkgs.python3 # for update.py
               pkgs.gitMinimal
             ];
+
+            # packages.nix installs completions under $out/share; expose them
+            # to the shell (packages alone doesn't).
+            shellHook = ''
+              export XDG_DATA_DIRS="${tools.kenn-io-toolkit-all}/share:''${XDG_DATA_DIRS:-}"
+            '';
           };
         }
       );
