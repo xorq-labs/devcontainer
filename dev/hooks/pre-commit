@@ -14,16 +14,21 @@ is_runnable() { [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
 
 ROOT="$(git rev-parse --show-toplevel)"
 MAIN="$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+# Newer pre-commit (4.5.1+) requires --hook-dir to locate a possible
+# <hook-type>.legacy sibling; without it, hook-impl crashes on a None path
+# join instead of erroring cleanly. Worktrees share one hooks dir, hence
+# --git-path rather than a literal "$ROOT/.git/hooks".
+HOOK_DIR="$(git rev-parse --git-path hooks)"
 
 if is_runnable "$ROOT/.tools/bin/pre-commit"; then
     exec "$ROOT/.tools/bin/pre-commit" hook-impl \
-        --config=.pre-commit-config.yaml --hook-type=pre-commit -- "$@"
+        --config=.pre-commit-config.yaml --hook-type=pre-commit --hook-dir="$HOOK_DIR" -- "$@"
 elif [ -n "$MAIN" ] && [ "$MAIN" != "$ROOT" ] && is_runnable "$MAIN/.tools/bin/pre-commit"; then
     exec "$MAIN/.tools/bin/pre-commit" hook-impl \
-        --config=.pre-commit-config.yaml --hook-type=pre-commit -- "$@"
+        --config=.pre-commit-config.yaml --hook-type=pre-commit --hook-dir="$HOOK_DIR" -- "$@"
 elif command -v pre-commit > /dev/null; then
     exec pre-commit hook-impl \
-        --config=.pre-commit-config.yaml --hook-type=pre-commit -- "$@"
+        --config=.pre-commit-config.yaml --hook-type=pre-commit --hook-dir="$HOOK_DIR" -- "$@"
 else
     echo 'pre-commit not found. Install with: uv tool install pre-commit' >&2
     echo '(if already installed in the main worktree, commit from there or add pre-commit to PATH)' >&2

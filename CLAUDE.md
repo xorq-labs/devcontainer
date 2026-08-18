@@ -7,10 +7,9 @@ Reusable dev container setup with worktree support, project overlays, and host c
 ```bash
 cp .envrcs/.envrc.user.uv .envrcs/.envrc.user
 direnv allow
-uv tool install pre-commit
 ```
 
-This installs pre-commit into `.tools/bin/` (project-local, not `~/.local/bin`). The git hook at `dev/hooks/pre-commit` is symlinked into `.git/hooks/` automatically by direnv (via `symlink_hooks` in `lib/git.sh`). Do not run `pre-commit install` — it will overwrite the custom hook.
+`direnv allow` installs pre-commit into `.tools/bin/` (project-local, not `~/.local/bin`) if it isn't there yet — see the `uv tool install pre-commit` guard in `.envrc.user.uv`. The git hook at `dev/hooks/pre-commit` is symlinked into `.git/hooks/` automatically by the same direnv pass (via `symlink_hooks` in `lib/git.sh`). Do not run `pre-commit install` — it will overwrite the custom hook.
 
 ## Pre-commit hooks
 
@@ -242,6 +241,49 @@ taxonomy and reads as `test:`.
   version's release, checks both per-arch checksums, non-zero on a mismatch
   OR on a failed fetch). Use `--verify` when you want an answer you can gate
   on; `--check`'s exit says nothing about drift.
+- The kenn-io toolkit set is written FOUR times: `TOOLS` in
+  `nix/kenn/update.py` (repo -> binary name), `toolMeta` in
+  `nix/kenn/packages.nix`, `nix/kenn/sources.json`'s keys, and — for the
+  platform half — `systems` in `nix/kenn/flake.nix` against `PLATFORMS` in
+  `update.py`. The binary name `kenn-forge` is a fifth copy in two more
+  places, the default-join filter in `packages.nix` and the
+  `allowUnfreePredicate` in `flake.nix`, both OWNED by `TOOLS["forge"]`.
+  Divergence is invisible here: no workflow evaluates this flake and
+  `tests/run-all` is nix-free, so a repo added to `TOOLS` without a `toolMeta`
+  entry regenerates `sources.json` cleanly and first surfaces as `attribute
+  missing` in a consumer's `use flake` — somebody's broken direnv, not a red
+  build (`test: tests/test-bump-kenn.sh`, which derives every expectation from
+  its source at check time; the `toolMeta` reader is brace-depth-tracked and
+  cross-checked against the block's own `lib.licenses.` count so an
+  under-parse diverges two independent signals instead of passing).
+- `dev/bump-kenn`'s read-only flags carry the same non-interchangeable split
+  as `bump-hadolint`'s, and got it backwards on the way in: `--check` is the
+  report (committed vs latest, exit 0 whether or not a newer release exists,
+  non-zero only when a version could not be resolved), `--verify` is the gate
+  (re-derives every committed version's entry from the release's published
+  checksum manifest; non-zero on a wrong hash, a vanished asset, an
+  unresolvable release, an entry for a tool `TOOLS` dropped, or an
+  unreachable upstream). Unlike hadolint's, both flags are hermetically
+  testable — `update.py`'s only network entry point is `http_get`, so the
+  suite loads the real module and replaces it (`test:
+  tests/test-bump-kenn.sh`). An option a mode does not consume is REFUSED, not
+  dropped: `--pin` under `--verify` exits 2, because the committed state here
+  is a whole record (version, asset names, hashes) rather than
+  `bump-hadolint`'s bare checksum pair, so an explicit version makes the
+  comparison ill-defined instead of merely narrower. `--check` still consumes
+  it. The generalisation — every bump tool hand-writes its own mode/option
+  rejection, and none of the other four is guarded — is #144.
+- `.envrcs/.envrc.user.kenn` must find the framework checkout in every layout
+  `.envrcs/.envrc.user.template` already assumes: the template puts the
+  framework's `dev/` on PATH with `$direnv_root/../devcontainer/dev`, so a
+  project checked out BESIDE the framework gets the scripts, and a fragment
+  that skips that candidate hands it the scripts and then denies the flake
+  exists. `.envrcs/` is the repo's least-guarded tier — no shared library, and
+  before this no suite exercised a fragment at all — which is why the two files
+  drifted at introduction (`test: tests/test-bump-kenn.sh` §5, which SOURCES
+  the fragment against a stubbed direnv over four real on-disk layouts and
+  derives the sibling name from the template rather than restating it, so the
+  spelling of neither file is load-bearing).
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and

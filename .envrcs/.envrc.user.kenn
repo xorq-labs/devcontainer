@@ -1,0 +1,60 @@
+# kenn-io toolkit (kata, kwt, roborev, agentsview, ...) for host-side work.
+# Sourced from .envrc.user — opt in via the commented line in
+# .envrc.user.template.
+#
+# DEVCONTAINER_HOME: where this framework is checked out. Export it in
+# .envrc.user to override; otherwise the first candidate below that actually
+# holds the flake wins.
+#
+# The SIBLING candidate is not optional politeness — it is the layout
+# .envrc.user.template itself assumes one line further down
+# (`PATH_add $direnv_root/../devcontainer/dev`). Without it a checkout at
+# ~/work/proj beside ~/work/devcontainer got its dev/ scripts on PATH and was
+# then told the kenn flake did not exist, because only the absolute fallback
+# was tried. tests/test-bump-kenn.sh pins the two files to the same layout.
+if [ -z "${DEVCONTAINER_HOME:-}" ]; then
+    for _kenn_candidate in \
+        "${direnv_root}" \
+        "${direnv_root}/../devcontainer" \
+        "${HOME}/repos/github/devcontainer"; do
+        if [ -d "${_kenn_candidate}/nix/kenn" ]; then
+            DEVCONTAINER_HOME="$(cd "${_kenn_candidate}" && pwd)"
+            break
+        fi
+    done
+    # No candidate matched. Keep the conventional path so the error below
+    # names something actionable instead of an empty string.
+    DEVCONTAINER_HOME="${DEVCONTAINER_HOME:-${HOME}/repos/github/devcontainer}"
+    unset _kenn_candidate
+fi
+export DEVCONTAINER_HOME
+
+# Tools from the nix/kenn flake; nix-direnv caches the shell so re-entry is
+# instant. Guarded: warn rather than break the env on a stale checkout.
+if [ -d "${DEVCONTAINER_HOME}/nix/kenn" ]; then
+    use flake "${DEVCONTAINER_HOME}/nix/kenn"
+else
+    log_error "kenn flake not found under ${DEVCONTAINER_HOME}/nix/kenn — update the devcontainer checkout or export DEVCONTAINER_HOME"
+fi
+
+# Shared worktree-state root. Projects that bind-mount ~/.kwt into their
+# containers (host-mounts.txt) get one kwt registry and one worktree tree
+# on both sides.
+export KWT_HOME="${HOME}/.kwt"
+
+# Relative worktree linkage: sibling worktrees resolve on both sides of the
+# repo bind mount. Complements new-worktree's lock — the lock prevents damage
+# from container-side prune, this removes the cause. Env-scoped: no gitconfig
+# file is touched, and it covers new-worktree itself since dev/ runs in this
+# same environment.
+#
+# Appended to any GIT_CONFIG_* already in the environment rather than
+# assigning slot 0: .envrc.secrets (or the user's own shell) may have set
+# entries first, and a bare GIT_CONFIG_COUNT=1 silently drops them. direnv
+# re-evaluates from the original environment on every reload, so this cannot
+# accumulate slots across reloads.
+_kenn_git_config_slot="${GIT_CONFIG_COUNT:-0}"
+export "GIT_CONFIG_KEY_${_kenn_git_config_slot}=worktree.useRelativePaths"
+export "GIT_CONFIG_VALUE_${_kenn_git_config_slot}=true"
+export GIT_CONFIG_COUNT=$((_kenn_git_config_slot + 1))
+unset _kenn_git_config_slot
