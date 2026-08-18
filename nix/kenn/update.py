@@ -336,6 +336,17 @@ def main() -> int:
         log("note: no GitHub token found; using unauthenticated API (60 req/hr)")
 
     if args.verify:
+        if pins:
+            # NOT the sibling behaviour, deliberately. `bump-hadolint --verify
+            # 2.14.0` is coherent because the committed state is a bare
+            # checksum pair, so "do these shas belong to that release?" has an
+            # answer. Here the committed state is a whole record — version,
+            # asset names, per-platform hashes — so an explicit version makes
+            # the comparison ill-defined: every field would differ by
+            # construction. The honest options were reject or silently ignore,
+            # and silently ignoring is what this flag exists to stop.
+            log("--pin cannot be combined with --verify: --verify gates the versions already committed")
+            return 2
         return do_verify(existing, targets, token)
     if args.check:
         return do_check(existing, targets, pins, token)

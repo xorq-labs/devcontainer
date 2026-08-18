@@ -51,6 +51,24 @@
 #      independently-derived counts diverge. A parser that quietly skipped the
 #      entry for any other reason would trip the same wire.
 #   (mutation runs 2026-08-17)
+#
+# Second pair, for §5's .envrc.user.kenn discovery guard (added 2026-08-18):
+#   1. FORM-ONLY — rewrite the candidate loop as an array plus `|| continue`
+#      instead of a line-continued `for` with an `if`. Green: 52 passed, 0
+#      failed. This is the point of driving it functionally: the guard SOURCES
+#      the fragment, so the spelling of the candidate list is not load-bearing.
+#   2. SEMANTIC, in a form this suite does not write — neutralise the sibling
+#      candidate with an inline `` `# ...` `` command substitution rather than
+#      deleting the line. Observed red:
+#        FAIL: sibling layout resolves to the framework beside the project
+#      Results: 51 passed, 1 failed
+#   And for §4's mode/option refusal: replace `if pins:` with
+#   `if False and pins:` in update.py's --verify branch, restoring the exact
+#   silent-ignore it closed. Observed red:
+#     FAIL: --pin under --verify is refused, not ignored
+#     FAIL: and says why
+#   Results: 50 passed, 2 failed
+#   (mutation runs 2026-08-18)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -432,10 +450,91 @@ assert_eq "an unknown --pin tool exits 2" 2 "$(drive_rc universe.json --pin nope
 assert_eq "--check and --verify together are rejected" 2 \
     "$(drive_rc universe.json --check --verify)"
 
+# An option a mode does not consume must be refused, not dropped on the floor.
+# --verify gates the versions already committed, so a --pin has no target; it
+# used to be accepted and then ignored, reporting the COMMITTED version as OK
+# and exiting 0 — a green answer to a question nobody asked.
+out="$(drive universe.json --verify --pin kata=0.5.0 || true)"
+assert_eq "--pin under --verify is refused, not ignored" 2 \
+    "$(drive_rc universe.json --verify --pin kata=0.5.0)"
+assert_contains "and says why" "--pin cannot be combined with --verify" "$out"
+# --check DOES consume it (report committed vs an explicitly named version),
+# which is the sibling behaviour and must not be collateral damage.
+out="$(drive universe.json --check --tool kata --pin kata=0.5.0 || true)"
+assert_eq "--pin under --check is still honoured" 0 \
+    "$(drive_rc universe.json --check --tool kata --pin kata=0.5.0)"
+assert_contains "and reports against the pinned version, not latest" "0.5.0" "$out"
+
 # `v1.0.0` and `1.0.0` name the same release; only the bare form is stored.
 drive universe.json --pin kata=v1.0.0 --tool kata >/dev/null 2>&1 || true
 assert_eq "--pin accepts a leading 'v' and stores the bare version" "1.0.0" \
     "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["kata"]["version"])' \
         "$sandbox/sources.json")"
+
+# --- 5. .envrc.user.kenn's checkout discovery --------------------------------
+
+echo ""
+echo "== .envrc.user.kenn checkout discovery =="
+
+# .envrcs/ is the least-guarded tier in the repo (no shared library, and until
+# this block no suite exercised a fragment at all), which is how the sibling
+# layout got missed: .envrc.user.template puts the framework's dev/ on PATH via
+# `PATH_add $direnv_root/../devcontainer/dev`, while this fragment only tried
+# $direnv_root and one absolute path — so a sibling checkout got the scripts
+# and was then told the flake did not exist.
+#
+# Driven functionally rather than by grepping for the path expression: the
+# fragment is SOURCED against a stubbed direnv (use flake / log_error / PATH_add
+# are direnv stdlib, absent under bash), so what is asserted is the resolution
+# these two files must agree on, not the spelling of either.
+env_kenn="$DEV_BASE/.envrcs/.envrc.user.kenn"
+template="$DEV_BASE/.envrcs/.envrc.user.template"
+
+# Derive the layout the template assumes rather than restating it here.
+template_sibling="$(sed -n 's|.*PATH_add \$direnv_root/\.\./\([A-Za-z0-9_-]*\)/dev.*|\1|p' "$template")"
+assert_eq "the template still assumes a sibling framework checkout" "devcontainer" "$template_sibling"
+
+# resolve <direnv_root> <fake-home> -> the DEVCONTAINER_HOME the fragment picks
+resolve() {
+    local root="$1" home="$2"
+    env -i HOME="$home" PATH="$PATH" bash -c '
+        direnv_root="$1"
+        use() { :; }
+        log_error() { :; }
+        . "$2"
+        printf "%s\n" "$DEVCONTAINER_HOME"
+    ' _ "$root" "$env_kenn"
+}
+
+layouts="$(mktemp -d)"
+_cleanup_dirs+=("$layouts")
+
+# (a) sourced inside the framework repo itself
+mkdir -p "$layouts/self/nix/kenn"
+assert_eq "in-repo layout resolves to the checkout itself" "$layouts/self" \
+    "$(resolve "$layouts/self" "$layouts/nohome")"
+
+# (b) the sibling layout the template assumes: project beside the framework
+mkdir -p "$layouts/work/$template_sibling/nix/kenn" "$layouts/work/proj"
+assert_eq "sibling layout resolves to the framework beside the project" \
+    "$layouts/work/$template_sibling" \
+    "$(resolve "$layouts/work/proj" "$layouts/nohome")"
+
+# (c) neither: the conventional absolute path, which the flake really is under
+mkdir -p "$layouts/home/repos/github/devcontainer/nix/kenn" "$layouts/elsewhere"
+assert_eq "otherwise the conventional \$HOME path wins" \
+    "$layouts/home/repos/github/devcontainer" \
+    "$(resolve "$layouts/elsewhere" "$layouts/home")"
+
+# (d) nothing anywhere: still names an actionable path for the error message
+assert_eq "an unresolvable checkout still names a path" \
+    "$layouts/bare/repos/github/devcontainer" \
+    "$(resolve "$layouts/elsewhere" "$layouts/bare")"
+
+# An explicit export always wins — it is the documented override.
+assert_eq "an explicit DEVCONTAINER_HOME is never second-guessed" "/opt/dc" \
+    "$(DEVCONTAINER_HOME=/opt/dc env -i HOME="$layouts/home" PATH="$PATH" DEVCONTAINER_HOME=/opt/dc bash -c '
+        direnv_root="$1"; use() { :; }; log_error() { :; }; . "$2"
+        printf "%s\n" "$DEVCONTAINER_HOME"' _ "$layouts/self" "$env_kenn")"
 
 finish

@@ -2,15 +2,30 @@
 # Sourced from .envrc.user — opt in via the commented line in
 # .envrc.user.template.
 #
-# DEVCONTAINER_HOME: where this framework is checked out. Defaults to the
-# current checkout when sourced inside the framework repo itself, otherwise
-# to ~/repos/github/devcontainer; export it in .envrc.user to override.
+# DEVCONTAINER_HOME: where this framework is checked out. Export it in
+# .envrc.user to override; otherwise the first candidate below that actually
+# holds the flake wins.
+#
+# The SIBLING candidate is not optional politeness — it is the layout
+# .envrc.user.template itself assumes one line further down
+# (`PATH_add $direnv_root/../devcontainer/dev`). Without it a checkout at
+# ~/work/proj beside ~/work/devcontainer got its dev/ scripts on PATH and was
+# then told the kenn flake did not exist, because only the absolute fallback
+# was tried. tests/test-bump-kenn.sh pins the two files to the same layout.
 if [ -z "${DEVCONTAINER_HOME:-}" ]; then
-    if [ -d "${direnv_root}/nix/kenn" ]; then
-        DEVCONTAINER_HOME="${direnv_root}"
-    else
-        DEVCONTAINER_HOME="${HOME}/repos/github/devcontainer"
-    fi
+    for _kenn_candidate in \
+        "${direnv_root}" \
+        "${direnv_root}/../devcontainer" \
+        "${HOME}/repos/github/devcontainer"; do
+        if [ -d "${_kenn_candidate}/nix/kenn" ]; then
+            DEVCONTAINER_HOME="$(cd "${_kenn_candidate}" && pwd)"
+            break
+        fi
+    done
+    # No candidate matched. Keep the conventional path so the error below
+    # names something actionable instead of an empty string.
+    DEVCONTAINER_HOME="${DEVCONTAINER_HOME:-${HOME}/repos/github/devcontainer}"
+    unset _kenn_candidate
 fi
 export DEVCONTAINER_HOME
 

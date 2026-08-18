@@ -266,7 +266,24 @@ taxonomy and reads as `test:`.
   unreachable upstream). Unlike hadolint's, both flags are hermetically
   testable — `update.py`'s only network entry point is `http_get`, so the
   suite loads the real module and replaces it (`test:
-  tests/test-bump-kenn.sh`).
+  tests/test-bump-kenn.sh`). An option a mode does not consume is REFUSED, not
+  dropped: `--pin` under `--verify` exits 2, because the committed state here
+  is a whole record (version, asset names, hashes) rather than
+  `bump-hadolint`'s bare checksum pair, so an explicit version makes the
+  comparison ill-defined instead of merely narrower. `--check` still consumes
+  it. The generalisation — every bump tool hand-writes its own mode/option
+  rejection, and none of the other four is guarded — is #144.
+- `.envrcs/.envrc.user.kenn` must find the framework checkout in every layout
+  `.envrcs/.envrc.user.template` already assumes: the template puts the
+  framework's `dev/` on PATH with `$direnv_root/../devcontainer/dev`, so a
+  project checked out BESIDE the framework gets the scripts, and a fragment
+  that skips that candidate hands it the scripts and then denies the flake
+  exists. `.envrcs/` is the repo's least-guarded tier — no shared library, and
+  before this no suite exercised a fragment at all — which is why the two files
+  drifted at introduction (`test: tests/test-bump-kenn.sh` §5, which SOURCES
+  the fragment against a stubbed direnv over four real on-disk layouts and
+  derives the sibling name from the template rather than restating it, so the
+  spelling of neither file is load-bearing).
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and
