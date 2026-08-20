@@ -264,11 +264,29 @@ CI). Six tools are wired up so far:
     `web.ValidateEmbeddedRelease()` call roborev's `verify-web-assets` makes.
     Both are `Hidden: true` upstream; only the underscore differs.
 
-Only `forge` is left, and it is genuinely more work — see the effort table in
-ADR-0007. It carries a Rust component (`rust-pty-manager`, audited and found
-tractable — a plain `buildRustPackage`, no cgo/FFI, no git dependencies) and
-*two* independent frontends, the highest-effort tool of the seven purely
-because of that doubling, not the Rust piece.
+Only `forge` is left, and it is **no longer the highest-effort tool** — see
+ADR-0007's effort table. Two claims that ranked it there turned out to be
+wrong when checked (2026-08-20):
+
+- **Its Rust component is out of scope.** The released `kenn-forge` neither
+  bundles, fetches, nor requires `rust/pty-manager`:
+  `cmd/kenn-forge/main.go` takes the path from
+  `os.Getenv("KENN_FORGE_PTY_MANAGER")` (opt-in, empty by default, falling
+  back to the pure-Go `internal/ptyowner`), `.github/workflows/release.yml`
+  never invokes cargo, the `Makefile`'s `rust-pty-manager` target is wired
+  into nothing, and the crate is `publish = false`. A source build should
+  match what the release ships: no `buildRustPackage`.
+- **Its "two independent frontends" are one bun workspace.** Root `bun.lock`
+  and `workspaces: ["frontend", "packages/*"]` cover `frontend/` and
+  `packages/github-app-ui/` together — one generated `bun.nix`, one vendoring
+  problem, two build outputs to embed. No committed `bun.nix` and the same
+  arity-4 `github:` kit-ui at the same rev, so it is roborev's route exactly.
+
+Note forge has **no `.goreleaser.yaml`** (it releases from a workflow, unlike
+kata and roborev), so read `CGO_ENABLED` and build tags from there. Its
+frontend tooling is `vite-plus`, the same Rust-implemented Vite docbank and
+agentsview needed `SSL_CERT_FILE` for — expect that CA-bundle panic here too,
+the first time that quirk crosses into a bun tool.
 
 All six are **maintained pins**, not point-in-time proofs:
 `nix/kenn/source-builds.json` holds the committed `rev`/`srcHash`/`vendorHash`
@@ -327,8 +345,9 @@ does not change how release binaries are packaged.)
 | dynamic + libstdc++/libgcc (cgo sqlite/duckdb) | `agentsview`, `msgvault` |
 
 The hook runs on every Linux build and no-ops on the static ones (verified).
-`kenn-forge` being static despite forge carrying a Rust component is down to
-`modernc.org/sqlite`, the pure-Go driver — no cgo.
+`kenn-forge` is static because of `modernc.org/sqlite`, the pure-Go driver —
+no cgo. The `rust/pty-manager` crate in forge's repo is not in the released
+binary at all (see "Building from source" above), so it was never a factor.
 
 **`git` is wrapped in** for `kenn-forge`, `roborev` and `kwt`, the three that
 unambiguously shell out to it. Via `--suffix`, so your own git takes precedence.

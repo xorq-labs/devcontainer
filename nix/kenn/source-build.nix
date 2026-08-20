@@ -33,10 +33,10 @@
 # bun.nix; and a cgo dependency that has to be DISABLED rather than satisfied.
 # That last one is kata, whose frontend side really was roborev's shape
 # verbatim — the only thing five tools of accumulated quirks did not already
-# cover was one build-time env var. Only forge is left, and it is genuinely
-# more work: two independent bun frontends plus a Rust component. See
-# nix/kenn/README.md's "Building from source" section and ADR-0007's effort
-# table.
+# cover was one build-time env var. Only forge is left, and less of it than
+# the effort table long said: its Rust component is not in the released binary
+# and its two frontends share one bun workspace. See nix/kenn/README.md's
+# "Building from source" section.
 let
   mkKennToolFromSource =
     {

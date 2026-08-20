@@ -181,7 +181,7 @@ remaining tools and auditing forge's Rust component:
 | msgvault | bun frontend (bun2nix, now in place) + `CGO_ENABLED=1` | done — graduated |
 | roborev | bun **workspace** frontend (repo-root scope, not self-contained, unlike msgvault's) + no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) + no committed `bun.nix` and a bun2nix parse bug on its git dependency, neither of which the research pass predicted | done — graduated (was: medium) |
 | kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (a harmless plain directory copy) + `CGO_ENABLED=0` must be set explicitly, which the research pass got backwards. Turned out to be roborev's shape verbatim otherwise | done — graduated (was: medium-high) |
-| forge | two bun frontends (`frontend/`, `packages/github-app-ui/`) + a Rust component, now audited: a standalone `buildRustPackage` binary, no cgo/FFI, no git/path Cargo deps, no `-sys` crates — tractable on its own. "Highest effort" now rests entirely on the doubled frontend work | highest, no longer unscoped |
+| forge | **Re-scoped 2026-08-20 and it shrank.** Its Rust component is not in the released binary (opt-in `KENN_FORGE_PTY_MANAGER` env var; never built by `release.yml`), so a source build should omit it. Its "two independent frontends" share ONE bun workspace (root `bun.lock`, `workspaces: ["frontend", "packages/*"]`) — one generated `bun.nix`, two build outputs. No `.goreleaser.yaml` (releases from a workflow), and `vite-plus` needs `SSL_CERT_FILE` as docbank's did | low-medium (was: highest) |
 
 All three of the then-remaining bun tools (roborev, msgvault, kata) needed
 `bun2nix` —
@@ -216,9 +216,11 @@ not as a batch.** A tool is "maintained" only once it has all four of:
    decided here —
    each graduates (or doesn't) as its own follow-up, evaluated against the
    effort table above, not committed to en masse. Forge in particular was the
-   one tool this ADR held unscoped pending its Rust component's audit; that
-   audit has since happened (found tractable — see the effort table), so what
-   keeps forge last is its two frontends, not an unresolved unknown.
+   one tool this ADR held unscoped pending its Rust component's audit. That
+   audit happened (tractable), and a later pass made it moot: the released
+   binary does not contain that component at all, so a source build need not
+   build it. Nothing about forge is unscoped now, and it is no longer the
+   expensive one — see the effort table.
 
 **2. Source builds are a separate output surface, never merged into
 `mkKennTool`.** Each graduated tool gets a `<tool>-from-source` package
