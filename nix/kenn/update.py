@@ -26,6 +26,29 @@ dev/bump-nix-base, and are NOT interchangeable:
            — a wrong hash, a vanished asset, an unresolvable release, or an
            entry for a tool this script no longer knows about. An unreachable
            upstream fails rather than passing unchecked.
+
+Source builds (ADR-0007), a SEPARATE pin space (source-builds.json, not
+sources.json) for building a tool from a git revision instead of a release:
+
+    ./update.py --source --tool kwt --rev main       # bump to a branch's HEAD
+    ./update.py --source --tool docbank --rev abc123 # pin an explicit commit
+    ./update.py --source --check --tool kwt --rev main   # report drift only
+    ./update.py --source --verify                        # gate all committed
+    ./update.py --source --verify --tool kwt             # gate just this one
+
+Only tools in SOURCE_BUILD_TOOLS have a source-build derivation at all — a
+strict subset of TOOLS, since a tool graduates into it deliberately (ADR-0007
+decision 1), not automatically. --rev applies to exactly one tool: unlike a
+release version, a git ref has no meaning shared across repos.
+
+This mode cannot be as hermetically checkable as the release path above: a
+release pin's hash comes from a published checksum manifest (one HTTPS fetch);
+a revision has no such manifest, so the ONLY way to learn its srcHash/
+vendorHash/npmDepsHash is to actually run `nix build` and read the real hash
+back out of a deliberate mismatch. `--source --verify` re-runs that same build
+against the COMMITTED hashes and fails on anything but a clean build — nix
+build is the oracle here, not a fixture, matching how dev/bump-nix's installer
+checksum has no hermetic test either (see ADR-0007's Decision 3).
 """
 
 from __future__ import annotations
@@ -44,6 +67,8 @@ import urllib.request
 from pathlib import Path
 
 SOURCES = Path(__file__).with_name("sources.json")
+SOURCE_BUILDS = Path(__file__).with_name("source-builds.json")
+FLAKE_DIR = Path(__file__).parent
 
 # repo -> binary name shipped inside the tarball. These differ: the `forge`
 # repo installs a binary called `kenn-forge`.
@@ -67,6 +92,41 @@ PLATFORMS: dict[str, tuple[str, str]] = {
 
 # kwt publishes checksums.txt; every other repo publishes SHA256SUMS.
 CHECKSUM_FILES = ("SHA256SUMS", "checksums.txt")
+
+# Tools with a source-build derivation in nix/kenn/source-build.nix
+# (ADR-0007). A deliberate SUBSET of TOOLS: a tool graduates into this dict
+# only when its derivation actually exists there, never automatically. The
+# value is the EXTRA hash fields that tool's derivation needs beyond the two
+# every source build needs (srcHash from fetchFromGitHub, vendorHash from
+# buildGoModule) — e.g. docbank's npm frontend adds npmDepsHash. Keeping this
+# hand-written, like toolMeta's runtimeDeps in packages.nix, is what the
+# shape half of the drift guard checks against source-build.nix's actual
+# attribute references (tests/test-bump-kenn.sh).
+SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
+    "kwt": [],
+    "docbank": ["npmDepsHash"],
+}
+
+FAKE_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+# nixpkgs' own fixed-output derivation naming conventions for the fetchers
+# nix/kenn's source builds use — not something this repo invented. A
+# derivation named exactly one of HASH_FIELD_BY_DRV_NAME, or ending in
+# "-<suffix>" for one of HASH_FIELD_BY_DRV_SUFFIX, maps to the JSON field that
+# feeds it.
+HASH_FIELD_BY_DRV_NAME: dict[str, str] = {
+    "source": "srcHash",  # fetchFromGitHub
+}
+HASH_FIELD_BY_DRV_SUFFIX: dict[str, str] = {
+    "go-modules": "vendorHash",  # buildGoModule
+    "npm-deps": "npmDepsHash",  # buildNpmPackage's fetchNpmDeps
+}
+
+HASH_MISMATCH_RE = re.compile(
+    r"hash mismatch in fixed-output derivation '[^']*?/[0-9a-z]{32}-(?P<name>.+?)\.drv':\s*\n"
+    r"\s*specified:\s*(?P<specified>\S+)\s*\n"
+    r"\s*got:\s*(?P<got>\S+)"
+)
 
 
 def log(msg: str) -> None:
@@ -201,6 +261,177 @@ def obsolete_entries(existing: dict) -> list[str]:
     return sorted(set(existing) - set(TOOLS))
 
 
+# --- source builds (ADR-0007) -------------------------------------------------
+
+
+def commit_sha(repo: str, ref: str, token: str | None) -> str:
+    """Resolve a branch, tag, or (possibly abbreviated) sha to a full commit sha."""
+    url = f"https://api.github.com/repos/kenn-io/{repo}/commits/{ref}"
+    data = json.loads(http_get(url, token))
+    return data["sha"]
+
+
+def nix_build(flake_dir: Path, attr: str) -> subprocess.CompletedProcess:
+    """Run `nix build` for one flake output.
+
+    Never raises on a failed build — hash discovery deliberately reads stderr
+    from a failure (a fixed-output hash mismatch names the real hash). Raises
+    only if nix itself isn't available to run at all.
+    """
+    nix = shutil.which("nix")
+    if not nix:
+        msg = "nix not found on PATH; --source needs a working Nix to discover hashes"
+        raise RuntimeError(msg)
+    cmd = [
+        nix,
+        "--extra-experimental-features",
+        "nix-command flakes",
+        "build",
+        f"{flake_dir}#{attr}",
+        "--no-link",
+        "--keep-going",
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=1800)  # noqa: S603
+
+
+def harvest_hash_mismatches(stderr: str) -> dict[str, str]:
+    """Map each fixed-output hash mismatch in `nix build` stderr to a JSON field.
+
+    Refuses to guess: a derivation name matching neither HASH_FIELD_BY_DRV_NAME
+    nor a known HASH_FIELD_BY_DRV_SUFFIX raises rather than being silently
+    dropped, which would otherwise leave that hash's placeholder committed.
+    """
+    found: dict[str, str] = {}
+    unrecognized: list[str] = []
+    for m in HASH_MISMATCH_RE.finditer(stderr):
+        name = m.group("name")
+        field = HASH_FIELD_BY_DRV_NAME.get(name)
+        if field is None:
+            for suffix, candidate in HASH_FIELD_BY_DRV_SUFFIX.items():
+                if name.endswith(f"-{suffix}"):
+                    field = candidate
+                    break
+        if field is None:
+            unrecognized.append(name)
+            continue
+        found[field] = m.group("got")
+    if unrecognized:
+        msg = f"hash mismatch in unrecognized derivation(s), refusing to guess: {', '.join(unrecognized)}"
+        raise RuntimeError(msg)
+    return found
+
+
+def discover_source_hashes(flake_dir: Path, attr: str, all_entries: dict, repo: str, *, max_rounds: int = 8) -> None:
+    """Repeatedly build `attr`, harvesting real hashes from each failure.
+
+    `all_entries[repo]` starts holding FAKE_HASH placeholders and is mutated
+    in place, round by round, until `attr` builds cleanly. SOURCE_BUILDS is
+    rewritten to disk every round: source-build.nix reads it from the real
+    file path (mirroring packages.nix/sources.json), so there is no way to
+    sandbox this away from the working tree — the caller is responsible for
+    restoring the original file if this raises.
+    """
+    for round_num in range(1, max_rounds + 1):
+        SOURCE_BUILDS.write_text(json.dumps(dict(sorted(all_entries.items())), indent=2) + "\n")
+        log(f"    round {round_num}: nix build .#{attr}")
+        result = nix_build(flake_dir, attr)
+        if result.returncode == 0:
+            return
+        harvested = harvest_hash_mismatches(result.stderr)
+        if not harvested:
+            msg = f"nix build .#{attr} failed for a reason other than a hash mismatch:\n{result.stderr[-4000:]}"
+            raise RuntimeError(msg)
+        if all(all_entries[repo].get(k) == v for k, v in harvested.items()):
+            msg = f"hash discovery for {attr} is not converging on: {harvested}"
+            raise RuntimeError(msg)
+        all_entries[repo].update(harvested)
+    msg = f"hash discovery for {attr} did not converge in {max_rounds} rounds"
+    raise RuntimeError(msg)
+
+
+def do_source_write(repo: str, rev_ref: str, token: str | None, flake_dir: Path) -> int:
+    sha = commit_sha(repo, rev_ref, token)
+    original_text = SOURCE_BUILDS.read_text() if SOURCE_BUILDS.exists() else None
+    existing = json.loads(original_text) if original_text else {}
+
+    working = dict(existing)
+    working[repo] = {
+        "rev": sha,
+        "srcHash": FAKE_HASH,
+        "vendorHash": FAKE_HASH,
+        **{field: FAKE_HASH for field in SOURCE_BUILD_TOOLS[repo]},
+    }
+    attr = f"{TOOLS[repo]}-from-source"
+    try:
+        discover_source_hashes(flake_dir, attr, working, repo)
+    except Exception:
+        # Don't leave a placeholder hash committed if discovery fails partway.
+        if original_text is not None:
+            SOURCE_BUILDS.write_text(original_text)
+        elif SOURCE_BUILDS.exists():
+            SOURCE_BUILDS.unlink()
+        raise
+    log(f"  {repo:<12} {sha[:12]} written to {SOURCE_BUILDS.name} ({attr} builds clean)")
+    return 0
+
+
+def do_source_check(repo: str, rev_ref: str, token: str | None) -> int:
+    """Report whether the committed rev is behind `rev_ref`'s current HEAD."""
+    existing = json.loads(SOURCE_BUILDS.read_text()) if SOURCE_BUILDS.exists() else {}
+    try:
+        sha = commit_sha(repo, rev_ref, token)
+    except Exception as exc:  # noqa: BLE001 - no report to give is the failure (#126)
+        log(f"  {repo:<12} FAILED - {exc}")
+        return 1
+    current = existing.get(repo, {}).get("rev")
+    if current == sha:
+        log(f"  {repo:<12} {current[:12]:<12} up to date with {rev_ref!r}")
+    else:
+        shown = current[:12] if current else "-"
+        log(f"  {repo:<12} {shown:<12} -> {sha[:12]} ({rev_ref!r})")
+    return 0
+
+
+def do_source_verify(targets: list[str], flake_dir: Path) -> int:
+    """Gate the COMMITTED source-build pins by actually rebuilding them.
+
+    There is no published manifest to re-derive a source-build hash from —
+    `nix build` succeeding IS the check. A hash mismatch here means the
+    committed hash was tampered with or upstream's tree changed under a fixed
+    rev, which should never happen; a build failure for any other reason means
+    the pin no longer builds at all.
+    """
+    existing = json.loads(SOURCE_BUILDS.read_text()) if SOURCE_BUILDS.exists() else {}
+    failed: list[str] = []
+    for repo in targets:
+        if repo not in SOURCE_BUILD_TOOLS:
+            log(f"  {repo:<12} FAILED - no source-build derivation (see SOURCE_BUILD_TOOLS)")
+            failed.append(repo)
+            continue
+        entry = existing.get(repo)
+        if not entry:
+            log(f"  {repo:<12} FAILED - not pinned in {SOURCE_BUILDS.name}")
+            failed.append(repo)
+            continue
+        attr = f"{TOOLS[repo]}-from-source"
+        result = nix_build(flake_dir, attr)
+        if result.returncode == 0:
+            log(f"  {repo:<12} {entry['rev'][:12]}  OK")
+        else:
+            log(f"  {repo:<12} {entry['rev'][:12]}  FAILED - nix build .#{attr} did not succeed")
+            failed.append(repo)
+
+    for repo in sorted(set(existing) - set(SOURCE_BUILD_TOOLS)):
+        log(f"  {repo:<12} FAILED - committed but no longer in SOURCE_BUILD_TOOLS")
+        failed.append(repo)
+
+    if failed:
+        log(f"\n{len(failed)} tool(s) failed source-build verification: {', '.join(sorted(set(failed)))}")
+        return 1
+    log("\nall committed source-build pins verified")
+    return 0
+
+
 def do_check(existing: dict, targets: list[str], pins: dict[str, str], token: str | None) -> int:
     """Report committed vs latest without editing. Drift is news, not a failure."""
     failed: list[str] = []
@@ -306,6 +537,16 @@ def main() -> int:
         metavar="REPO=VERSION",
         help="hold a tool at an explicit version instead of resolving latest",
     )
+    ap.add_argument(
+        "--source",
+        action="store_true",
+        help="operate on source-build pins (source-builds.json, ADR-0007) instead of release pins",
+    )
+    ap.add_argument(
+        "--rev",
+        metavar="REF",
+        help="branch, tag, or commit sha to resolve (--source write/check only; exactly one --tool)",
+    )
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument(
         "--check",
@@ -329,11 +570,50 @@ def main() -> int:
         log(f"unknown tool(s) in --pin: {', '.join(sorted(unknown))}")
         return 2
 
-    existing = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
-    targets = args.tool or sorted(TOOLS)
+    if args.rev is not None and not args.source:
+        log("--rev only applies under --source")
+        return 2
+
     token = github_token()
     if not token:
         log("note: no GitHub token found; using unauthenticated API (60 req/hr)")
+
+    if args.source:
+        if pins:
+            log("--pin has no meaning under --source: a source-build pin is a rev, not a version")
+            return 2
+        if args.verify:
+            if args.rev is not None:
+                # Same shape as --pin-under-release---verify above: the
+                # committed rev is what --verify checks, so a different one
+                # makes "does this match?" ill-defined rather than answerable.
+                log("--rev cannot be combined with --source --verify: --verify gates the rev already committed")
+                return 2
+            targets = args.tool or sorted(SOURCE_BUILD_TOOLS)
+            return do_source_verify(targets, FLAKE_DIR)
+
+        # write and check both need exactly one tool: unlike a release
+        # version, a git ref has no meaning shared across repos.
+        if not args.tool or len(args.tool) != 1:
+            log("--source --check and --source (write) need exactly one --tool")
+            return 2
+        repo = args.tool[0]
+        if repo not in SOURCE_BUILD_TOOLS:
+            log(f"'{repo}' has no source-build derivation; known: {', '.join(sorted(SOURCE_BUILD_TOOLS)) or '(none)'}")
+            return 2
+        if not args.rev:
+            log("--source --check and --source (write) need --rev REF")
+            return 2
+        if args.check:
+            return do_source_check(repo, args.rev, token)
+        try:
+            return do_source_write(repo, args.rev, token, FLAKE_DIR)
+        except Exception as exc:  # noqa: BLE001 - a clean error, not a traceback
+            log(f"FAILED - {exc}")
+            return 1
+
+    existing = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
+    targets = args.tool or sorted(TOOLS)
 
     if args.verify:
         if pins:

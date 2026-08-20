@@ -1,0 +1,13 @@
+{
+  "docbank": {
+    "rev": "11af138586a2a43b62a066e1619e4fa093196ec9",
+    "srcHash": "sha256-sU7AIPQtUpzCn2d+Mr29Ha8DK+nIvNCvF5n61PfsPXw=",
+    "vendorHash": "sha256-eBykw5tsfSQG6P81AExbqCZc2nwNu39n8kYdMC/LWNE=",
+    "npmDepsHash": "sha256-8XMNDjYcA2WUP4S2YP+TfjhI6pRRK+NqQ85jF06LvK0="
+  },
+  "kwt": {
+    "rev": "7d8162f95f937b4936acba8ffa4913649b79fdfb",
+    "srcHash": "sha256-L8N+QU93uhkRZ+Zxkg8peIKVnXlKg2hiTXK2pV7Rl8Q=",
+    "vendorHash": "sha256-8WJCaEYuMKZkusoKJr0Yez06hgwu801Qnusi9L7AkK4="
+  }
+}

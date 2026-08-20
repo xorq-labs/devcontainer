@@ -102,7 +102,7 @@ Releases move fast (roborev was at v0.64.0, agentsview v0.40.1 when this was
 written). Wire `--verify` into CI to gate the pins, and `--check` into a
 scheduled job if you want to be told about drift without failing on it.
 
-## Building from source (proof of concept)
+## Building from source
 
 Everything above fetches a **tagged release** asset. `source-build.nix` is a
 separate, narrower path that builds a tool directly from a git revision —
@@ -154,11 +154,30 @@ forge additionally carries a Rust component (`rust-pty-manager`) and *two*
 independent frontends — the highest-effort tool of the seven, not yet audited
 past "it exists and is wired into `make build`."
 
-Both `rev`s are point-in-time pins with no update tooling and no drift guard
-yet — `dev/bump-kenn` does not touch them, and nothing re-derives their
-hashes when upstream moves. That's ADR-0007's Decision 3 (a `--tool <name>
---rev <ref>` mode in `update.py`, backed by a new `source-builds.json`) and
-Decision 4 (the drift guard), both still unimplemented follow-up work.
+Both are now **maintained pins**, not point-in-time proofs: `nix/kenn/source-builds.json`
+holds the committed `rev`/`srcHash`/`vendorHash` (and docbank's `npmDepsHash`),
+and `update.py` (or `devcontainer bump-kenn`) has a `--source` mode for them,
+kept separate from the release commands above since a git ref has no meaning
+shared across repos the way a release version resolves uniformly:
+
+```sh
+./update.py --source --tool kwt --rev main         # bump to a branch's HEAD
+./update.py --source --tool docbank --rev abc123   # pin an explicit commit
+./update.py --source --check --tool kwt --rev main # report drift only
+./update.py --source --verify                      # rebuild every committed pin
+```
+
+Unlike the release path, `--source` cannot be as hermetically checkable:
+there is no published manifest for an arbitrary commit, so discovering a hash
+means actually running `nix build` and reading the real hash back out of a
+deliberate mismatch (`discover_source_hashes`/`harvest_hash_mismatches` in
+`update.py`), and `--verify` re-runs that same build against the committed
+hashes — a clean build **is** the verification, the same way `dev/bump-nix`'s
+installer checksum has no fixture to check against either. What IS
+hermetically guarded is the shape agreement between `SOURCE_BUILD_TOOLS`,
+`source-build.nix`'s exposed attributes, and `source-builds.json`'s keys
+(`tests/test-bump-kenn.sh` §6) — see ADR-0007's Decision 3/4 for the full
+reasoning behind that split.
 
 ## Design notes
 

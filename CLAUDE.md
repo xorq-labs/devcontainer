@@ -287,6 +287,21 @@ taxonomy and reads as `test:`.
   the fragment against a stubbed direnv over four real on-disk layouts and
   derives the sibling name from the template rather than restating it, so the
   spelling of neither file is load-bearing).
+- Source-build tools (ADR-0007: `kwt`, `docbank` so far) are a SEPARATE,
+  smaller pin space from the release toolkit above: `nix/kenn/source-builds.json`
+  (a rev + hashes, not a version + per-platform manifest) is read by
+  `nix/kenn/source-build.nix`, and `update.py`'s `SOURCE_BUILD_TOOLS` names
+  which tools have a derivation there plus which extra hash fields it needs
+  (e.g. docbank's `npmDepsHash`). Bump via `devcontainer bump-kenn --source
+  --tool <name> --rev <ref>`. Its `--check`/`--verify` split has one more
+  layer than the release path's: the SHAPE agreement between
+  `SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes, and
+  `source-builds.json`'s keys is hermetically checkable and guarded
+  (`test: tests/test-bump-kenn.sh` §6); whether a COMMITTED hash is still
+  correct is not — there is no manifest to re-derive it from, so `nix build`
+  succeeding is the only oracle, same as `dev/bump-nix`'s installer checksum
+  (`tool: nix/kenn/update.py`'s `do_source_verify`, which actually rebuilds
+  each committed pin).
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and

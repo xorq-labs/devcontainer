@@ -69,6 +69,29 @@
 #     FAIL: and says why
 #   Results: 50 passed, 2 failed
 #   (mutation runs 2026-08-18)
+#
+# Third pair, for §6's ADR-0007 source-build shape guard (added 2026-08-20):
+#   1. FORM-ONLY — reorder SOURCE_BUILD_TOOLS's two keys and add a blank line
+#      between them in update.py. Green: 71 passed, 0 failed — the shape
+#      checks read the dict's keys/values, not its literal layout.
+#   2. SEMANTIC, in a form this suite does not write — add a third entry,
+#      `"roborev": []`, to SOURCE_BUILD_TOOLS without touching
+#      source-build.nix or source-builds.json (i.e. exactly the mistake of
+#      declaring a tool graduated without building its derivation or pinning
+#      it). Observed red:
+#        FAIL: source-build.nix exposes exactly SOURCE_BUILD_TOOLS's attrs
+#        FAIL: source-builds.json is pinned for exactly SOURCE_BUILD_TOOLS
+#      Results: 69 passed, 2 failed
+#   (mutation runs 2026-08-20)
+#
+# What §6 does NOT attempt: whether a COMMITTED source-build hash is still
+# correct against a live rebuild. There is no manifest to re-derive it from —
+# `nix build` succeeding is the only oracle (same as dev/bump-nix's installer
+# checksum) — so do_source_write/do_source_verify/nix_build/
+# discover_source_hashes are proven by actually running `nix build .#kwt-
+# from-source` / `.#docbank-from-source` for real (see the commits that
+# introduced them), not by a fixture here. Faking a "nix build succeeded"
+# result would be exactly the vacuous-pass shape ADR-0005 warns about.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -258,6 +281,16 @@ def fake_http_get(url, token=None):
             raise http404(url)
         prefix = release.get("prefix", "")
         return "".join(f"{d}  {prefix}{n}\n" for n, d in release["assets"].items()).encode()
+
+    # ADR-0007's --source path: resolve a ref to a commit sha. Canned as a
+    # plain {ref: sha} map per repo, independent of the release "latest" map.
+    m = re.fullmatch(r"https://api\.github\.com/repos/kenn-io/([^/]+)/commits/([^/]+)", url)
+    if m:
+        repo, ref = m.groups()
+        sha = universe.get("commits", {}).get(repo, {}).get(ref)
+        if sha is None:
+            raise http404(url)
+        return json.dumps({"sha": sha}).encode()
 
     raise http404(url)
 
@@ -536,5 +569,206 @@ assert_eq "an explicit DEVCONTAINER_HOME is never second-guessed" "/opt/dc" \
     "$(DEVCONTAINER_HOME=/opt/dc env -i HOME="$layouts/home" PATH="$PATH" DEVCONTAINER_HOME=/opt/dc bash -c '
         direnv_root="$1"; use() { :; }; log_error() { :; }; . "$2"
         printf "%s\n" "$DEVCONTAINER_HOME"' _ "$layouts/self" "$env_kenn")"
+
+# --- 6. source builds (ADR-0007) ---------------------------------------------
+
+echo ""
+echo "== source builds (ADR-0007) =="
+
+# ADR-0007 splits the drift guard's job in two, and this section only attempts
+# the half that CAN be hermetic: does SOURCE_BUILD_TOOLS (update.py) agree
+# with source-build.nix's actual attributes and source-builds.json's actual
+# keys? Whether a COMMITTED hash is still correct against a live rebuild is
+# the other half, and it has no hermetic form — nix build is the only oracle,
+# same as dev/bump-nix's installer checksum — so it is deliberately NOT
+# attempted here. do_source_write/do_source_verify/nix_build/
+# discover_source_hashes are exercised for real (a real "nix build .#kwt...")
+# above in this PR's own history, not by this suite: faking a nix build
+# result would be exactly the vacuous-pass shape ADR-0005 warns about.
+source_build_encodings="$(
+    python3 - "$KENN" <<'PY'
+import importlib.util
+import re
+import sys
+from pathlib import Path
+
+kenn = Path(sys.argv[1])
+
+spec = importlib.util.spec_from_file_location("kenn_update", kenn / "update.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+nix = (kenn / "source-build.nix").read_text()
+# The final `in { ... }` attrset is where every exposed package attribute is
+# either bound directly (`kwt-from-source = ...`) or re-exposed via `inherit`
+# (`inherit docbank-from-source;`) — a single name-pattern search over just
+# that block, not the whole file, so a `-from-source` mention inside a
+# comment or the `mkKennToolFromSource` helper itself can't count.
+in_idx = nix.rindex("\nin\n")
+attrset = nix[in_idx:]
+exposed = sorted(set(re.findall(r"\b([A-Za-z][\w-]*-from-source)\b", attrset)))
+
+import json
+
+source_builds = json.loads((kenn / "source-builds.json").read_text())
+
+
+def out(key, value):
+    print(f"{key}={value}")
+
+
+out("tools", ",".join(sorted(mod.TOOLS)))
+out("sb_tools", ",".join(sorted(mod.SOURCE_BUILD_TOOLS)))
+out("sb_exposed", ",".join(exposed))
+out("sb_expected_attrs", ",".join(sorted(f"{mod.TOOLS[r]}-from-source" for r in mod.SOURCE_BUILD_TOOLS)))
+out("sb_json_keys", ",".join(sorted(source_builds)))
+# Every extra hash field a tool's SOURCE_BUILD_TOOLS entry names must appear
+# referenced somewhere in source-build.nix, or update.py would discover it
+# but source-build.nix would never read it back.
+missing_refs = []
+for repo, extra_fields in mod.SOURCE_BUILD_TOOLS.items():
+    for field in extra_fields:
+        if f"pin.{field}" not in nix:
+            missing_refs.append(f"{repo}:{field}")
+out("sb_missing_field_refs", ",".join(missing_refs) or "<none>")
+PY
+)"
+
+sb_get() { printf '%s\n' "$source_build_encodings" | sed -n "s/^$1=//p"; }
+
+assert_true "SOURCE_BUILD_TOOLS is a subset of TOOLS" test -z "$(comm -23 <(sb_get sb_tools | tr ',' '\n' | sort) <(sb_get tools | tr ',' '\n' | sort))"
+assert_eq "source-build.nix exposes exactly SOURCE_BUILD_TOOLS's attrs" \
+    "$(sb_get sb_expected_attrs)" "$(sb_get sb_exposed)"
+assert_eq "source-builds.json is pinned for exactly SOURCE_BUILD_TOOLS" \
+    "$(sb_get sb_tools)" "$(sb_get sb_json_keys)"
+assert_eq "every SOURCE_BUILD_TOOLS extra hash field is read in source-build.nix" \
+    "<none>" "$(sb_get sb_missing_field_refs)"
+
+# harvest_hash_mismatches: the one genuinely new parsing logic in this mode,
+# tested directly against canned `nix build` stderr rather than trusted.
+python3 - "$KENN" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+kenn = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("kenn_update", kenn / "update.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+ok = True
+
+
+def check(name, got, want):
+    global ok
+    if got != want:
+        ok = False
+        print(f"FAIL: {name}: got {got!r}, want {want!r}")
+
+
+single = """error: hash mismatch in fixed-output derivation '/nix/store/cp8bky3mib89sw8dljpshdb84dw3k8im-source.drv':
+         specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            got:    sha256-REALHASHHERE=
+"""
+check("single 'source' mismatch -> srcHash", mod.harvest_hash_mismatches(single), {"srcHash": "sha256-REALHASHHERE="})
+
+multi = """error: hash mismatch in fixed-output derivation '/nix/store/7wzfnk99ksac992airdfclxqc5dl1hq7-docbank-frontend-abc123-npm-deps.drv':
+         specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            got:    sha256-NPMDEPSHASH=
+error: hash mismatch in fixed-output derivation '/nix/store/97idgzbxfjv17fwpkriddbq2rqxzihs7-docbank-abc123-go-modules.drv':
+         specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            got:    sha256-VENDORHASH=
+"""
+check(
+    "two mismatches in one run -> both fields",
+    mod.harvest_hash_mismatches(multi),
+    {"npmDepsHash": "sha256-NPMDEPSHASH=", "vendorHash": "sha256-VENDORHASH="},
+)
+
+check("no mismatch in stderr -> empty, not an error", mod.harvest_hash_mismatches("build failed for some other reason"), {})
+
+unrecognized = """error: hash mismatch in fixed-output derivation '/nix/store/cp8bky3mib89sw8dljpshdb84dw3k8im-something-else-entirely.drv':
+         specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            got:    sha256-WHATEVEN=
+"""
+try:
+    mod.harvest_hash_mismatches(unrecognized)
+    ok = False
+    print("FAIL: an unrecognized derivation name should raise, not be silently dropped")
+except RuntimeError as exc:
+    if "something-else-entirely" not in str(exc):
+        ok = False
+        print(f"FAIL: the refusal should name the unrecognized derivation: {exc}")
+
+sys.exit(0 if ok else 1)
+PY
+assert_eq "harvest_hash_mismatches maps known drv suffixes and refuses to guess" 0 "$?"
+
+# --- argument handling + do_source_check's report contract -------------------
+# Reuses the real driver from section 3, extended with a "commits" map so
+# commit_sha() (do_source_check's only network call) resolves hermetically.
+# do_source_write/do_source_verify are NOT driven here — they call nix_build
+# for real, which this driver deliberately does not stub (see the section
+# header comment).
+
+cp "$sandbox/good-sources.json" "$sandbox/sources.json"
+cat >"$sandbox/source-universe.json" <<'JSON'
+{
+  "latest": {},
+  "releases": {},
+  "commits": {
+    "kwt": {"main": "1111111111111111111111111111111111111a", "v0.4.0": "2222222222222222222222222222222222222b"}
+  }
+}
+JSON
+printf '{"kwt": {"rev": "1111111111111111111111111111111111111a", "srcHash": "x", "vendorHash": "y"}}\n' \
+    >"$sandbox/source-builds.json"
+
+# --rev only makes sense under --source.
+assert_eq "--rev without --source is refused" 2 "$(drive_rc source-universe.json --rev main)"
+
+# --pin has no meaning once --source selects the other pin space.
+out="$(drive source-universe.json --source --pin kwt=1.0.0 --tool kwt --rev main || true)"
+assert_eq "--pin under --source is refused" 2 \
+    "$(drive_rc source-universe.json --source --pin kwt=1.0.0 --tool kwt --rev main)"
+assert_contains "and says why" "no meaning under --source" "$out"
+
+# --verify gates the committed rev; an explicit --rev makes that ill-defined,
+# the same shape as --pin-under-release---verify.
+out="$(drive source-universe.json --source --verify --rev main || true)"
+assert_eq "--rev under --source --verify is refused" 2 \
+    "$(drive_rc source-universe.json --source --verify --rev main)"
+assert_contains "and says why" "gates the rev already committed" "$out"
+
+# A rev has no meaning shared across repos, unlike a release version.
+assert_eq "--source write/check needs exactly one --tool" 2 \
+    "$(drive_rc source-universe.json --source --tool kwt docbank --rev main)"
+
+# A tool with no source-build derivation must be refused, not silently
+# attempted and left half-written.
+out="$(drive source-universe.json --source --tool kata --rev main || true)"
+assert_eq "an unknown source-build tool is refused" 2 \
+    "$(drive_rc source-universe.json --source --tool kata --rev main)"
+assert_contains "and names the known tools" "docbank" "$out"
+
+assert_eq "--source write/check needs --rev" 2 \
+    "$(drive_rc source-universe.json --source --tool kwt)"
+
+# do_source_check's report contract: exit 0 whether or not the ref moved,
+# non-zero only when it could not be resolved at all (mirrors the release
+# --check contract this repo has gotten wrong twice already, #126 / #135).
+out="$(drive source-universe.json --source --check --tool kwt --rev main || true)"
+assert_eq "--source --check exits 0 when the ref matches the committed rev" 0 \
+    "$(drive_rc source-universe.json --source --check --tool kwt --rev main)"
+assert_contains "and reports up to date" "up to date" "$out"
+
+out="$(drive source-universe.json --source --check --tool kwt --rev v0.4.0 || true)"
+assert_eq "--source --check exits 0 on drift too (drift is news)" 0 \
+    "$(drive_rc source-universe.json --source --check --tool kwt --rev v0.4.0)"
+assert_contains "and reports the new sha" "22222222" "$out"
+
+out="$(drive source-universe.json --source --check --tool kwt --rev nope || true)"
+assert_eq "--source --check fails when the ref cannot be resolved" 1 \
+    "$(drive_rc source-universe.json --source --check --tool kwt --rev nope)"
 
 finish
