@@ -44,14 +44,38 @@
       binaries = lib.mapAttrsToList (_: v: v.binary) (
         builtins.fromJSON (builtins.readFile ./sources.json)
       );
+
+      # Building from a git revision instead of a release binary needs its own
+      # Go toolchain (pinned to the exact patch every kenn-io go.mod requires,
+      # same as kenn-io/roborev's and kenn-io/msgvault's own flakes do for
+      # their source builds) rather than the fetchurl-only pkgsFor above.
+      sourceBuildsFor =
+        system:
+        let
+          pkgs = pkgsFor system;
+          goPinned = pkgs.go_1_26.overrideAttrs (_: rec {
+            version = "1.26.6";
+            src = pkgs.fetchurl {
+              url = "https://go.dev/dl/go${version}.src.tar.gz";
+              hash = "sha256-oHIcVMaIkBRI13rZs+x+p8R0cwdV/4kTgukuy5P/LLE=";
+            };
+          });
+          buildGoModule = pkgs.buildGoModule.override { go = goPinned; };
+        in
+        pkgs.callPackage ./source-build.nix { inherit buildGoModule; };
     in
     {
       packages = forAllSystems (
         system:
         let
           tools = toolsFor system;
+          sourceBuilds = sourceBuildsFor system;
         in
-        tools // { default = tools.kenn-io-toolkit; }
+        tools
+        // {
+          default = tools.kenn-io-toolkit;
+          inherit (sourceBuilds) kwt-from-source;
+        }
       );
 
       # Individual tools only — the toolkit joins are flake-level conveniences

@@ -102,6 +102,52 @@ Releases move fast (roborev was at v0.64.0, agentsview v0.40.1 when this was
 written). Wire `--verify` into CI to gate the pins, and `--check` into a
 scheduled job if you want to be told about drift without failing on it.
 
+## Building from source (proof of concept)
+
+Everything above fetches a **tagged release** asset. `source-build.nix` is a
+separate, narrower path that builds a tool directly from a git revision —
+useful for testing an unreleased fix or a commit with no published binary at
+all. It is intentionally not integrated into `mkKennTool`: a source build is a
+different reproducibility contract (pinned to a commit + a Go module graph,
+not to a checksum-verified published artifact), and mixing the two modes into
+one derivation function would make both harder to read.
+
+```sh
+nix build .#kwt-from-source
+./result/bin/kwt version    # reports "dev" — this is not a release
+```
+
+Only **`kwt`** is wired up, and it was picked deliberately: no cgo
+dependencies (no C cross-toolchain to worry about) and no embedded frontend
+(no bun/npm vendoring). It is the cheapest of the seven tools to prove the
+mechanism on, not a template to mechanically repeat for the rest — extending
+this to the other six is real, uneven work:
+
+- **kata, forge, msgvault** embed a bun-built frontend. msgvault's own
+  `nix/package.nix` already solved this with `nix-community/bun2nix`
+  (a pinned bun binary plus a generated `web/bun.nix` lockfile-equivalent that
+  needs regenerating on every `bun.lock` change) — that recipe is portable,
+  but it's a second vendoring axis per tool, not a one-line addition.
+- **msgvault, docbank, agentsview** build with `CGO_ENABLED=1` (mattn/go-sqlite3,
+  duckdb-go, sqlite-vec-go-bindings all link C). Cross-compiling cgo in Nix,
+  especially to darwin, is materially harder than the static `CGO_ENABLED=0`
+  builds this flake already ships as release binaries.
+- **docbank, agentsview** use plain npm instead of bun — less exotic
+  (`buildNpmPackage`/`fetchNpmDeps` is native nixpkgs), but still a frontend
+  build step to reproduce exactly.
+- **forge** additionally carries a Rust component (`rust-pty-manager`) and
+  *two* independent frontends (`frontend/`, `packages/github-app-ui/`) — the
+  highest-effort tool of the seven, and not yet even audited past "it exists
+  and is wired into `make build`."
+
+`kwt-from-source`'s `rev` is a point-in-time pin (HEAD of `main` when this was
+written, 41 commits past the `v0.4.0` tag in `sources.json`) with no update
+tooling and no drift guard — `dev/bump-kenn` does not touch it, and nothing
+re-derives its `vendorHash` when upstream moves. That's deliberate: this is a
+proof that the mechanism works, not a maintained second pin. Wiring a real
+`--tool kwt --rev <rev>` mode into `update.py`, and deciding whether the other
+six tools are worth the vendoring cost above, is unstarted follow-up work.
+
 ## Design notes
 
 **Binaries, not source builds.** `kata` and `forge` embed a bun-built frontend
