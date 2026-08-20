@@ -71,21 +71,32 @@
 #   (mutation runs 2026-08-18)
 #
 # Third pair, for §6's ADR-0007 source-build shape guard (added 2026-08-20):
-#   1. FORM-ONLY — reorder SOURCE_BUILD_TOOLS's two keys and add a blank line
-#      between them in update.py. Green: 71 passed, 0 failed — the shape
+#   1. FORM-ONLY — reorder SOURCE_BUILD_TOOLS's keys and add a blank line
+#      between two of them in update.py. Green: 76 passed, 0 failed — the shape
 #      checks read the dict's keys/values, not its literal layout.
+#      (Re-run 2026-08-20: this half said "two keys / 71 passed" from when the
+#      dict had two entries, and went stale unnoticed while the semantic half
+#      beside it was rewritten twice. A recorded run whose numbers no longer
+#      reproduce is the one thing ADR-0005 §2 exists to prevent — so when you
+#      touch one half of a pair, re-run the other.)
 #   2. SEMANTIC, in a form this suite does not write — add an entry for a tool
 #      that has not graduated to SOURCE_BUILD_TOOLS without touching
 #      source-build.nix or source-builds.json (i.e. exactly the mistake of
 #      declaring a tool graduated without building its derivation or pinning
-#      it). Use `"forge": []`: the original run used `"roborev": []`, which
-#      stopped being a mutation once roborev really graduated, and `"kata"` is
-#      the wrong substitute because §4 below uses it as its known-ungraduated
-#      tool, so mutating it reddens two unrelated assertions as well.
+#      it). Use `"forge": []` — `forge` is the only ungraduated tool left, and
+#      this mutation has now been rewritten twice as tools graduated under it
+#      (it was `"roborev": []`, then briefly `"kata": []`), which is the whole
+#      reason §4 below DERIVES its ungraduated tool instead of naming one.
 #      Re-run 2026-08-20 with `"forge": []`. Observed red:
 #        FAIL: source-build.nix exposes exactly SOURCE_BUILD_TOOLS's attrs
 #        FAIL: source-builds.json is pinned for exactly SOURCE_BUILD_TOOLS
-#      Results: 74 passed, 2 failed (originally 69 passed, 2 failed — same two)
+#        SKIP: every tool has graduated, nothing left to refuse
+#      Results: 72 passed, 2 failed
+#      The SKIP is expected and is §4 behaving correctly, not collateral
+#      damage: with forge declared graduated there is no ungraduated tool left
+#      for the refusal test to use, so it stands down rather than inventing
+#      one. That is two fewer assertions than the 74/2 of the previous run,
+#      and the same two failures.
 #   (mutation runs 2026-08-20)
 #
 # Fourth pair, for §6's SOURCE_BUILD_BUN_NIX coverage — the generated-file half
@@ -895,10 +906,23 @@ assert_eq "--source write/check needs exactly one --tool" 2 \
 
 # A tool with no source-build derivation must be refused, not silently
 # attempted and left half-written.
-out="$(drive source-universe.json --source --tool kata --rev main || true)"
-assert_eq "an unknown source-build tool is refused" 2 \
-    "$(drive_rc source-universe.json --source --tool kata --rev main)"
-assert_contains "and names the known tools" "docbank" "$out"
+#
+# The tool name is DERIVED — the first of TOOLS that SOURCE_BUILD_TOOLS does
+# not list — rather than written here. It used to be a literal `kata`, which
+# silently stopped testing anything the day kata graduated: the assertion
+# reddened with a 404 from a repo the canned universe does not describe, i.e.
+# it failed for a reason unrelated to what it checks. Deriving it means this
+# keeps testing the refusal for as long as ANY tool is ungraduated, and turns
+# into a clean skip rather than a false failure when none is.
+ungraduated="$(comm -23 <(sb_get tools | tr ',' '\n' | sort) <(sb_get sb_tools | tr ',' '\n' | sort) | head -1)"
+if [ -n "$ungraduated" ]; then
+    out="$(drive source-universe.json --source --tool "$ungraduated" --rev main || true)"
+    assert_eq "an ungraduated source-build tool is refused ($ungraduated)" 2 \
+        "$(drive_rc source-universe.json --source --tool "$ungraduated" --rev main)"
+    assert_contains "and names the known tools" "docbank" "$out"
+else
+    echo "  SKIP: every tool has graduated, nothing left to refuse"
+fi
 
 assert_eq "--source write/check needs --rev" 2 \
     "$(drive_rc source-universe.json --source --tool kwt)"

@@ -4,7 +4,8 @@
 - Date: 2026-08-20
 - Implemented by: `nix/kenn/source-build.nix` (`kwt-from-source`,
   `docbank-from-source`, `agentsview-from-source`, `msgvault-from-source`,
-  `roborev-from-source`), `nix/kenn/source-builds.json` (Decision 3's pin
+  `roborev-from-source`, `kata-from-source`),
+  `nix/kenn/source-builds.json` (Decision 3's pin
   space), `nix/kenn/bun/` (Decision 3's second pin element, added by the
   2026-08-20 amendment below), `update.py`'s
   `--source`/`--rev` mode (Decision 3: `SOURCE_BUILD_TOOLS`,
@@ -16,11 +17,11 @@
   input (`nix-community/bun2nix`, shared infrastructure for msgvault, kata,
   and roborev, plus an `apps.bun2nix` passthrough so `update.py` can only ever
   run the pinned version), and the CLAUDE.md invariant lines. **`kwt`,
-  `docbank`, `agentsview`, `msgvault`, and `roborev` are now graduated under
-  Decision 1's own
+  `docbank`, `agentsview`, `msgvault`, `roborev`, and `kata` are now graduated
+  under Decision 1's own
   four-part definition** — derivation, bump mode, guard, CLAUDE.md line, all
-  four present for all five. What remains unimplemented: the other two
-  tools (each its own follow-up, per Decision 1) and CI (Decision 6,
+  four present for all six. What remains unimplemented: `forge`
+  (its own follow-up, per Decision 1) and CI (Decision 6,
   deliberately out of scope).
 - Amended 2026-08-20 (Decision 3): a source-build pin is no longer only a rev
   plus hashes. A tool whose bun frontend upstream ships no `bun.nix` for needs
@@ -116,7 +117,8 @@ clears `preBuild` (the same leak agentsview hit).
 
 A fifth proof — `roborev` — is the first **workspace**-scope bun frontend, and
 the first tool whose difficulty was not in the shape of its build but in what
-upstream does *not* ship. Its Go side is the easiest of the five
+upstream does *not* ship. Its Go side is the simplest of any tool here with a
+frontend
 (`modernc.org/sqlite` is pure Go — no cgo, no header, no `CGO_CFLAGS`), and its
 own upstream flake skips the frontend entirely, which is exactly why the
 original "same shape as kwt" estimate was wrong: the tool it produces is a
@@ -144,8 +146,29 @@ stub-only binary. Three findings, documented in `nix/kenn/README.md`:
   msgvault does not hit this because its kit-ui dependency is spelled as a
   tarball URL, already arity 3. Same dependency, two spellings, one broken.
 
-**`kwt`, `docbank`, `agentsview`, `msgvault`, and `roborev` count as graduated
-as of this revision.**
+A sixth proof — `kata` — is the first that mostly confirmed the investment
+rather than extending it. Its frontend side is roborev's shape verbatim (root
+`bun.lock` workspace, no committed `bun.nix`, the same `@kenn-io/kit-ui` at the
+same rev in the same arity-4 `github:` spelling), so the amendment's machinery
+and `degrade_git_lock_entries` both applied unchanged and the derivation was a
+near-copy — which is what five tools of accumulated quirks is supposed to buy.
+
+It did add one real thing, and the *research pass had this one backwards*: it
+recorded that `CGO_ENABLED=0` "genuinely holds ... despite go.mod listing
+`sqlite-vec-go-bindings`", which is true of upstream and false of a naive
+derivation. `buildGoModule` inherits Go's default of `CGO_ENABLED=1`, and
+`asg017/sqlite-vec-go-bindings` is reachable from `cmd/kata` and `#include`s a
+`sqlite3.h` it does not ship, so the build fails outright — *after* the whole
+frontend has built, so it costs a full round to discover. Upstream never sees
+it because `.goreleaser.yaml` sets `CGO_ENABLED=0` on all four kata build ids,
+selecting the pure-Go `modernc.org/sqlite` path. The transferable lesson for
+`forge` is that the authority on a tool's cgo posture is its **release
+config**, not its module graph — `go.mod` here requires two cgo sqlite drivers
+and a pure-Go one simultaneously, and reading it either way in isolation gives
+the wrong answer.
+
+**`kwt`, `docbank`, `agentsview`, `msgvault`, `roborev`, and `kata` count as
+graduated as of this revision.**
 
 Extending this to a standing capability is not uniform-cost across the
 remaining tools. Prior assessment, updated after researching all four
@@ -157,10 +180,11 @@ remaining tools and auditing forge's Rust component:
 | agentsview | npm frontend + `CGO_ENABLED=1` + 3 more quirks (see above) | done — graduated |
 | msgvault | bun frontend (bun2nix, now in place) + `CGO_ENABLED=1` | done — graduated |
 | roborev | bun **workspace** frontend (repo-root scope, not self-contained, unlike msgvault's) + no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) + no committed `bun.nix` and a bun2nix parse bug on its git dependency, neither of which the research pass predicted | done — graduated (was: medium) |
-| kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (turns out to be a harmless plain directory copy). Shares roborev's shape, so the workspace/generated-`bun.nix` work is paid; **check whether it ships a `bun.nix`** before assuming either route | medium-high |
+| kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (a harmless plain directory copy) + `CGO_ENABLED=0` must be set explicitly, which the research pass got backwards. Turned out to be roborev's shape verbatim otherwise | done — graduated (was: medium-high) |
 | forge | two bun frontends (`frontend/`, `packages/github-app-ui/`) + a Rust component, now audited: a standalone `buildRustPackage` binary, no cgo/FFI, no git/path Cargo deps, no `-sys` crates — tractable on its own. "Highest effort" now rests entirely on the doubled frontend work | highest, no longer unscoped |
 
-Three of the four remaining tools (roborev, msgvault, kata) need `bun2nix` —
+All three of the then-remaining bun tools (roborev, msgvault, kata) needed
+`bun2nix` —
 shared infrastructure worth building once as a new flake input, not three
 times; msgvault's own `nix/package.nix` already has a working recipe to adapt,
 and can be simplified (skip its own bun-version-repinning dance, which exists
@@ -187,9 +211,9 @@ not as a batch.** A tool is "maintained" only once it has all four of:
    - the drift guard this creates (Decision 4),
    - its own line in CLAUDE.md's Invariants section.
 
-   `kwt`, `docbank`, `agentsview`, `msgvault`, and `roborev` have completed all
-   four (see the header note). The other two are explicitly **not** decided
-   here —
+   `kwt`, `docbank`, `agentsview`, `msgvault`, `roborev`, and `kata` have
+   completed all four (see the header note). `forge` is explicitly **not**
+   decided here —
    each graduates (or doesn't) as its own follow-up, evaluated against the
    effort table above, not committed to en masse. Forge in particular was the
    one tool this ADR held unscoped pending its Rust component's audit; that

@@ -50,7 +50,7 @@ against the COMMITTED hashes and fails on anything but a clean build — nix
 build is the oracle here, not a fixture, matching how dev/bump-nix's installer
 checksum has no hermetic test either (see ADR-0007's Decision 3).
 
-One source-build tool needs more than hashes: see SOURCE_BUILD_BUN_NIX. For
+Some source-build tools need more than hashes: see SOURCE_BUILD_BUN_NIX. For
 those, `--source` ALSO regenerates a whole file (nix/kenn/bun/<repo>.nix), so
 the pin is a rev + hashes + a generated dependency expression.
 """
@@ -116,11 +116,8 @@ SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
     # a COMMITTED web/bun.nix inside the fetched tree, not a separately
     # discovered hash — its per-package hashes are already covered by srcHash.
     "msgvault": [],
-    # Also no extra field, for a DIFFERENT reason than msgvault's: roborev
-    # ships no bun.nix at all, so one is generated here (SOURCE_BUILD_BUN_NIX)
-    # rather than read out of the fetched tree. Either way the per-package
-    # hashes live outside source-builds.json.
-    "roborev": [],
+    "roborev": [],  # generated bun.nix, not a committed one — SOURCE_BUILD_BUN_NIX
+    "kata": [],  # same shape as roborev, down to the same kit-ui rev
 }
 
 # Tools whose bun2nix dependency expression this repo has to GENERATE, because
@@ -138,6 +135,7 @@ SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
 # there is nothing to generate and its per-package hashes ride along in srcHash.
 SOURCE_BUILD_BUN_NIX: dict[str, str] = {
     "roborev": "bun.lock",  # workspace root, not a self-contained subdirectory
+    "kata": "bun.lock",  # likewise
 }
 
 FAKE_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

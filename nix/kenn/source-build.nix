@@ -24,17 +24,19 @@
 # a different reproducibility contract (pinned to a commit + a Go module
 # graph, not to a checksum-verified published artifact).
 #
-# Five of the seven tools are wired up (ADR-0007 decision 1: tools graduate one
-# at a time, not as a batch) — kwt, docbank, agentsview, msgvault, roborev, in
-# that order, each chosen to exercise a shape the previous ones didn't: no
+# Six of the seven tools are wired up (ADR-0007 decision 1: tools graduate one
+# at a time, not as a batch) — kwt, docbank, agentsview, msgvault, roborev,
+# kata, in that order. Each exercised a shape the previous ones didn't: no
 # frontend at all; npm + CGO_ENABLED=1; the same plus a vendored sqlite header
 # and a sandbox-hostile Makefile; a bun frontend in a self-contained
 # subdirectory; a bun frontend at whole-repo workspace scope with no committed
-# bun.nix. Extending this to kata and forge is real, uneven work — see
+# bun.nix; and a cgo dependency that has to be DISABLED rather than satisfied.
+# That last one is kata, whose frontend side really was roborev's shape
+# verbatim — the only thing five tools of accumulated quirks did not already
+# cover was one build-time env var. Only forge is left, and it is genuinely
+# more work: two independent bun frontends plus a Rust component. See
 # nix/kenn/README.md's "Building from source" section and ADR-0007's effort
-# table before assuming it generalizes for free. Both share roborev's
-# workspace-bun shape, and forge additionally carries two frontends and a Rust
-# component.
+# table.
 let
   mkKennToolFromSource =
     {
@@ -419,7 +421,8 @@ let
   #      generated expression is copied into the source tree rather than read
   #      from this repo's own directory.
   #
-  # The Go side is the easiest of the five: modernc.org/sqlite is pure Go, so
+  # The Go side is the simplest of any tool here with a frontend:
+  # modernc.org/sqlite is pure Go, so
   # no cgo, no sqlite header, no CGO_CFLAGS — everything hard about roborev is
   # the frontend, which is also why upstream's own flake skips it and ships a
   # stub-only binary.
@@ -480,8 +483,10 @@ let
       };
 
       # Mirrors the Makefile's web-embed target (web/scripts/embed-assets.ts),
-      # minus its --restore-stub half, which only exists to keep a developer's
-      # working tree clean afterwards. internal/web/dist ships exactly one
+      # minus two things it does not need: the web-assets-check prerequisite
+      # (installCheckPhase covers that below, against the built binary) and the
+      # --restore-stub restore that `build:` traps on exit purely to keep a
+      # developer's working tree clean. internal/web/dist ships exactly one
       # committed file — index.html, the compilation stub — and the real
       # index.html replaces it, so unlike docbank/msgvault there is nothing in
       # there to preserve.
@@ -517,6 +522,110 @@ let
         sourceProvenance = [ lib.sourceTypes.fromSource ];
       };
     };
+
+  # kata: tool #6, and the first one that was genuinely a copy. It is
+  # roborev-shaped in every respect that costs anything — root bun.lock with
+  # `workspaces: ["web", "packages/*"]`, the same bun 1.3.14, no committed
+  # bun.nix, and the same @kenn-io/kit-ui pinned at the same rev in the same
+  # arity-4 `github:` spelling that needs update.py's lockfile rewrite. So the
+  # comments on roborev-from-source above are the explanation for this block
+  # too, and are not repeated.
+  #
+  # The one thing it adds: CGO_ENABLED=0 is required, not cosmetic.
+  # asg017/sqlite-vec-go-bindings is reachable from cmd/kata and `#include`s a
+  # sqlite3.h it does not ship, so buildGoModule's inherited default of
+  # CGO_ENABLED=1 fails the build — and only after the whole frontend has
+  # built. No build tags either; upstream sets none for kata, unlike docbank's,
+  # agentsview's and msgvault's fts5. Why go.mod misleads about both, and why
+  # .goreleaser.yaml is the authority: ADR-0007's kata paragraph.
+  kata-from-source =
+    let
+      pin = sourceBuilds.kata;
+      kataSrc = fetchFromGitHub {
+        owner = "kenn-io";
+        repo = "kata";
+        rev = pin.rev;
+        hash = pin.srcHash;
+      };
+      srcWithBunNix = runCommand "kata-src-with-bun-nix" { } ''
+        cp -R ${kataSrc} "$out"
+        chmod -R u+w "$out"
+        cp ${./bun/kata.nix} "$out/bun.nix"
+      '';
+      bunDeps =
+        let
+          base = bun2nix.fetchBunDeps { bunNix = "${srcWithBunNix}/bun.nix"; };
+        in
+        runCommand "kata-bun-deps" { } ''
+          mkdir -p "$out/share/bun-cache"
+          cp -RL ${base}/share/bun-cache/. "$out/share/bun-cache/"
+          chmod -R u+w "$out/share/bun-cache"
+        '';
+    in
+    buildGoModule {
+      pname = "kata";
+      version = pin.rev;
+      src = srcWithBunNix;
+
+      vendorHash = pin.vendorHash;
+
+      inherit bunDeps;
+      # bunRoot deliberately unset — the lockfile is at the repo root.
+      bunInstallFlags = [
+        "--linker=hoisted"
+        "--backend=copyfile"
+      ];
+      dontRunLifecycleScripts = true;
+      dontUseBunBuild = true;
+      dontUseBunCheck = true;
+      dontUseBunInstall = true;
+
+      nativeBuildInputs = [
+        bun2nix.hook
+        nodejs
+      ];
+      overrideModAttrs = _: previous: {
+        nativeBuildInputs = builtins.filter (
+          input: (input.name or "") != "bun2nix-hook"
+        ) previous.nativeBuildInputs;
+        preBuild = "";
+      };
+
+      # Same as roborev's above: the Makefile's web-embed target minus its
+      # asset-check prerequisite and the --restore-stub restore `build:` traps.
+      # internal/web/dist ships one committed file, index.html, replaced here.
+      preBuild = ''
+        pushd web
+        bun ../node_modules/vite/bin/vite.js build
+        popd
+        find internal/web/dist -mindepth 1 -exec rm -rf {} +
+        cp -R web/dist/. internal/web/dist/
+      '';
+
+      subPackages = [ "cmd/kata" ];
+      env.CGO_ENABLED = 0; # see the block comment: required, not cosmetic
+      doCheck = false;
+
+      # kata's equivalent of roborev's verify-web-assets. Hidden and
+      # underscore-prefixed upstream, but it is the same
+      # web.ValidateEmbeddedRelease() gate the release check runs, so it is the
+      # right oracle for "the real frontend embedded, not the stub".
+      doInstallCheck = true;
+      installCheckPhase = ''
+        runHook preInstallCheck
+        export HOME="$(mktemp -d)"
+        "$out/bin/kata" version
+        "$out/bin/kata" _web-assets-check
+        runHook postInstallCheck
+      '';
+
+      meta = {
+        description = "kenn-io/kata, built from ${pin.rev} rather than a release binary";
+        homepage = "https://github.com/kenn-io/kata";
+        mainProgram = "kata";
+        sourceProvenance = [ lib.sourceTypes.fromSource ];
+      };
+    };
 in
 {
   inherit mkKennToolFromSource;
@@ -530,4 +639,5 @@ in
   inherit agentsview-from-source;
   inherit msgvault-from-source;
   inherit roborev-from-source;
+  inherit kata-from-source;
 }

@@ -11,6 +11,11 @@
     "srcHash": "sha256-sU7AIPQtUpzCn2d+Mr29Ha8DK+nIvNCvF5n61PfsPXw=",
     "vendorHash": "sha256-eBykw5tsfSQG6P81AExbqCZc2nwNu39n8kYdMC/LWNE="
   },
+  "kata": {
+    "rev": "30dcc0efb1cd8429c7859080a322ade72024f410",
+    "srcHash": "sha256-1HVMHFh42h3hbrRfNkYpEd6T9TALooI9BNzXJLBVhz0=",
+    "vendorHash": "sha256-NyVSLqFgrDukxtq4tpAa/LTm+mILcAaXwNHN0X0gBs0="
+  },
   "kwt": {
     "rev": "7d8162f95f937b4936acba8ffa4913649b79fdfb",
     "srcHash": "sha256-L8N+QU93uhkRZ+Zxkg8peIKVnXlKg2hiTXK2pV7Rl8Q=",

@@ -78,8 +78,8 @@ taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
 reserved by #81), ADR-0006 (structural auditing as prompted agents, not metric
 tooling; amended 2026-08-04 so committing an audit report is optional),
 ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool;
-kwt, docbank, agentsview, msgvault, and roborev graduated so far — derivation,
-`update.py --source` bump mode, drift guard, and CLAUDE.md line, all four;
+kwt, docbank, agentsview, msgvault, roborev and kata graduated so far —
+derivation, `update.py --source` bump mode, drift guard, CLAUDE.md line;
 amended 2026-08-20 so a pin may include a generated file, not only hashes), and
 nix/base/README.md "Design decisions" for the
 base-image record.
@@ -290,8 +290,8 @@ taxonomy and reads as `test:`.
   derives the sibling name from the template rather than restating it, so the
   spelling of neither file is load-bearing).
 - Source-build tools (ADR-0007: `kwt`, `docbank`, `agentsview`, `msgvault`,
-  `roborev` so far) are a SEPARATE, smaller pin space from the release toolkit
-  above: `nix/kenn/source-builds.json`
+  `roborev`, `kata` so far) are a SEPARATE, smaller pin space from the release
+  toolkit above: `nix/kenn/source-builds.json`
   (a rev + hashes, not a version + per-platform manifest) is read by
   `nix/kenn/source-build.nix`, and `update.py`'s `SOURCE_BUILD_TOOLS` names
   which tools have a derivation there plus which extra hash fields it needs
@@ -312,7 +312,7 @@ taxonomy and reads as `test:`.
   GENERATED and committed as `nix/kenn/bun/<tool>.nix`, because bun2nix shells
   out to `nix flake prefetch` for any dependency the lockfile carries no hash
   for and so cannot run inside a sandboxed build. `update.py`'s
-  `SOURCE_BUILD_BUN_NIX` names which tools that is (roborev so far; msgvault
+  `SOURCE_BUILD_BUN_NIX` names which tools that is (roborev and kata; msgvault
   deliberately not — it commits its own), and generation runs BEFORE the first
   build round, not in the harvest loop, since `source-build.nix` imports the
   file and cannot evaluate without it. Three couplings, all one-directional

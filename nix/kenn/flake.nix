@@ -94,6 +94,7 @@
             agentsview-from-source
             msgvault-from-source
             roborev-from-source
+            kata-from-source
             ;
         }
       );

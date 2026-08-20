@@ -128,11 +128,15 @@ nix build .#msgvault-from-source
 nix build .#roborev-from-source
 ./result/bin/roborev version           # same
 ./result/bin/roborev verify-web-assets # upstream's own "not a stub" gate
+
+nix build .#kata-from-source
+./result/bin/kata version              # same
+./result/bin/kata _web-assets-check    # kata's equivalent gate (hidden, like roborev's)
 ```
 
 See ADR-0007 for the decision this graduates tools under (one at a time, kept
 as a separate output surface from release binaries, host-platform only, no
-CI). Five tools are wired up so far:
+CI). Six tools are wired up so far:
 
 - **`kwt`** — no cgo dependencies, no embedded frontend. `buildGoModule`
   against a pinned Go 1.26.6 toolchain and a pinned rev, nothing else.
@@ -200,7 +204,7 @@ CI). Five tools are wired up so far:
   clear `preBuild` (the same leak agentsview hit).
 - **`roborev`** — the first **workspace**-scope bun frontend, and the tool that
   broke the "reuse msgvault's recipe" assumption twice. Its Go side is the
-  easiest of the five (`modernc.org/sqlite` is pure Go: no cgo, no header, no
+  simplest of any tool here with a frontend (`modernc.org/sqlite` is pure Go: no cgo, no header, no
   `CGO_CFLAGS`) — everything hard here is the frontend, which is also why
   roborev's *own* upstream flake skips it and ships a stub-only binary.
   - **The lockfile is at the repo root**, covering `web/` and
@@ -237,15 +241,36 @@ CI). Five tools are wired up so far:
     Vite manifest and rejects the compilation stub), so it answers "did the
     real frontend actually embed?" far better than grepping the binary.
 
-Extending this to the remaining two tools is still real, uneven work — see the
-effort table in ADR-0007. `kata` shares roborev's workspace-bun shape exactly,
-so most of the cost above is now paid. `forge` additionally carries a Rust
-component (`rust-pty-manager`, audited and found tractable — a plain
-`buildRustPackage`, no cgo/FFI, no git dependencies) and *two* independent
-frontends — the highest-effort tool of the seven now purely because of that
-doubling, not the Rust piece.
+- **`kata`** — roborev's shape verbatim on the frontend side: root `bun.lock`
+  with `workspaces: ["web", "packages/*"]`, the same bun 1.3.14, no committed
+  `bun.nix`, and the same `@kenn-io/kit-ui` at the same rev in the same
+  arity-4 `github:` spelling needing the lockfile rewrite. Everything above
+  about roborev applies unchanged — which is what five tools of accumulated
+  quirks is supposed to buy. It added exactly one thing, and it is a real one:
+  - **`CGO_ENABLED = 0` is required, not cosmetic.** kata is the first
+    graduated tool with a cgo dependency that has to be *disabled* rather than
+    satisfied. `asg017/sqlite-vec-go-bindings` is reachable from `cmd/kata`
+    and `#include`s a `sqlite3.h` it does not ship, so `buildGoModule`'s
+    inherited default of `CGO_ENABLED=1` fails the build outright
+    (`fatal error: sqlite3.h: No such file or directory`) — after the frontend
+    has already built, so it costs a full round to find. Upstream never hits
+    it because `.goreleaser.yaml` sets `CGO_ENABLED=0` on all four kata build
+    ids, selecting the pure-Go `modernc.org/sqlite` path. That is also why
+    `go.mod` requiring `mattn/go-sqlite3` *and* `sqlite-vec` *and*
+    `modernc.org/sqlite` is not the contradiction it looks like: **check the
+    release config, not the module graph.** No build tags either — upstream
+    sets none for kata, unlike docbank's, agentsview's and msgvault's `fts5`.
+  - Its "not a stub" gate is `kata _web-assets-check`, the same
+    `web.ValidateEmbeddedRelease()` call roborev's `verify-web-assets` makes.
+    Both are `Hidden: true` upstream; only the underscore differs.
 
-All five are **maintained pins**, not point-in-time proofs:
+Only `forge` is left, and it is genuinely more work — see the effort table in
+ADR-0007. It carries a Rust component (`rust-pty-manager`, audited and found
+tractable — a plain `buildRustPackage`, no cgo/FFI, no git dependencies) and
+*two* independent frontends, the highest-effort tool of the seven purely
+because of that doubling, not the Rust piece.
+
+All six are **maintained pins**, not point-in-time proofs:
 `nix/kenn/source-builds.json` holds the committed `rev`/`srcHash`/`vendorHash`
 (and the npm tools' `npmDepsHash`), `nix/kenn/bun/<tool>.nix` holds the
 generated bun2nix expression for the tools that need one, and `update.py` (or
@@ -286,11 +311,9 @@ means running the whole JS toolchain first. Two upstream repos already ship
 flakes if you want source builds — `roborev` and `msgvault` — and
 `numtide/llm-agents.nix` has a maintained source build of `agentsview`. Note
 roborev's flake pins its own nixpkgs and overrides Go to exactly 1.26.6;
-`inputs.nixpkgs.follows` will likely break it. Note also that it **skips the
-frontend entirely**, so what it builds is a stub-only binary — roborev embeds
-a bun frontend exactly as kata and forge do, which is why the effort estimate
-for it moved from "low" to "medium" once that was checked rather than assumed.
-(This is the decision ADR-0007
+`inputs.nixpkgs.follows` will likely break it, and it **skips the frontend
+entirely** (see the `roborev` bullet above), so what it builds is a stub-only
+binary. (This is the decision ADR-0007
 partially reverses: the flake now also supports building select tools from a
 non-release revision, tool by tool — see "Building from source" above. It
 does not change how release binaries are packaged.)
