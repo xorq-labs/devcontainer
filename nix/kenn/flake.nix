@@ -3,10 +3,21 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # Only for source builds (ADR-0007): msgvault, kata, and roborev embed a
+    # bun-built frontend, and this is the vendoring recipe msgvault's own
+    # nix/package.nix already uses. Shared infrastructure for three tools, not
+    # a per-tool cost — see nix/kenn/README.md's "Building from source".
+    bun2nix.url = "github:nix-community/bun2nix/2.1.2";
+    bun2nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      bun2nix,
+    }:
     let
       inherit (nixpkgs) lib;
 
@@ -62,7 +73,10 @@
           });
           buildGoModule = pkgs.buildGoModule.override { go = goPinned; };
         in
-        pkgs.callPackage ./source-build.nix { inherit buildGoModule; };
+        pkgs.callPackage ./source-build.nix {
+          inherit buildGoModule;
+          bun2nix = bun2nix.packages.${system}.default;
+        };
     in
     {
       packages = forAllSystems (
@@ -74,7 +88,12 @@
         tools
         // {
           default = tools.kenn-io-toolkit;
-          inherit (sourceBuilds) kwt-from-source docbank-from-source agentsview-from-source;
+          inherit (sourceBuilds)
+            kwt-from-source
+            docbank-from-source
+            agentsview-from-source
+            msgvault-from-source
+            ;
         }
       );
 

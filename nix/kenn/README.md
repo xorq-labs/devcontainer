@@ -121,11 +121,14 @@ nix build .#docbank-from-source
 
 nix build .#agentsview-from-source
 ./result/bin/agentsview version # same
+
+nix build .#msgvault-from-source
+./result/bin/msgvault version    # same
 ```
 
 See ADR-0007 for the decision this graduates tools under (one at a time, kept
 as a separate output surface from release binaries, host-platform only, no
-CI). Three tools are wired up so far:
+CI). Four tools are wired up so far:
 
 - **`kwt`** — no cgo dependencies, no embedded frontend. `buildGoModule`
   against a pinned Go 1.26.6 toolchain and a pinned rev, nothing else.
@@ -172,18 +175,36 @@ CI). Three tools are wired up so far:
     anything before that derivation has finished fetching. Needs
     `overrideModAttrs = _: { preBuild = ""; };` (docbank picked this up too,
     for correctness — it never needed the frontend copy to run there either).
+- **`msgvault`** — the first **bun**-frontend tool, via a new `bun2nix`
+  (`nix-community/bun2nix`) flake input — shared infrastructure for this,
+  kata, and roborev, not a per-tool cost. Closely adapted from msgvault's own
+  working `nix/package.nix` rather than reinvented, simplified in one way:
+  its own flake repins an exact bun version to protect its OWN release
+  cadence against bun2nix drift, which a single source-build entry here
+  doesn't need — it uses bun2nix's stock nixpkgs-bun default instead. Unlike
+  `npmDepsHash`, there's no separate "bun deps hash" to discover or commit:
+  bun2nix reads a `web/bun.nix` file (bun2nix's own lockfile-equivalent)
+  **already committed inside the fetched source tree**, whose per-package
+  hashes are covered by the ordinary `srcHash` — so `msgvault` needs no extra
+  `SOURCE_BUILD_TOOLS` field at all, same as `kwt`. Its cgo sqlite header
+  comes from the plain system `sqlite` package (`buildInputs = [ sqlite ]`) —
+  a different, equally valid choice than agentsview's vendored-header route,
+  because it's what msgvault's own upstream author chose, not a rule to
+  generalize from. The one real gotcha `overrideModAttrs` has to handle here
+  is two-part, not one: filter `bun2nix.hook` out of the go-modules
+  derivation's `nativeBuildInputs` (it has no business running there) *and*
+  clear `preBuild` (the same leak agentsview hit).
 
-Extending this to the remaining four tools is still real, uneven work — see
-the effort table in ADR-0007. In short: kata/forge/msgvault/roborev embed a
-**bun** frontend instead of npm (msgvault's own `nix/package.nix` already
-solves the vendoring with `nix-community/bun2nix`, not yet adopted here — a
-shared prerequisite for three of the four, not a per-tool cost), and forge
-additionally carries a Rust component (`rust-pty-manager`, audited and found
-tractable — a plain `buildRustPackage`, no cgo/FFI, no git dependencies) and
-*two* independent frontends — the highest-effort tool of the seven now purely
-because of that doubling, not the Rust piece.
+Extending this to the remaining three tools is still real, uneven work — see
+the effort table in ADR-0007. `kata` and `roborev` also need `bun2nix` (now
+in place) but at whole-repo **workspace** scope rather than a self-contained
+subdirectory — a genuinely different shape than msgvault's, not yet proven.
+`forge` additionally carries a Rust component (`rust-pty-manager`, audited and
+found tractable — a plain `buildRustPackage`, no cgo/FFI, no git dependencies)
+and *two* independent frontends — the highest-effort tool of the seven now
+purely because of that doubling, not the Rust piece.
 
-All three are **maintained pins**, not point-in-time proofs: `nix/kenn/source-builds.json`
+All four are **maintained pins**, not point-in-time proofs: `nix/kenn/source-builds.json`
 holds the committed `rev`/`srcHash`/`vendorHash` (and the npm tools' `npmDepsHash`),
 and `update.py` (or `devcontainer bump-kenn`) has a `--source` mode for them,
 kept separate from the release commands above since a git ref has no meaning

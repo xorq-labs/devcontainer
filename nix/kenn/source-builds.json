@@ -15,5 +15,10 @@
     "rev": "7d8162f95f937b4936acba8ffa4913649b79fdfb",
     "srcHash": "sha256-L8N+QU93uhkRZ+Zxkg8peIKVnXlKg2hiTXK2pV7Rl8Q=",
     "vendorHash": "sha256-8WJCaEYuMKZkusoKJr0Yez06hgwu801Qnusi9L7AkK4="
+  },
+  "msgvault": {
+    "rev": "3806380c51fc6fc734963aaf82196314ac000de1",
+    "srcHash": "sha256-OqH5RAnf/Tl/BQaO3SnOKY5qWB+PqGgesQyBAa+E5jQ=",
+    "vendorHash": "sha256-KPMgtr3kP02ZVU68YIRHBY52ywuwlWqwtEhQiDopm34="
   }
 }

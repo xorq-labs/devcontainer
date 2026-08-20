@@ -106,6 +106,10 @@ SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
     "kwt": [],
     "docbank": ["npmDepsHash"],
     "agentsview": ["npmDepsHash"],
+    # No extra field: msgvault's bun frontend is vendored via bun2nix reading
+    # a COMMITTED web/bun.nix inside the fetched tree, not a separately
+    # discovered hash — its per-package hashes are already covered by srcHash.
+    "msgvault": [],
 }
 
 FAKE_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
