@@ -1,9 +1,15 @@
 {
+  "agentsview": {
+    "rev": "5e6c6fe18eed5f8d4e4f69622c5649a3922b9a4a",
+    "srcHash": "sha256-yI8YlUHwwyHG0VPI1SyDPhq/s+MQMheuAnKyJr5AqmA=",
+    "vendorHash": "sha256-spwj29OS/tJtnfNEIKzwl3ePMLQLD4hlZA26KfGmssU=",
+    "npmDepsHash": "sha256-Jh+TkSTzR7zZtAEj63HlszU86dQRKqB/JmqEQ3KMITo="
+  },
   "docbank": {
+    "npmDepsHash": "sha256-8XMNDjYcA2WUP4S2YP+TfjhI6pRRK+NqQ85jF06LvK0=",
     "rev": "11af138586a2a43b62a066e1619e4fa093196ec9",
     "srcHash": "sha256-sU7AIPQtUpzCn2d+Mr29Ha8DK+nIvNCvF5n61PfsPXw=",
-    "vendorHash": "sha256-eBykw5tsfSQG6P81AExbqCZc2nwNu39n8kYdMC/LWNE=",
-    "npmDepsHash": "sha256-8XMNDjYcA2WUP4S2YP+TfjhI6pRRK+NqQ85jF06LvK0="
+    "vendorHash": "sha256-eBykw5tsfSQG6P81AExbqCZc2nwNu39n8kYdMC/LWNE="
   },
   "kwt": {
     "rev": "7d8162f95f937b4936acba8ffa4913649b79fdfb",

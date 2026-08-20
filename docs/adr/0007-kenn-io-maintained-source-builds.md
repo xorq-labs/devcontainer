@@ -3,16 +3,16 @@
 - Status: Proposed
 - Date: 2026-08-20
 - Implemented by: `nix/kenn/source-build.nix` (`kwt-from-source`,
-  `docbank-from-source`), `nix/kenn/source-builds.json` (Decision 3's pin
-  space), `update.py`'s `--source`/`--rev` mode (Decision 3: `SOURCE_BUILD_TOOLS`,
-  `commit_sha`, `nix_build`, `harvest_hash_mismatches`, `discover_source_hashes`,
-  `do_source_write`/`do_source_check`/`do_source_verify`), the shape half of
-  Decision 4's guard (`tests/test-bump-kenn.sh` §6), and the CLAUDE.md
-  invariant line. **`kwt` and `docbank` are now graduated under Decision 1's
-  own four-part definition** — derivation, bump mode, guard, CLAUDE.md line,
-  all four present for both. What remains unimplemented: the other five
-  tools (each its own follow-up, per Decision 1) and CI (Decision 6,
-  deliberately out of scope).
+  `docbank-from-source`, `agentsview-from-source`), `nix/kenn/source-builds.json`
+  (Decision 3's pin space), `update.py`'s `--source`/`--rev` mode (Decision 3:
+  `SOURCE_BUILD_TOOLS`, `commit_sha`, `nix_build`, `harvest_hash_mismatches`,
+  `discover_source_hashes`, `do_source_write`/`do_source_check`/`do_source_verify`),
+  the shape half of Decision 4's guard (`tests/test-bump-kenn.sh` §6), and the
+  CLAUDE.md invariant line. **`kwt`, `docbank`, and `agentsview` are now
+  graduated under Decision 1's own four-part definition** — derivation, bump
+  mode, guard, CLAUDE.md line, all four present for all three. What remains
+  unimplemented: the other four tools (each its own follow-up, per Decision 1)
+  and CI (Decision 6, deliberately out of scope).
 - Reviewed: an independent adversarial pass (2026-08-20) found Decision 3 never
   specified who is authoritative between `update.py` and `source-build.nix`,
   found Decision 4's "second tool" trigger was reachable regardless of whether
@@ -63,20 +63,48 @@ Both tools have since been carried the rest of the way through Decision 1's
 four-part definition: `source-builds.json` now holds their pins (migrated off
 the inline literals `source-build.nix` originally hard-coded), `update.py`
 gained the `--source`/`--rev` mode Decision 3 describes, and the shape half of
-Decision 4's guard is in place. **Both count as graduated as of this
-revision.**
+Decision 4's guard is in place.
+
+A third proof — `agentsview` — landed the same shape as docbank (`CGO_ENABLED=1`
++ npm/Svelte frontend, same `@kenn-io/kit-ui` git dependency and `vite-plus`
+CA-cert quirks) but surfaced four more real issues docbank never hit, now
+documented in `nix/kenn/README.md`: its cgo sqlite header must come from the
+*vendored* mattn/go-sqlite3 module's own amalgamation header rather than a
+system `sqlite` package (upstream's own Makefile warns why); `buildGoModule`'s
+own `go mod vendor` step disagreed with itself on its dependency graph, fixed
+with `proxyVendor = true;` (the same fix msgvault's own `nix/package.nix` uses
+for the identical error shape); `make build` depends on a network-fetched,
+hash-pinned pricing snapshot with no place in a sandboxed build, fetched
+instead as its own `fetchurl` derivation; and — a finding general to any
+future tool with an embed-copying `preBuild`, not agentsview-specific —
+`buildGoModule`'s internal vendor-fetch derivation inherits `preBuild` too by
+default, which is harmless for a plain directory copy (docbank) but fatal
+once that `preBuild` does anything that depends on the vendor fetch having
+already finished (`go list -m` here); fixed with `overrideModAttrs = _: {
+preBuild = ""; };`, applied to both agentsview and (for correctness, since it
+never needed to run there either) docbank.
+
+**`kwt`, `docbank`, and `agentsview` count as graduated as of this revision.**
 
 Extending this to a standing capability is not uniform-cost across the
-remaining tools. Prior assessment, for reference:
+remaining tools. Prior assessment, updated after researching all four
+remaining tools and auditing forge's Rust component:
 
 | Tool | Extra axis beyond kwt's | Rough effort |
 |---|---|---|
-| roborev | none (same shape as kwt) | low |
 | docbank | npm frontend + `CGO_ENABLED=1` | done — graduated |
+| agentsview | npm frontend + `CGO_ENABLED=1` + 3 more quirks (see above) | done — graduated |
+| roborev | bun **workspace** frontend + `CGO_ENABLED=1`? no — confirmed no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) | medium (was: low) |
 | msgvault | bun frontend (bun2nix) + `CGO_ENABLED=1` | medium |
-| agentsview | npm frontend + `CGO_ENABLED=1` | medium |
-| kata | bun frontend + embed/restore-stub sequencing | medium-high |
-| forge | two bun frontends + a Rust component (unaudited) | highest, unscoped |
+| kata | bun **workspace** frontend (repo-root scope, not self-contained) + embed/restore-stub sequencing (turns out to be a harmless plain directory copy) | medium-high |
+| forge | two bun frontends (`frontend/`, `packages/github-app-ui/`) + a Rust component, now audited: a standalone `buildRustPackage` binary, no cgo/FFI, no git/path Cargo deps, no `-sys` crates — tractable on its own. "Highest effort" now rests entirely on the doubled frontend work | highest, no longer unscoped |
+
+Three of the four remaining tools (roborev, msgvault, kata) need `bun2nix` —
+shared infrastructure worth building once as a new flake input, not three
+times; msgvault's own `nix/package.nix` already has a working recipe to adapt,
+and can be simplified (skip its own bun-version-repinning dance, which exists
+to protect its own release cadence, not something a single source-build entry
+here needs).
 
 And the update mechanism itself changes character. Every existing `bump-kenn`
 mode (`--pin`, `--check`, `--verify`) reads a *published checksum manifest* —
@@ -95,8 +123,8 @@ not as a batch.** A tool is "maintained" only once it has all four of:
    - the drift guard this creates (Decision 4),
    - its own line in CLAUDE.md's Invariants section.
 
-   `kwt` and `docbank` have completed all four (see the header note). The
-   other five are explicitly **not** decided here — each graduates (or
+   `kwt`, `docbank`, and `agentsview` have completed all four (see the header
+   note). The other four are explicitly **not** decided here — each graduates (or
    doesn't) as its own follow-up, evaluated against the effort table above,
    not committed to en masse. Forge in particular stays unscoped until its
    Rust component is actually audited.
@@ -227,20 +255,21 @@ manual `--verify` runs.
 - **D — consume upstream's own source-build flakes as inputs, instead of
   reimplementing per-tool derivations in `source-build.nix`.** Real, and not
   weighed in the original text. `roborev` and `msgvault` already ship working
-  flakes; `numtide/llm-agents.nix` maintains one for `agentsview`. Pulling
-  those in as flake inputs would save real vendoring work for three of the six
-  remaining tools. Rejected, for three reasons: (1) it only covers 3 of 7 —
-  `kata`, `forge`, `kwt`, and `docbank` (already built) have no upstream flake
-  to consume, so this can't replace `source-build.nix`, only supplement it,
-  and a flake with two different mechanisms for "source build" depending on
-  which tool you ask for is a worse interface than one mechanism with uneven
-  tool coverage; (2) it imports someone else's pin cadence and footguns
-  wholesale — the README already flags that roborev's flake pins its own
-  nixpkgs and breaks under `inputs.nixpkgs.follows`, which is exactly the kind
-  of external volatility Decision 3's own pins are meant to control directly;
-  (3) `numtide/llm-agents.nix` for agentsview is third-party, not upstream —
-  depending on it couples this flake's reliability to a maintainer with no
-  relationship to kenn-io at all. Worth revisiting per-tool if a specific
-  upstream flake turns out cheaper than writing that tool's own
+  flakes; `numtide/llm-agents.nix` maintains a third-party one for
+  `agentsview` (superseded here — agentsview graduated via its own
+  `source-build.nix` entry, not by consuming that flake). Rejected, for three
+  reasons: (1) it never covers all seven — `kata`, `forge`, `kwt`, `docbank`,
+  and `agentsview` (all already built directly) have no upstream flake to
+  consume, so this can't replace `source-build.nix`, only supplement it, and a
+  flake with two different mechanisms for "source build" depending on which
+  tool you ask for is a worse interface than one mechanism with uneven tool
+  coverage; (2) it imports someone else's pin cadence and footguns wholesale —
+  the README already flags that roborev's flake pins its own nixpkgs and
+  breaks under `inputs.nixpkgs.follows`, which is exactly the kind of external
+  volatility Decision 3's own pins are meant to control directly; (3) a
+  third-party flake (agentsview's `numtide/llm-agents.nix` case) couples this
+  flake's reliability to a maintainer with no relationship to kenn-io at all.
+  Worth revisiting per-tool if a specific upstream flake turns out cheaper
+  than writing that tool's own
   `source-build.nix` entry — this is a rejected default, not a rejected
   option for every tool.

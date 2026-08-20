@@ -105,6 +105,7 @@ CHECKSUM_FILES = ("SHA256SUMS", "checksums.txt")
 SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
     "kwt": [],
     "docbank": ["npmDepsHash"],
+    "agentsview": ["npmDepsHash"],
 }
 
 FAKE_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

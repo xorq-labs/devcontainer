@@ -74,7 +74,7 @@
         tools
         // {
           default = tools.kenn-io-toolkit;
-          inherit (sourceBuilds) kwt-from-source docbank-from-source;
+          inherit (sourceBuilds) kwt-from-source docbank-from-source agentsview-from-source;
         }
       );
 

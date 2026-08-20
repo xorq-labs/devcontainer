@@ -78,8 +78,9 @@ taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
 reserved by #81), ADR-0006 (structural auditing as prompted agents, not metric
 tooling; amended 2026-08-04 so committing an audit report is optional),
 ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool;
-proposed, not yet implemented beyond the kwt and docbank proofs of concept in
-nix/kenn/source-build.nix), and nix/base/README.md "Design decisions" for the
+kwt, docbank, and agentsview graduated so far — derivation, `update.py
+--source` bump mode, drift guard, and CLAUDE.md line, all four), and
+nix/base/README.md "Design decisions" for the
 base-image record.
 
 ## Invariants
@@ -287,12 +288,12 @@ taxonomy and reads as `test:`.
   the fragment against a stubbed direnv over four real on-disk layouts and
   derives the sibling name from the template rather than restating it, so the
   spelling of neither file is load-bearing).
-- Source-build tools (ADR-0007: `kwt`, `docbank` so far) are a SEPARATE,
-  smaller pin space from the release toolkit above: `nix/kenn/source-builds.json`
+- Source-build tools (ADR-0007: `kwt`, `docbank`, `agentsview` so far) are a
+  SEPARATE, smaller pin space from the release toolkit above: `nix/kenn/source-builds.json`
   (a rev + hashes, not a version + per-platform manifest) is read by
   `nix/kenn/source-build.nix`, and `update.py`'s `SOURCE_BUILD_TOOLS` names
   which tools have a derivation there plus which extra hash fields it needs
-  (e.g. docbank's `npmDepsHash`). Bump via `devcontainer bump-kenn --source
+  (e.g. docbank's and agentsview's `npmDepsHash`). Bump via `devcontainer bump-kenn --source
   --tool <name> --rev <ref>`. Its `--check`/`--verify` split has one more
   layer than the release path's: the SHAPE agreement between
   `SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes, and

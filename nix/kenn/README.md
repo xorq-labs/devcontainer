@@ -118,12 +118,14 @@ nix build .#kwt-from-source
 
 nix build .#docbank-from-source
 ./result/bin/docbank version    # same
+
+nix build .#agentsview-from-source
+./result/bin/agentsview version # same
 ```
 
 See ADR-0007 for the decision this graduates tools under (one at a time, kept
 as a separate output surface from release binaries, host-platform only, no
-CI). Two tools are wired up so far, deliberately chosen to be as different in
-shape as possible:
+CI). Three tools are wired up so far:
 
 - **`kwt`** — no cgo dependencies, no embedded frontend. `buildGoModule`
   against a pinned Go 1.26.6 toolchain and a pinned rev, nothing else.
@@ -145,17 +147,44 @@ shape as possible:
     name), which initialises an HTTP client unconditionally, even for a fully
     offline build, and panics with no CA bundle found. Nixpkgs' sandbox
     doesn't set one by default; point `SSL_CERT_FILE` at `cacert`'s.
+- **`agentsview`** — same docbank shape (`CGO_ENABLED=1` + npm/Svelte
+  frontend, same `@kenn-io/kit-ui`/`makeCacheWritable`/`vite-plus` quirks
+  above) plus three more real ones:
+  - Its cgo sqlite header must come from the **vendored** mattn/go-sqlite3
+    module's own amalgamation header (`go mod download` it, then
+    `go list -m -f '{{.Dir}}'` to find it), not a system `sqlite` package —
+    upstream's own Makefile warns a system header would drift from what the
+    pinned go-sqlite3 version ships, and restates `CGO_CFLAGS="-O2 -g ..."`
+    explicitly because setting it at all overrides Go's own default,
+    unoptimized otherwise.
+  - `buildGoModule`'s own `go mod vendor` step disagrees with itself on
+    agentsview's dependency graph ("explicitly required in go.mod, but not
+    marked as explicit in vendor/modules.txt") — fixed the same way
+    msgvault's own `nix/package.nix` fixes the identical error:
+    `proxyVendor = true;`.
+  - `make build` depends on a network fetch (a pinned, hash-verified LiteLLM
+    pricing snapshot) with no place in a sandboxed build — fetched instead as
+    its own `fetchurl` derivation and copied into place.
+  - A quieter fourth issue, general to any tool with an embed/frontend-copy
+    `preBuild`: `buildGoModule`'s internal vendor-fetch derivation inherits
+    `preBuild` too, by default — harmless for docbank (its `preBuild` is just
+    a directory copy) but fatal here, since `go list -m` can't resolve
+    anything before that derivation has finished fetching. Needs
+    `overrideModAttrs = _: { preBuild = ""; };` (docbank picked this up too,
+    for correctness — it never needed the frontend copy to run there either).
 
-Extending this to the remaining five tools is still real, uneven work — see
-the effort table in ADR-0007. In short: kata/forge/msgvault embed a **bun**
-frontend instead of npm (msgvault's own `nix/package.nix` already solves this
-with `nix-community/bun2nix`, a portable but separate vendoring axis), and
-forge additionally carries a Rust component (`rust-pty-manager`) and *two*
-independent frontends — the highest-effort tool of the seven, not yet audited
-past "it exists and is wired into `make build`."
+Extending this to the remaining four tools is still real, uneven work — see
+the effort table in ADR-0007. In short: kata/forge/msgvault/roborev embed a
+**bun** frontend instead of npm (msgvault's own `nix/package.nix` already
+solves the vendoring with `nix-community/bun2nix`, not yet adopted here — a
+shared prerequisite for three of the four, not a per-tool cost), and forge
+additionally carries a Rust component (`rust-pty-manager`, audited and found
+tractable — a plain `buildRustPackage`, no cgo/FFI, no git dependencies) and
+*two* independent frontends — the highest-effort tool of the seven now purely
+because of that doubling, not the Rust piece.
 
-Both are now **maintained pins**, not point-in-time proofs: `nix/kenn/source-builds.json`
-holds the committed `rev`/`srcHash`/`vendorHash` (and docbank's `npmDepsHash`),
+All three are **maintained pins**, not point-in-time proofs: `nix/kenn/source-builds.json`
+holds the committed `rev`/`srcHash`/`vendorHash` (and the npm tools' `npmDepsHash`),
 and `update.py` (or `devcontainer bump-kenn`) has a `--source` mode for them,
 kept separate from the release commands above since a git ref has no meaning
 shared across repos the way a release version resolves uniformly:
