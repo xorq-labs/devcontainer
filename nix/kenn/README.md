@@ -102,6 +102,66 @@ Releases move fast (roborev was at v0.64.0, agentsview v0.40.1 when this was
 written). Wire `--verify` into CI to gate the pins, and `--check` into a
 scheduled job if you want to be told about drift without failing on it.
 
+### Testing a build that has no release
+
+Reviewing an upstream PR, or a fork branch, means pointing a derivation at a
+binary you built yourself. `sources.json` cannot express that — every entry is a
+published release asset hashed from that release's checksum manifest — so this
+is a local invocation, not an edit.
+
+**Do not reach for the flake.** A flake's source *is* its git tree: a tarball
+outside the tree is unreachable in pure eval, and an untracked one inside it is
+invisible to `nix build` (you get `warning: Git tree is dirty` and the old
+source). `packages.nix` is a plain `callPackage` file, so classic evaluation
+sidesteps the whole problem.
+
+**The frontend is not needed** for anything that only exercises the CLI surface
+— completions, `version`, flag parsing. `internal/web/dist/stub.html` is tracked
+upstream, so `go:embed` is satisfied and `go build` succeeds without bun or
+vite-plus. Anything that serves the UI does need the real build.
+
+```bash
+# 1. the source, without touching your checkout's worktree state
+git -C /path/to/forge archive <branch> | tar -x -C /tmp/src
+
+# 2. the binary, in the release build's own shape: CGO_ENABLED=0 and -trimpath.
+#    Pin version/commit/buildDate and the output is bit-reproducible.
+cd /tmp/src && nix shell nixpkgs#go --command env CGO_ENABLED=0 \
+  go build -buildvcs=false -trimpath \
+  -ldflags="-s -w -X main.version=v0.0.0-local -X main.commit=$(git -C /path/to/forge rev-parse --short=8 <branch>) -X main.buildDate=1970-01-01T00:00:00Z" \
+  -o /tmp/kenn-forge ./cmd/kenn-forge
+
+# 3. the release layout the derivation unpacks: a bare binary, per sourceRoot="."
+cd /tmp && tar czf forge_0.0.0-local_linux_amd64.tar.gz kenn-forge
+
+# 4. the derivation, with this tarball swapped in for the fetchurl
+nix build --impure --no-link --print-out-paths --expr '
+  let
+    flake = builtins.getFlake "path:'"$PWD"'/nix/kenn";
+    pkgs = import flake.inputs.nixpkgs.outPath {
+      system = builtins.currentSystem;
+      config.allowUnfreePredicate = p: (p.pname or "") == "kenn-forge";
+    };
+  in
+  (pkgs.callPackage ./nix/kenn/packages.nix { }).kenn-forge.overrideAttrs (_: {
+    src = /tmp/forge_0.0.0-local_linux_amd64.tar.gz;
+  })'
+```
+
+Two things the flake would otherwise supply have to be restated in step 4, and
+both fail confusingly if you forget:
+
+- **the `allowUnfreePredicate`.** kenn-forge is ELv2, which nixpkgs marks
+  `free = false`, so without it the build is *refused* — not silently skipped.
+- **nixpkgs from `flake.lock`**, via `getFlake`, rather than `<nixpkgs>`. The
+  channel a host happens to carry can be years off what the flake resolves,
+  and the failure looks like a broken derivation rather than a stale nixpkgs.
+
+The derivation's `version` still reads whatever `sources.json` pins, while the
+binary reports its own — expected, and worth remembering before concluding the
+override did not take. Check `<binary> version` in the build log, not the
+store path.
+
 ## Design notes
 
 **Binaries, not source builds.** `kata` and `forge` embed a bun-built frontend
