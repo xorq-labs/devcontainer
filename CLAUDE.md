@@ -77,10 +77,10 @@ seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
 taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
 reserved by #81), ADR-0006 (structural auditing as prompted agents, not metric
 tooling; amended 2026-08-04 so committing an audit report is optional),
-ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool,
-starting with kwt; proposed, not yet implemented beyond the kwt proof of
-concept), and nix/base/README.md "Design decisions" for the base-image
-record.
+ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool;
+proposed, not yet implemented beyond the kwt and docbank proofs of concept in
+nix/kenn/source-build.nix), and nix/base/README.md "Design decisions" for the
+base-image record.
 
 ## Invariants
 

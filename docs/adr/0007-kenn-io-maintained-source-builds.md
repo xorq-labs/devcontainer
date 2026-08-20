@@ -2,15 +2,27 @@
 
 - Status: Proposed
 - Date: 2026-08-20
-- Implemented by: `nix/kenn/source-build.nix` (the `kwt-from-source` proof of
-  concept, commit 4067847 on `kenn-io-toolkit`) landed before this ADR and is
-  the thing it retroactively scopes. Everything this ADR actually decides —
-  the `update.py --rev` mode, `source-builds.json`, the drift guard, the
-  CLAUDE.md invariant line — is unimplemented follow-up.
+- Implemented by: `nix/kenn/source-build.nix` — `kwt-from-source` (commit
+  4067847) and `docbank-from-source`, both landed before this revision and
+  retroactively scoped by it. Everything else this ADR decides — the
+  `update.py --rev` mode, `source-builds.json`, the drift guard, the CLAUDE.md
+  invariant lines — is unimplemented follow-up. **Neither wired-up tool counts
+  as "graduated" under Decision 1's own four-part definition yet**: both are
+  still derivation-shape proofs, not maintained pins. Read literally, that
+  means Decision 1 has zero completions so far, not one.
+- Reviewed: an independent adversarial pass (2026-08-20) found Decision 3 never
+  specified who is authoritative between `update.py` and `source-build.nix`,
+  found Decision 4's "second tool" trigger was reachable regardless of whether
+  the thing it depends on (Decision 3) exists, found the new `--rev` mode
+  breaks `test-bump-kenn.sh`'s documented hermeticity premise, and found
+  Options considered never weighed consuming upstream's own source-build
+  flakes. All four are addressed below rather than in a separate amendment,
+  since nothing here had shipped as relied-upon yet.
 - Related: `nix/kenn/README.md`'s "Design notes" section, which recorded
   "binaries, not source builds" as the flake's design and is the decision this
-  ADR amends; ADR-0005 (guard taxonomy — the vocabulary the new guard in
-  Decision 4 must use); CLAUDE.md's kenn-io toolkit invariants (the
+  ADR partially reverses (that section now cross-references this ADR);
+  ADR-0005 (guard taxonomy — the vocabulary the new guard in Decision 4 must
+  use); CLAUDE.md's kenn-io toolkit invariants (the
   `TOOLS`/`toolMeta`/`sources.json`/`systems` four-encoding set this ADR adds a
   parallel, smaller one beside).
 
@@ -36,13 +48,24 @@ the mechanism," and the wrong shape for "a capability people can rely on" —
 a pin nothing ever refreshes eventually just stops building as upstream's
 `go.mod` moves, and nothing will say why.
 
-Extending this to a standing capability is not uniform-cost across the other
-six tools. Prior assessment, for reference:
+A second proof — `docbank` — has since landed the same way, deliberately
+chosen for the opposite shape: `CGO_ENABLED=1` (mattn/go-sqlite3) plus an
+npm-built Svelte frontend embedded via `go:embed`. It forced three real fixes
+(a `git+https` dependency in `package-lock.json` needing `forceGitDeps`, a
+root-owned npm cache from that same git fetch needing `makeCacheWritable`,
+and `vite-plus` — docbank's Vite replacement — panicking on a missing CA
+bundle in the sandbox) that `kwt` never exercised, and is documented in
+`nix/kenn/README.md`. It is exactly as unmaintained as `kwt`: same inline
+literal pins, same absence of `update.py`/guard/CLAUDE.md coverage. Both are
+proofs the derivation shape generalizes, not completions of Decision 1.
+
+Extending this to a standing capability is not uniform-cost across the
+remaining tools. Prior assessment, for reference:
 
 | Tool | Extra axis beyond kwt's | Rough effort |
 |---|---|---|
 | roborev | none (same shape as kwt) | low |
-| docbank | npm frontend + `CGO_ENABLED=1` | medium-low |
+| docbank | npm frontend + `CGO_ENABLED=1` | done (proof only, see above) |
 | msgvault | bun frontend (bun2nix) + `CGO_ENABLED=1` | medium |
 | agentsview | npm frontend + `CGO_ENABLED=1` | medium |
 | kata | bun frontend + embed/restore-stub sequencing | medium-high |
@@ -65,11 +88,12 @@ not as a batch.** A tool is "maintained" only once it has all four of:
    - the drift guard this creates (Decision 4),
    - its own line in CLAUDE.md's Invariants section.
 
-   `kwt` is the tool this ADR commits to finishing. The other six are
-   explicitly **not** decided here — each graduates (or doesn't) as its own
-   follow-up, evaluated against the effort table above, not committed to en
-   masse. Forge in particular stays unscoped until its Rust component is
-   actually audited.
+   `kwt` and `docbank` are the tools this ADR commits to finishing (Decision 3
+   is what finishes them — see the header note on why neither counts as
+   graduated yet). The other five are explicitly **not** decided here — each
+   graduates (or doesn't) as its own follow-up, evaluated against the effort
+   table above, not committed to en masse. Forge in particular stays unscoped
+   until its Rust component is actually audited.
 
 **2. Source builds are a separate output surface, never merged into
 `mkKennTool`.** Each graduated tool gets a `<tool>-from-source` package
@@ -92,14 +116,46 @@ reports whether the committed rev is behind `<ref>`'s current HEAD (exit 0
 regardless — drift is news, not failure); `--verify` re-derives the committed
 hashes by rebuilding (non-zero on a mismatch or a failed build).
 
-**4. The drift guard lands with the second graduated tool, not the first.**
-`tests/test-bump-kenn.sh` guards facts that must agree *across* files; with
-only `kwt` graduated there is nothing yet for `update.py`'s new mode to
-disagree with, per this repo's own rule that a convention is guarded "when
-introduced" — introduction is the second instance, not the first. Recommend
-docbank as that second tool specifically because it forces the guard (and the
-derivation shape) to handle `CGO_ENABLED=1` and an npm frontend, which `kwt`
-never exercised.
+`source-builds.json` is authoritative; `source-build.nix` reads its per-tool
+values from it, exactly as `packages.nix` reads `sources.json` today — a
+graduated tool's `rev`/`srcHash`/`vendorHash` stop being literals in the
+`.nix` file the moment this lands. This is a real migration of `kwt-from-source`
+and `docbank-from-source` off their current inline literals, not just new
+tools joining a pattern that already existed.
+
+This mode cannot be fully hermetic the way `--pin`/`--check`/`--verify` are
+today, and the ADR should say so rather than imply otherwise: discovering a
+hash requires an actual `nix build`, a second external dependency beyond
+`update.py`'s current sole one (`http_get`). Split what's actually checkable:
+the *shape* agreement between `source-builds.json`'s keys and
+`source-build.nix`'s attributes is a pure parse, testable exactly like
+`test-bump-kenn.sh` tests the four-way `TOOLS` encoding today (`test:`); the
+*correctness* of a committed hash against a live rebuild is not — no fixture
+stands in for "did this really build," so that half is `tool:`, in the same
+family as `dev/bump-nix`'s installer checksum (a real network fetch and a real
+build is the only oracle, so the tool performing it correctly is the
+guarantee, not a hermetic suite).
+
+**4. The drift guard lands in the same change as Decision 3, not gated on any
+tool count.** The original text here tied the guard to "the second graduated
+tool," reasoning that a single tool has nothing to disagree with. That reasoning
+doesn't hold up: the coupling `test-bump-kenn.sh` would guard is between
+`update.py`'s new mode and `source-build.nix`'s shape, and that coupling is
+created the moment Decision 3 exists — at zero, one, or seven tools, it's the
+same fact needing the same guard. Tying it to a tool count also hands Decision
+1 a way to defer the guard indefinitely, since Decision 1 already allows a
+tool to never graduate. Restated plainly: **there is no "unguarded, one tool"
+state this ADR endorses.** Until Decision 3 lands, `kwt-from-source` and
+`docbank-from-source` are proofs, explicitly not counted as graduated (see the
+header note) — precisely so their current unguarded state doesn't need an
+excuse.
+
+docbank was still the right second proof to build before Decision 3, for a
+different reason than the original text gave: not because it's when the guard
+becomes due, but because it's cheap evidence the derivation shape (not the
+update tooling) generalizes past `kwt`'s easy case — `CGO_ENABLED=1` and an
+npm frontend, which `kwt` never exercised — before investing in `update.py`
+machinery for a shape that might not have worked.
 
 **5. Host-platform only, for now.** A graduated tool's source build targets
 the platform it's built on — matching how `--rev` actually gets used ("build
@@ -131,6 +187,16 @@ manual `--verify` runs.
 - Reversible per tool: un-graduating one (drop its `source-builds.json` entry,
   its guard coverage, its CLAUDE.md line) doesn't touch any other tool —
   Decision 2 is what makes that true.
+- A separate, pre-existing coupling this ADR does not fix: `flake.nix`'s
+  `goPinned` (Go 1.26.6 as a version + `fetchurl` hash pair, matching every
+  kenn-io `go.mod`) is exactly the shape `dev/bump-nix` exists to guard for
+  the Nix installer pin, and has neither a bump tool nor a test here.
+  Recorded as accepted per ADR-0005 `unguarded:` framing rather than left
+  silent: **unguarded** — a wrong pin fails loudly (every graduated tool's
+  build breaks immediately, not silently) and there is exactly one such pin
+  shared by every graduated tool, so the blast radius of leaving it hand-edited
+  is a build failure, not drift. Revisit if kenn-io tools ever disagree on a Go
+  version, which would need per-tool pins instead of one shared override.
 
 ## Options considered
 
@@ -147,3 +213,23 @@ manual `--verify` runs.
   arrived — each with its own guard at introduction, not as a batch — and lets
   the highest-uncertainty tool (forge) be deferred indefinitely without
   blocking the rest.
+- **D — consume upstream's own source-build flakes as inputs, instead of
+  reimplementing per-tool derivations in `source-build.nix`.** Real, and not
+  weighed in the original text. `roborev` and `msgvault` already ship working
+  flakes; `numtide/llm-agents.nix` maintains one for `agentsview`. Pulling
+  those in as flake inputs would save real vendoring work for three of the six
+  remaining tools. Rejected, for three reasons: (1) it only covers 3 of 7 —
+  `kata`, `forge`, `kwt`, and `docbank` (already built) have no upstream flake
+  to consume, so this can't replace `source-build.nix`, only supplement it,
+  and a flake with two different mechanisms for "source build" depending on
+  which tool you ask for is a worse interface than one mechanism with uneven
+  tool coverage; (2) it imports someone else's pin cadence and footguns
+  wholesale — the README already flags that roborev's flake pins its own
+  nixpkgs and breaks under `inputs.nixpkgs.follows`, which is exactly the kind
+  of external volatility Decision 3's own pins are meant to control directly;
+  (3) `numtide/llm-agents.nix` for agentsview is third-party, not upstream —
+  depending on it couples this flake's reliability to a maintainer with no
+  relationship to kenn-io at all. Worth revisiting per-tool if a specific
+  upstream flake turns out cheaper than writing that tool's own
+  `source-build.nix` entry — this is a rejected default, not a rejected
+  option for every tool.

@@ -114,48 +114,64 @@ one derivation function would make both harder to read.
 
 ```sh
 nix build .#kwt-from-source
-./result/bin/kwt version    # reports "dev" — this is not a release
+./result/bin/kwt version        # reports "dev" — this is not a release
+
+nix build .#docbank-from-source
+./result/bin/docbank version    # same
 ```
 
-Only **`kwt`** is wired up, and it was picked deliberately: no cgo
-dependencies (no C cross-toolchain to worry about) and no embedded frontend
-(no bun/npm vendoring). It is the cheapest of the seven tools to prove the
-mechanism on, not a template to mechanically repeat for the rest — extending
-this to the other six is real, uneven work:
+See ADR-0007 for the decision this graduates tools under (one at a time, kept
+as a separate output surface from release binaries, host-platform only, no
+CI). Two tools are wired up so far, deliberately chosen to be as different in
+shape as possible:
 
-- **kata, forge, msgvault** embed a bun-built frontend. msgvault's own
-  `nix/package.nix` already solved this with `nix-community/bun2nix`
-  (a pinned bun binary plus a generated `web/bun.nix` lockfile-equivalent that
-  needs regenerating on every `bun.lock` change) — that recipe is portable,
-  but it's a second vendoring axis per tool, not a one-line addition.
-- **msgvault, docbank, agentsview** build with `CGO_ENABLED=1` (mattn/go-sqlite3,
-  duckdb-go, sqlite-vec-go-bindings all link C). Cross-compiling cgo in Nix,
-  especially to darwin, is materially harder than the static `CGO_ENABLED=0`
-  builds this flake already ships as release binaries.
-- **docbank, agentsview** use plain npm instead of bun — less exotic
-  (`buildNpmPackage`/`fetchNpmDeps` is native nixpkgs), but still a frontend
-  build step to reproduce exactly.
-- **forge** additionally carries a Rust component (`rust-pty-manager`) and
-  *two* independent frontends (`frontend/`, `packages/github-app-ui/`) — the
-  highest-effort tool of the seven, and not yet even audited past "it exists
-  and is wired into `make build`."
+- **`kwt`** — no cgo dependencies, no embedded frontend. `buildGoModule`
+  against a pinned Go 1.26.6 toolchain and a pinned rev, nothing else.
+- **`docbank`** — `CGO_ENABLED=1` (mattn/go-sqlite3; no external sqlite header
+  needed, unlike msgvault's `sqlite-vec-go-bindings`) plus an npm-built Svelte
+  frontend embedded via `go:embed`, matching its `Makefile`'s `frontend` target
+  exactly (empty `internal/web/dist` except the `.keep` stub, copy the built
+  SPA in, then build). Three quirks worth knowing before touching this one:
+  - `frontend/package-lock.json` pulls `@kenn-io/kit-ui` straight from a git
+    commit rather than the npm registry. `fetchNpmDeps` refuses that by
+    default (a git dependency with install scripts and no lockfile of its
+    own) — needs `forceGitDeps = true`.
+  - That same git fetch leaves root-owned files in the prefetched npm cache —
+    the "unsandboxed builder as fake root" surprise this README already
+    documents for kwt's config directory, recurring for a different reason.
+    Needs `makeCacheWritable = true`.
+  - The frontend's build tool is `vite-plus` (a Rust-implemented Vite,
+    installed as an ordinary npm devDependency — not a fork, despite the
+    name), which initialises an HTTP client unconditionally, even for a fully
+    offline build, and panics with no CA bundle found. Nixpkgs' sandbox
+    doesn't set one by default; point `SSL_CERT_FILE` at `cacert`'s.
 
-`kwt-from-source`'s `rev` is a point-in-time pin (HEAD of `main` when this was
-written, 41 commits past the `v0.4.0` tag in `sources.json`) with no update
-tooling and no drift guard — `dev/bump-kenn` does not touch it, and nothing
-re-derives its `vendorHash` when upstream moves. That's deliberate: this is a
-proof that the mechanism works, not a maintained second pin. Wiring a real
-`--tool kwt --rev <rev>` mode into `update.py`, and deciding whether the other
-six tools are worth the vendoring cost above, is unstarted follow-up work.
+Extending this to the remaining five tools is still real, uneven work — see
+the effort table in ADR-0007. In short: kata/forge/msgvault embed a **bun**
+frontend instead of npm (msgvault's own `nix/package.nix` already solves this
+with `nix-community/bun2nix`, a portable but separate vendoring axis), and
+forge additionally carries a Rust component (`rust-pty-manager`) and *two*
+independent frontends — the highest-effort tool of the seven, not yet audited
+past "it exists and is wired into `make build`."
+
+Both `rev`s are point-in-time pins with no update tooling and no drift guard
+yet — `dev/bump-kenn` does not touch them, and nothing re-derives their
+hashes when upstream moves. That's ADR-0007's Decision 3 (a `--tool <name>
+--rev <ref>` mode in `update.py`, backed by a new `source-builds.json`) and
+Decision 4 (the drift guard), both still unimplemented follow-up work.
 
 ## Design notes
 
-**Binaries, not source builds.** `kata` and `forge` embed a bun-built frontend
-via `go:embed`, so building from source means running the whole JS toolchain
-first. Two upstream repos already ship flakes if you want source builds —
-`roborev` and `msgvault` — and `numtide/llm-agents.nix` has a maintained
-source build of `agentsview`. Note roborev's flake pins its own nixpkgs and
-overrides Go to exactly 1.26.6; `inputs.nixpkgs.follows` will likely break it.
+**Binaries, not source builds — for release-pinned packaging.** `kata` and
+`forge` embed a bun-built frontend via `go:embed`, so building from source
+means running the whole JS toolchain first. Two upstream repos already ship
+flakes if you want source builds — `roborev` and `msgvault` — and
+`numtide/llm-agents.nix` has a maintained source build of `agentsview`. Note
+roborev's flake pins its own nixpkgs and overrides Go to exactly 1.26.6;
+`inputs.nixpkgs.follows` will likely break it. (This is the decision ADR-0007
+partially reverses: the flake now also supports building select tools from a
+non-release revision, tool by tool — see "Building from source" above. It
+does not change how release binaries are packaged.)
 
 **Linkage is not uniform**, which is why `autoPatchelfHook` is here at all:
 
