@@ -258,3 +258,109 @@ semantics by running the real lib, while pinning the driver line as a literal.
 Annotating the suite as `test:` says nothing about which of its assertions are
 derived, and a single derived check will otherwise vouch for its restated
 neighbours.
+
+## Amendment (2026-08-20): a guard's prose derives too
+
+**Status: Proposed.**
+
+§3 ranks how a guard states its **expectation**. It says nothing about the
+prose *around* the guard — the header's recorded mutation runs, the roster of
+what is covered, the counts in an invariant bullet, the example name in an
+assertion label. All of that is a rung-3 restatement of the same sources, and
+it rots the same way, with one difference that makes it worse: **nothing ever
+runs it**, so it rots silently while the suite stays green.
+
+This ADR already discovered the pattern and fixed one instance of it locally.
+The 2026-08-04 mutation-pair amendment above says, in its own text:
+
+> A count is deliberately NOT quoted here. The first version of this amendment
+> claimed "12 of 19", then "16 of 24", and the command it published to
+> reproduce that returned 3, because a later edit dropped the branch loop it
+> depended on.
+
+That is this amendment's argument in miniature, applied once, by hand, to one
+sentence. Generalise it.
+
+### Named cases
+
+All from the work that graduates the kenn-io source-build tools one at a time
+into a set several guards iterate — the shape that makes restated prose rot
+fastest. Cited by **file and section, not commit**: this repo squash-merges, so
+a branch's commit hashes cease to exist the moment the work lands, and the
+first draft of this amendment cited four that a single rebase had already
+killed. Where the stale text itself is the evidence, `git log -S'<the phrase>'`
+finds it; the rest is visible in the named file as it stands.
+
+- **A named member of the set the guard iterates.**
+  `tests/test-bump-kenn.sh` §4 asserted that a tool with no source-build
+  derivation is refused, and named `kata` as its example. `kata` graduated;
+  the assertion went red with an HTTP 404 from a repo the canned universe does
+  not describe — failing loudly, but *for a reason unrelated to what it
+  tests*, which is a fail-open wearing a red hat. `tests/test-bump-kenn.sh` §4
+  now derives the tool from `TOOLS - SOURCE_BUILD_TOOLS` at check time, with a
+  clean skip when the set is empty.
+- **A mutation record naming its own subject.** The same suite's §6 semantic
+  mutation was `"roborev": []`, then `"kata": []` — each stopped being a
+  mutation the day that tool graduated, and the record was rewritten twice —
+  its own header says so — before §4 above made the naming unnecessary.
+- **A count in a mutation record, unnoticed because its pair moved.** §6's
+  pair-3 form-only half read "reorder SOURCE_BUILD_TOOLS's *two* keys / Green:
+  *71* passed" from when the dict had two entries. The dict reached six and
+  the suite 76 while the semantic half beside it was refreshed twice. A
+  recorded run whose numbers no longer reproduce is the one thing §2 exists to
+  prevent.
+- **A count in ordinary prose.** "the easiest of the five" appeared in
+  `nix/kenn/README.md`, `nix/kenn/source-build.nix` and ADR-0007 once six tools
+  were graduated. Likewise "three of the four remaining tools" in ADR-0007, and
+  a `CLAUDE.md` invariant bullet whose per-tool roster had to be re-listed on
+  every graduation.
+- **A finding recorded where nothing governs.** A re-scope of the last tool
+  landed in an untracked working note and stopped there, leaving four
+  contradicting claims live in ADR-0007's effort table, `nix/kenn/README.md`
+  and `source-build.nix`'s header — the docs that actually govern the next
+  tool.
+- **This amendment's own first draft.** It cited four commit hashes on an
+  unmerged branch. A rebase an hour later rewrote all four, and the repo's
+  squash-merge would have killed the replacements on landing. The rule caught
+  its own author's draft, which is the most this section can say for it — and
+  note that ADR-0005 contained no commit hash before that draft and cites ten
+  issue and PR numbers instead. The convention was already here.
+
+### Rules
+
+1. **No running count in guard prose or in an invariant.** Not "the five
+   graduated tools", not "three encodings", not "71 passed" where the number
+   is incidental. Either omit it, phrase it count-free, or derive it at check
+   time. A measured threshold is not a running count: "past git's 4096-byte
+   stdout buffer" is a fact about git and stays true.
+2. **Do not name a member of a set the guard iterates.** Derive the example
+   from the set at check time, and make the empty case an explicit skip rather
+   than an accident.
+3. **Touching one half of a mutation pair means re-running the other.** The
+   halves go stale independently, and the fresh one lends the stale one
+   credibility.
+4. **A fact recorded only in a working note is not recorded.** When a finding
+   changes what a durable doc claims, change the durable doc in the same pass.
+   Notes are a scratchpad, not a register.
+
+Rule 1 is the one with teeth, because a wrong count reads as precision.
+
+### Not proposed
+
+**A fourth rung.** The ladder ranks how an expectation is stated; prose is not
+an expectation. This is §3's principle applied to a second surface, not a new
+level of it.
+
+**A lint for numerals in comments.** It would fire on every legitimate
+measurement (byte thresholds, version pins, issue numbers) and miss the
+rosters and example names, which carry no digits at all. The failure here is
+judgment about what can go stale, and rung-3 mechanisation of a judgment is
+what this ADR spent §3 arguing against.
+
+**Extending this to search-before-you-fix.** A closely related incident sits
+one step outside: an already-open PR (#145) carried a byte-identical fix to a
+hook bug that was then independently rediscovered and re-fixed. That is also
+"a fact recorded in one place, restated in another", but its remedy is a
+habit (look for the open PR) rather than a property of prose, and the repo
+already names the disease under the `Closes #N` convention. Left out
+deliberately rather than overreached into.
