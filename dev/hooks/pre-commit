@@ -13,7 +13,10 @@ set -euo pipefail
 is_runnable() { [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
 
 ROOT="$(git rev-parse --show-toplevel)"
-MAIN="$(git worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //')"
+# sed reads to EOF; `| head -1` closes the pipe early, git dies of SIGPIPE, and
+# pipefail turns a correct assignment into a hook that aborts the commit with no
+# output on either stream. Thresholds and fixture: tests/test-hook-precommit.sh.
+MAIN="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
 # Newer pre-commit (4.5.1+) requires --hook-dir to locate a possible
 # <hook-type>.legacy sibling; without it, hook-impl crashes on a None path
 # join instead of erroring cleanly. Worktrees share one hooks dir, hence

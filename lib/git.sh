@@ -11,7 +11,10 @@ dev_main_tree() {
         echo "error: not in a git repository (run from within a checkout)" >&2
         return 1
     fi
-    printf '%s\n' "$out" | head -1 | sed 's/^worktree //'
+    # sed, not `| head -1 |`, same as dev/hooks/pre-commit: head closes the pipe
+    # early. A builtin printf is NOT one write — it chunks, so this races under
+    # pipefail too, just at a larger size (tests/test-hook-precommit.sh).
+    printf '%s\n' "$out" | sed -n '1s/^worktree //p'
 }
 
 # Resolve the project overlay directory. Resolution order:
@@ -73,12 +76,25 @@ symlink_hooks() {
         hooks_dir="$root/$hooks_dir"
     fi
     mkdir -p "$hooks_dir"
-    local name
+    local name legacy
     for hook in "$root/dev/hooks/"*; do
         [ -f "$hook" ] || continue
         name="$(basename "$hook")"
         if ! [ -e "$hooks_dir/$name" ] || [ -L "$hooks_dir/$name" ]; then
             ln -sf "../../dev/hooks/$name" "$hooks_dir/$name"
+        fi
+        # Drop a <name>.legacy that is OUR hook — the recursion `pre-commit
+        # install` leaves behind (tests/test-hook-symlinks.sh for the incident
+        # and what may not change). Identity, never content or mere existence: a
+        # third-party .legacy is what migration mode is for and must survive.
+        # Resolved against the relative target installed above, never
+        # "$root/dev/hooks/$name" — the shared hooks dir belongs to the main
+        # checkout, so under a linked-worktree $root those differ and every
+        # worktree call would silently miss.
+        legacy="$hooks_dir/$name.legacy"
+        if [ -e "$legacy" ] &&
+            [ "$(readlink -f "$legacy")" = "$(readlink -f "$hooks_dir/../../dev/hooks/$name")" ]; then
+            rm -f "$legacy"
         fi
     done
 }
