@@ -3,19 +3,30 @@
 - Status: Proposed
 - Date: 2026-08-20
 - Implemented by: `nix/kenn/source-build.nix` (`kwt-from-source`,
-  `docbank-from-source`, `agentsview-from-source`, `msgvault-from-source`),
-  `nix/kenn/source-builds.json` (Decision 3's pin space), `update.py`'s
-  `--source`/`--rev` mode (Decision 3: `SOURCE_BUILD_TOOLS`, `commit_sha`,
+  `docbank-from-source`, `agentsview-from-source`, `msgvault-from-source`,
+  `roborev-from-source`), `nix/kenn/source-builds.json` (Decision 3's pin
+  space), `nix/kenn/bun/` (Decision 3's second pin element, added by the
+  2026-08-20 amendment below), `update.py`'s
+  `--source`/`--rev` mode (Decision 3: `SOURCE_BUILD_TOOLS`,
+  `SOURCE_BUILD_BUN_NIX`, `commit_sha`,
   `nix_build`, `harvest_hash_mismatches`, `discover_source_hashes`,
+  `degrade_git_lock_entries`, `generate_bun_nix`,
   `do_source_write`/`do_source_check`/`do_source_verify`), the shape half of
   Decision 4's guard (`tests/test-bump-kenn.sh` §6), a new `bun2nix` flake
   input (`nix-community/bun2nix`, shared infrastructure for msgvault, kata,
-  and roborev), and the CLAUDE.md invariant line. **`kwt`, `docbank`,
-  `agentsview`, and `msgvault` are now graduated under Decision 1's own
+  and roborev, plus an `apps.bun2nix` passthrough so `update.py` can only ever
+  run the pinned version), and the CLAUDE.md invariant lines. **`kwt`,
+  `docbank`, `agentsview`, `msgvault`, and `roborev` are now graduated under
+  Decision 1's own
   four-part definition** — derivation, bump mode, guard, CLAUDE.md line, all
-  four present for all four. What remains unimplemented: the other three
+  four present for all five. What remains unimplemented: the other two
   tools (each its own follow-up, per Decision 1) and CI (Decision 6,
   deliberately out of scope).
+- Amended 2026-08-20 (Decision 3): a source-build pin is no longer only a rev
+  plus hashes. A tool whose bun frontend upstream ships no `bun.nix` for needs
+  a whole generated *file* committed beside the pin, because the expression
+  cannot be produced inside a sandboxed build. See "Amendment: generated
+  bun2nix expressions" below.
 - Reviewed: an independent adversarial pass (2026-08-20) found Decision 3 never
   specified who is authoritative between `update.py` and `source-build.nix`,
   found Decision 4's "second tool" trigger was reachable regardless of whether
@@ -103,8 +114,38 @@ does two things, not one: filters `bun2nix.hook` out of the go-modules
 derivation's `nativeBuildInputs` (it has no business running there) and
 clears `preBuild` (the same leak agentsview hit).
 
-**`kwt`, `docbank`, `agentsview`, and `msgvault` count as graduated as of this
-revision.**
+A fifth proof — `roborev` — is the first **workspace**-scope bun frontend, and
+the first tool whose difficulty was not in the shape of its build but in what
+upstream does *not* ship. Its Go side is the easiest of the five
+(`modernc.org/sqlite` is pure Go — no cgo, no header, no `CGO_CFLAGS`), and its
+own upstream flake skips the frontend entirely, which is exactly why the
+original "same shape as kwt" estimate was wrong: the tool it produces is a
+stub-only binary. Three findings, documented in `nix/kenn/README.md`:
+
+- The bun lockfile is at the **repo root** and covers `web/` plus
+  `packages/roborev-ui/` together, not msgvault's self-contained `web/`. So
+  `bunRoot` is left unset, the hook installs at the source root, and every
+  dependency hoists into one top-level `node_modules` — which is why the vite
+  invocation has to reach *up* out of `web/`. This half of the guess in the
+  effort table was right and cost almost nothing.
+- Upstream ships **no `bun.nix`**, and `bun2nix` cannot generate one inside a
+  sandboxed build: it shells out to `nix flake prefetch` for any dependency
+  whose hash the lockfile doesn't already carry, which is nix-inside-nix. This
+  is the finding that needed a decision rather than a fix, and it is the
+  amendment below.
+- `bun2nix` 2.1.2 **mis-parses** roborev's `@kenn-io/kit-ui` dependency,
+  silently: it dispatches on a lockfile entry's arity (3 = tarball/git/github,
+  4 = npm registry), bun writes a `github:` dependency with four elements, and
+  the result is a `fetchurl` of a registry URL that does not exist. Handled by
+  dropping the cache-key element before generation
+  (`degrade_git_lock_entries`), with a backstop that refuses to *write* a
+  generated expression still containing a registry URL with a git specifier in
+  it — the failure mode is otherwise a 404 at build time, far from its cause.
+  msgvault does not hit this because its kit-ui dependency is spelled as a
+  tarball URL, already arity 3. Same dependency, two spellings, one broken.
+
+**`kwt`, `docbank`, `agentsview`, `msgvault`, and `roborev` count as graduated
+as of this revision.**
 
 Extending this to a standing capability is not uniform-cost across the
 remaining tools. Prior assessment, updated after researching all four
@@ -115,8 +156,8 @@ remaining tools and auditing forge's Rust component:
 | docbank | npm frontend + `CGO_ENABLED=1` | done — graduated |
 | agentsview | npm frontend + `CGO_ENABLED=1` + 3 more quirks (see above) | done — graduated |
 | msgvault | bun frontend (bun2nix, now in place) + `CGO_ENABLED=1` | done — graduated |
-| roborev | bun **workspace** frontend (repo-root scope, not self-contained, unlike msgvault's) + no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) | medium (was: low) |
-| kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (turns out to be a harmless plain directory copy) | medium-high |
+| roborev | bun **workspace** frontend (repo-root scope, not self-contained, unlike msgvault's) + no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) + no committed `bun.nix` and a bun2nix parse bug on its git dependency, neither of which the research pass predicted | done — graduated (was: medium) |
+| kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (turns out to be a harmless plain directory copy). Shares roborev's shape, so the workspace/generated-`bun.nix` work is paid; **check whether it ships a `bun.nix`** before assuming either route | medium-high |
 | forge | two bun frontends (`frontend/`, `packages/github-app-ui/`) + a Rust component, now audited: a standalone `buildRustPackage` binary, no cgo/FFI, no git/path Cargo deps, no `-sys` crates — tractable on its own. "Highest effort" now rests entirely on the doubled frontend work | highest, no longer unscoped |
 
 Three of the four remaining tools (roborev, msgvault, kata) need `bun2nix` —
@@ -124,7 +165,10 @@ shared infrastructure worth building once as a new flake input, not three
 times; msgvault's own `nix/package.nix` already has a working recipe to adapt,
 and can be simplified (skip its own bun-version-repinning dance, which exists
 to protect its own release cadence, not something a single source-build entry
-here needs).
+here needs). Since borne out: the input landed with msgvault and roborev
+reused it unchanged. What roborev showed is that "needs `bun2nix`" is not one
+shape — a tool that commits its own `bun.nix` and one that doesn't are
+different amounts of work, and only the first was anticipated here.
 
 And the update mechanism itself changes character. Every existing `bump-kenn`
 mode (`--pin`, `--check`, `--verify`) reads a *published checksum manifest* —
@@ -143,8 +187,9 @@ not as a batch.** A tool is "maintained" only once it has all four of:
    - the drift guard this creates (Decision 4),
    - its own line in CLAUDE.md's Invariants section.
 
-   `kwt`, `docbank`, `agentsview`, and `msgvault` have completed all four (see
-   the header note). The other three are explicitly **not** decided here —
+   `kwt`, `docbank`, `agentsview`, `msgvault`, and `roborev` have completed all
+   four (see the header note). The other two are explicitly **not** decided
+   here —
    each graduates (or doesn't) as its own follow-up, evaluated against the
    effort table above, not committed to en masse. Forge in particular was the
    one tool this ADR held unscoped pending its Rust component's audit; that
@@ -199,6 +244,57 @@ is not (`tool:`, same family as `dev/bump-nix`'s installer checksum) — proven
 instead by actually running `nix build .#kwt-from-source` /
 `.#docbank-from-source` for real when each pin was written, not by a fixture.
 
+### Amendment: generated bun2nix expressions (2026-08-20)
+
+Decision 3 assumed a source-build pin is a rev plus hashes: things
+`discover_source_hashes` can learn from a deliberate `nix build` mismatch.
+`roborev` broke that assumption. It embeds a bun frontend, upstream ships no
+`bun.nix`, and `bun2nix` cannot produce one inside a sandboxed build — for any
+dependency whose hash the lockfile doesn't already carry (roborev's is a
+`github:` dependency, so it doesn't) bun2nix shells out to `nix flake
+prefetch`, which is nix-inside-nix. The expression therefore has to be
+generated **outside** the build and committed.
+
+**Decided: a graduated tool's pin may include a generated file, kept in
+`nix/kenn/bun/<tool>.nix` and written by the same `--source` run that writes
+its hashes.** `update.py`'s `SOURCE_BUILD_BUN_NIX` names which tools need one
+(a deliberately separate mapping from `SOURCE_BUILD_TOOLS`, because a generated
+file is not a discovered hash), and generation runs *before* the first
+build round rather than in the harvest loop — `source-build.nix` imports the
+file, so it must exist for the first round to even evaluate.
+
+Three consequences worth stating rather than discovering:
+
+- **Nothing re-derives a generated file the way `--verify` re-derives a
+  release hash**, so a stale one is caught only by the build failing. That is
+  the same `tool:` guard family the rest of `--source` already sits in, and it
+  is not vacuous here: a `bun.nix` that no longer matches the rev's lockfile
+  makes the offline `bun install` fail, not silently succeed. What IS
+  hermetically guarded is the shape agreement — every `SOURCE_BUILD_BUN_NIX`
+  key has a committed file, every committed file has a key, and
+  `source-build.nix` imports each one (`tests/test-bump-kenn.sh` §6). The
+  orphan direction matters most: a committed file whose key was dropped is
+  regenerated by nothing and rots against the rev sitting next to it.
+- **Generating for a tool for the first time needs a `git add` before nix can
+  see the file at all** (nix reads only tracked files from a dirty work tree).
+  `update.py` detects this and stops with the command to run, leaving the file
+  in place, rather than letting it surface as an eval error about a missing
+  path.
+- **The generator is pinned to this flake's own `bun2nix`** via a new
+  `apps.bun2nix`, because `bun.nix` has no schema stability guarantee across
+  bun2nix versions — a generator newer than the consuming `bun2nix.hook` would
+  produce a file the hook cannot read.
+
+Rejected alternatives, briefly: a fixed-output derivation running `bun install`
+and committing one `bunDepsHash` (fits the existing harvest loop exactly, but
+bets on `bun install`'s byte-level reproducibility, which nothing upstream
+promises — whereas bun2nix's output is a deterministic function of the
+lockfile); the same FOD producing `bun.nix` and importing it back (needs nix
+inside the sandbox — the very thing that forced this); and building roborev
+with the stub frontend as its own flake does (cheap, but delivers strictly less
+than the release binary the flake already ships, which makes the source build
+pointless for the one tool people would reach for it on).
+
 **4. The drift guard lands in the same change as Decision 3, not gated on any
 tool count.** [Implemented — shape half only, by design; see Decision 3.] The
 original text here tied the guard to "the second graduated tool," reasoning
@@ -236,7 +332,9 @@ manual `--verify` runs.
 - `nix/kenn` gains a second maintenance axis alongside the existing
   `TOOLS`/`toolMeta`/`sources.json`/`systems` four-way encoding: each
   graduated tool adds a row to `source-builds.json`, a case in the new
-  `update.py` mode, and a CLAUDE.md invariant line. Smaller per tool, but real,
+  `update.py` mode, and a CLAUDE.md invariant line — plus, for a tool upstream
+  ships no `bun.nix` for, an entry in `SOURCE_BUILD_BUN_NIX` and a generated
+  `nix/kenn/bun/<tool>.nix`. Smaller per tool, but real,
   and it grows with every tool that graduates.
 - `update.py`'s bump tool changes character for `--rev`: it goes from a pure
   checksum-manifest reader to something that must run a real build to produce
@@ -276,14 +374,16 @@ manual `--verify` runs.
   blocking the rest.
 - **D — consume upstream's own source-build flakes as inputs, instead of
   reimplementing per-tool derivations in `source-build.nix`.** Real, and not
-  weighed in the original text. `roborev` and `msgvault` already ship working
-  flakes (superseded for `msgvault` here — it graduated via its own
-  `source-build.nix` entry, adapted from that flake's recipe rather than
-  consumed as an input); `numtide/llm-agents.nix` maintains a third-party one
+  weighed in the original text. `roborev` and `msgvault` already ship
+  flakes (both superseded here — each graduated via its own
+  `source-build.nix` entry, msgvault adapted from that flake's recipe rather
+  than consumed as an input, roborev *not* adaptable from it at all: its flake
+  omits the frontend, so what it builds is a stub-only binary, which is a
+  concrete instance of reason (2) below rather than a reusable recipe);
+  `numtide/llm-agents.nix` maintains a third-party one
   for `agentsview` (also superseded, the same way). Rejected, for three
-  reasons: (1) it never covers all seven — `kata`, `forge`, `kwt`, `docbank`,
-  `agentsview`, and `msgvault` (all already built directly, not consumed as
-  flake inputs) have no upstream flake reused as-is, so this can't replace
+  reasons: (1) it never covers all seven — every tool graduated so far is
+  built directly rather than consumed as a flake input, so this can't replace
   `source-build.nix`, only supplement it, and a
   flake with two different mechanisms for "source build" depending on which
   tool you ask for is a worse interface than one mechanism with uneven tool

@@ -93,6 +93,7 @@
             docbank-from-source
             agentsview-from-source
             msgvault-from-source
+            roborev-from-source
             ;
         }
       );
@@ -116,6 +117,19 @@
         lib.genAttrs binaries mkApp
         // {
           default = mkApp "kata";
+
+          # nix run .#bun2nix  — the bun2nix CLI at THIS flake's pinned
+          # version. update.py --source runs it through here for the tools
+          # upstream ships no bun.nix for (SOURCE_BUILD_BUN_NIX): bun.nix has
+          # no schema stability guarantee across bun2nix versions, so the
+          # generator and the bun2nix.hook that consumes its output must not be
+          # able to drift apart. Exposed as an app rather than a package so it
+          # stays out of `packages` (it is a build-time tool for this repo, not
+          # one of the kenn-io tools this flake exists to ship).
+          bun2nix = {
+            type = "app";
+            program = "${bun2nix.packages.${system}.default}/bin/bun2nix";
+          };
 
           # nix run .#update  — regenerate sources.json from GitHub releases.
           # Deliberately runs the checkout's copy rather than a store copy:

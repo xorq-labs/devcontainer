@@ -124,11 +124,15 @@ nix build .#agentsview-from-source
 
 nix build .#msgvault-from-source
 ./result/bin/msgvault version    # same
+
+nix build .#roborev-from-source
+./result/bin/roborev version           # same
+./result/bin/roborev verify-web-assets # upstream's own "not a stub" gate
 ```
 
 See ADR-0007 for the decision this graduates tools under (one at a time, kept
 as a separate output surface from release binaries, host-platform only, no
-CI). Four tools are wired up so far:
+CI). Five tools are wired up so far:
 
 - **`kwt`** — no cgo dependencies, no embedded frontend. `buildGoModule`
   against a pinned Go 1.26.6 toolchain and a pinned rev, nothing else.
@@ -194,21 +198,60 @@ CI). Four tools are wired up so far:
   is two-part, not one: filter `bun2nix.hook` out of the go-modules
   derivation's `nativeBuildInputs` (it has no business running there) *and*
   clear `preBuild` (the same leak agentsview hit).
+- **`roborev`** — the first **workspace**-scope bun frontend, and the tool that
+  broke the "reuse msgvault's recipe" assumption twice. Its Go side is the
+  easiest of the five (`modernc.org/sqlite` is pure Go: no cgo, no header, no
+  `CGO_CFLAGS`) — everything hard here is the frontend, which is also why
+  roborev's *own* upstream flake skips it and ships a stub-only binary.
+  - **The lockfile is at the repo root**, covering `web/` and
+    `packages/roborev-ui/` together (`workspaces: ["web", "packages/*"]`),
+    not msgvault's self-contained `web/`. So `bunRoot` is left unset — the
+    hook then installs at the source root and hoists everything into ONE
+    top-level `node_modules`, which is why the vite invocation reaches *up*
+    out of `web/` (`bun ../node_modules/vite/bin/vite.js build`). There is no
+    `web/node_modules` for it to be found in, and the failure is a flat
+    `Module not found "node_modules/vite/bin/vite.js"`.
+  - **Upstream ships no `bun.nix`**, so unlike msgvault there is nothing in
+    the fetched tree for `fetchBunDeps` to read. `bun2nix` has no in-sandbox
+    mode that could generate one (it shells out to `nix flake prefetch` for
+    any dependency whose hash isn't in the lockfile), so one is **generated
+    and committed** here — `nix/kenn/bun/roborev.nix`, written by
+    `update.py --source`. See below, and ADR-0007's 2026-08-20 amendment for
+    why that is a pin and not a build step.
+  - **`bun2nix` 2.1.2 mis-parses roborev's `@kenn-io/kit-ui` dependency**, and
+    silently. It dispatches on a lockfile entry's *arity*: 3 means
+    tarball/git/github, 4 means an npm registry package. Bun writes a
+    `github:` dependency with four elements
+    (`[ident, meta, cacheKey, integrity]`), so it goes down the npm path and
+    comes out as a `fetchurl` of
+    `https://registry.npmjs.org/@kenn-io/kit-ui/-/kit-ui-github:kenn-io/kit-ui#97be355.tgz`
+    — a URL that does not exist. `update.py` drops the cache-key element
+    before running bun2nix (`degrade_git_lock_entries`), which routes it to
+    bun2nix's github branch and yields a real `fetchFromGitHub` named the way
+    bun's own cache layout wants. Only generation sees the patched lockfile;
+    the build uses upstream's own. Note msgvault does *not* hit this — its
+    kit-ui dependency is spelled as a tarball URL, which is already arity 3.
+    Same dependency, two spellings, one of them broken.
+  - Its `installCheckPhase` does more than the other four's: `roborev
+    verify-web-assets` is upstream's own release gate (it walks the embedded
+    Vite manifest and rejects the compilation stub), so it answers "did the
+    real frontend actually embed?" far better than grepping the binary.
 
-Extending this to the remaining three tools is still real, uneven work — see
-the effort table in ADR-0007. `kata` and `roborev` also need `bun2nix` (now
-in place) but at whole-repo **workspace** scope rather than a self-contained
-subdirectory — a genuinely different shape than msgvault's, not yet proven.
-`forge` additionally carries a Rust component (`rust-pty-manager`, audited and
-found tractable — a plain `buildRustPackage`, no cgo/FFI, no git dependencies)
-and *two* independent frontends — the highest-effort tool of the seven now
-purely because of that doubling, not the Rust piece.
+Extending this to the remaining two tools is still real, uneven work — see the
+effort table in ADR-0007. `kata` shares roborev's workspace-bun shape exactly,
+so most of the cost above is now paid. `forge` additionally carries a Rust
+component (`rust-pty-manager`, audited and found tractable — a plain
+`buildRustPackage`, no cgo/FFI, no git dependencies) and *two* independent
+frontends — the highest-effort tool of the seven now purely because of that
+doubling, not the Rust piece.
 
-All four are **maintained pins**, not point-in-time proofs: `nix/kenn/source-builds.json`
-holds the committed `rev`/`srcHash`/`vendorHash` (and the npm tools' `npmDepsHash`),
-and `update.py` (or `devcontainer bump-kenn`) has a `--source` mode for them,
-kept separate from the release commands above since a git ref has no meaning
-shared across repos the way a release version resolves uniformly:
+All five are **maintained pins**, not point-in-time proofs:
+`nix/kenn/source-builds.json` holds the committed `rev`/`srcHash`/`vendorHash`
+(and the npm tools' `npmDepsHash`), `nix/kenn/bun/<tool>.nix` holds the
+generated bun2nix expression for the tools that need one, and `update.py` (or
+`devcontainer bump-kenn`) has a `--source` mode that writes both, kept separate
+from the release commands above since a git ref has no meaning shared across
+repos the way a release version resolves uniformly:
 
 ```sh
 ./update.py --source --tool kwt --rev main         # bump to a branch's HEAD
@@ -216,6 +259,12 @@ shared across repos the way a release version resolves uniformly:
 ./update.py --source --check --tool kwt --rev main # report drift only
 ./update.py --source --verify                      # rebuild every committed pin
 ```
+
+One wrinkle when **graduating a new tool** that needs a generated `bun.nix`:
+nix reads only *tracked* files out of a dirty git work tree, so the very first
+run writes the file, finds git doesn't know about it, and stops with the
+`git add` to run before rerunning. It leaves the file in place for exactly
+that. Later bumps of an already-tracked file need no such step.
 
 Unlike the release path, `--source` cannot be as hermetically checkable:
 there is no published manifest for an arbitrary commit, so discovering a hash
@@ -237,7 +286,11 @@ means running the whole JS toolchain first. Two upstream repos already ship
 flakes if you want source builds — `roborev` and `msgvault` — and
 `numtide/llm-agents.nix` has a maintained source build of `agentsview`. Note
 roborev's flake pins its own nixpkgs and overrides Go to exactly 1.26.6;
-`inputs.nixpkgs.follows` will likely break it. (This is the decision ADR-0007
+`inputs.nixpkgs.follows` will likely break it. Note also that it **skips the
+frontend entirely**, so what it builds is a stub-only binary — roborev embeds
+a bun frontend exactly as kata and forge do, which is why the effort estimate
+for it moved from "low" to "medium" once that was checked rather than assumed.
+(This is the decision ADR-0007
 partially reverses: the flake now also supports building select tools from a
 non-release revision, tool by tool — see "Building from source" above. It
 does not change how release binaries are packaged.)

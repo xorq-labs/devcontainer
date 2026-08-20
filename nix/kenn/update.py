@@ -49,6 +49,10 @@ back out of a deliberate mismatch. `--source --verify` re-runs that same build
 against the COMMITTED hashes and fails on anything but a clean build — nix
 build is the oracle here, not a fixture, matching how dev/bump-nix's installer
 checksum has no hermetic test either (see ADR-0007's Decision 3).
+
+One source-build tool needs more than hashes: see SOURCE_BUILD_BUN_NIX. For
+those, `--source` ALSO regenerates a whole file (nix/kenn/bun/<repo>.nix), so
+the pin is a rev + hashes + a generated dependency expression.
 """
 
 from __future__ import annotations
@@ -62,12 +66,14 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 SOURCES = Path(__file__).with_name("sources.json")
 SOURCE_BUILDS = Path(__file__).with_name("source-builds.json")
+BUN_NIX_DIR = Path(__file__).with_name("bun")
 FLAKE_DIR = Path(__file__).parent
 
 # repo -> binary name shipped inside the tarball. These differ: the `forge`
@@ -110,6 +116,28 @@ SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
     # a COMMITTED web/bun.nix inside the fetched tree, not a separately
     # discovered hash — its per-package hashes are already covered by srcHash.
     "msgvault": [],
+    # Also no extra field, for a DIFFERENT reason than msgvault's: roborev
+    # ships no bun.nix at all, so one is generated here (SOURCE_BUILD_BUN_NIX)
+    # rather than read out of the fetched tree. Either way the per-package
+    # hashes live outside source-builds.json.
+    "roborev": [],
+}
+
+# Tools whose bun2nix dependency expression this repo has to GENERATE, because
+# upstream ships none (ADR-0007's 2026-08-20 amendment). Maps repo -> the
+# bun.lock path inside the fetched tree that generation reads; the result is
+# written to BUN_NIX_DIR/<repo>.nix and read back by source-build.nix.
+#
+# This is deliberately a separate mapping from SOURCE_BUILD_TOOLS rather than
+# another field on it: a generated FILE is not a discovered hash. It cannot come
+# out of discover_source_hashes' build-and-harvest loop at all, because
+# source-build.nix imports it — the file has to already exist for the first
+# round to even evaluate.
+#
+# msgvault is deliberately NOT here: its web/bun.nix is committed upstream, so
+# there is nothing to generate and its per-package hashes ride along in srcHash.
+SOURCE_BUILD_BUN_NIX: dict[str, str] = {
+    "roborev": "bun.lock",  # workspace root, not a self-contained subdirectory
 }
 
 FAKE_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -276,6 +304,177 @@ def commit_sha(repo: str, ref: str, token: str | None) -> str:
     return data["sha"]
 
 
+def nix_bin() -> str:
+    nix = shutil.which("nix")
+    if not nix:
+        msg = "nix not found on PATH; --source needs a working Nix to discover hashes"
+        raise RuntimeError(msg)
+    return nix
+
+
+def prefetch_source(repo: str, rev: str) -> Path:
+    """Fetch a revision into the store and return its path.
+
+    `nix flake prefetch github:<owner>/<repo>/<rev>` reports the same NAR hash
+    fetchFromGitHub would (verified against nix-prefetch-github), but the hash
+    is not what this is for — SOURCE_BUILD_BUN_NIX generation needs the actual
+    TREE, before any hash is known, because source-build.nix imports the
+    generated file and so cannot even evaluate without it.
+    """
+    cmd = [
+        nix_bin(),
+        "--extra-experimental-features",
+        "nix-command flakes",
+        "flake",
+        "prefetch",
+        f"github:kenn-io/{repo}/{rev}",
+        "--json",
+    ]
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)  # noqa: S603
+    if out.returncode != 0:
+        msg = f"nix flake prefetch of kenn-io/{repo}@{rev} failed:\n{out.stderr[-2000:]}"
+        raise RuntimeError(msg)
+    return Path(json.loads(out.stdout)["storePath"])
+
+
+def degrade_git_lock_entries(lock_text: str) -> tuple[str, int]:
+    """Rewrite bun.lock's git/github package entries into bun2nix's arity-3 shape.
+
+    bun2nix dispatches purely on a lockfile entry's ARITY: 3 means
+    tarball/git/github (it re-derives the hash with `nix flake prefetch`), 4
+    means an npm registry package (it builds a registry URL from the
+    identifier). Bun writes a `github:` dependency with FOUR elements —
+    `[ident, meta, cacheKey, integrity]` — so bun2nix 2.1.2 routes it down the
+    npm path and emits a `fetchurl` of a registry URL that does not exist:
+
+        url = "https://registry.npmjs.org/@kenn-io/kit-ui/-/kit-ui-github:kenn-io/kit-ui#97be355.tgz"
+
+    Dropping the cache-key element leaves `[ident, meta, integrity]`, which
+    bun2nix's github branch handles correctly (a real fetchFromGitHub, named
+    `github:<owner>-<repo>-<rev>` — the name bun's own cache layout wants).
+    Only generation reads the patched lockfile; the build uses upstream's own.
+
+    Not a hand-guess at bun's format: msgvault's committed web/bun.nix takes the
+    arity-3 path already, because its kit-ui dependency is spelled as a tarball
+    URL rather than `github:`. Same dependency, two spellings, and only one of
+    them trips this.
+    """
+    # bun.lock is JSONC: trailing commas, no comments in practice.
+    strict = re.sub(r",(\s*[}\]])", r"\1", lock_text)
+    data = json.loads(strict)
+    rewritten = 0
+    for entry in data.get("packages", {}).values():
+        if not isinstance(entry, list) or len(entry) != 4:
+            continue
+        # Match on the identifier rather than splitting at the last "@": a
+        # git+ssh URL contains its own "@" and would be misread by a split.
+        if "@github:" in entry[0] or "@git+" in entry[0]:
+            del entry[2]
+            rewritten += 1
+    return json.dumps(data, indent=2) + "\n", rewritten
+
+
+BOGUS_REGISTRY_URL_RE = re.compile(r'url = "https://registry\.npmjs\.org/[^"]*(?:github:|git\+)')
+
+
+def git_tracks(path: Path) -> bool:
+    """Whether git tracks `path`. True when git isn't available to ask.
+
+    Not bookkeeping — a correctness precondition. Nix reads only TRACKED files
+    out of a dirty git work tree, so a freshly generated file source-build.nix
+    imports is invisible to the very build that has to read it, and the symptom
+    is an eval error about a missing path rather than about the real cause.
+    """
+    git = shutil.which("git")
+    if not git:
+        return True
+    out = subprocess.run(  # noqa: S603 -- fixed argv, no shell, resolved path
+        [git, "-C", str(path.parent), "ls-files", "--error-unmatch", "--", path.name],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return out.returncode == 0
+
+
+def generate_bun_nix(repo: str, rev: str, flake_dir: Path) -> None:
+    """Regenerate BUN_NIX_DIR/<repo>.nix for a tool upstream ships no bun.nix for.
+
+    Runs the flake's OWN pinned bun2nix (`nix run .#bun2nix`), so the generator
+    and the `bun2nix.hook` that later consumes the result can never be different
+    versions — bun.nix has no schema stability guarantee between them.
+    """
+    lock_rel = SOURCE_BUILD_BUN_NIX[repo]
+    tree = prefetch_source(repo, rev)
+    lock_src = tree / lock_rel
+    if not lock_src.is_file():
+        msg = f"{repo}@{rev[:12]} has no {lock_rel}; SOURCE_BUILD_BUN_NIX is out of date"
+        raise RuntimeError(msg)
+
+    with tempfile.TemporaryDirectory(prefix=f"kenn-bun-{repo}-") as tmp:
+        work = Path(tmp) / "tree"
+        shutil.copytree(tree, work)
+        # Store paths are read-only, and copytree preserves their modes — the
+        # root included, so it is in this list too rather than relying on
+        # write_text only needing the file bit.
+        for path in [work, *work.rglob("*")]:
+            path.chmod(path.stat().st_mode | 0o200)
+        patched, rewritten = degrade_git_lock_entries((work / lock_rel).read_text())
+        (work / lock_rel).write_text(patched)
+        log(f"    rewrote {rewritten} git/github lockfile entr{'y' if rewritten == 1 else 'ies'} for bun2nix")
+
+        generated = Path(tmp) / "bun.nix"
+        cmd = [
+            nix_bin(),
+            "--extra-experimental-features",
+            "nix-command flakes",
+            "run",
+            f"{flake_dir}#bun2nix",
+            "--",
+            "--lock-file",
+            str(work / lock_rel),
+            "--output-file",
+            str(generated),
+        ]
+        log(f"    bun2nix {lock_rel} -> {BUN_NIX_DIR.name}/{repo}.nix")
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=False)  # noqa: S603
+        if out.returncode != 0:
+            msg = f"bun2nix failed for {repo}@{rev[:12]}:\n{out.stderr[-4000:]}"
+            raise RuntimeError(msg)
+        text = generated.read_text()
+
+    # A git/github dependency that still came out as a registry URL means the
+    # arity rewrite above missed it (bun changed its lockfile shape, or bun2nix
+    # changed its dispatch). Refuse rather than commit an expression whose only
+    # symptom is a 404 at build time.
+    bogus = BOGUS_REGISTRY_URL_RE.search(text)
+    if bogus:
+        msg = f"bun2nix emitted a registry URL for a git dependency, refusing to write it: {bogus.group(0)}"
+        raise RuntimeError(msg)
+
+    header = (
+        f"# GENERATED by ./update.py --source --tool {repo} --rev <ref>. Do not hand-edit.\n"
+        f"#\n"
+        f"# kenn-io/{repo} ships no bun.nix of its own (unlike msgvault), so this is\n"
+        f"# regenerated from its {lock_rel} on every rev bump and belongs to the\n"
+        f"# source-builds.json entry for {repo!r}. See ADR-0007 and nix/kenn/README.md.\n"
+    )
+    BUN_NIX_DIR.mkdir(exist_ok=True)
+    out_path = BUN_NIX_DIR / f"{repo}.nix"
+    out_path.write_text(header + text)
+
+    if not git_tracks(out_path):
+        rel = out_path.relative_to(FLAKE_DIR.parent.parent)
+        msg = (
+            f"wrote {rel}, but git does not track it yet — nix reads only tracked "
+            f"files from a dirty work tree, so source-build.nix cannot see it. Run\n"
+            f"    git add {rel}\n"
+            f"and rerun this command. (The file is left in place for exactly that.)"
+        )
+        raise RuntimeError(msg)
+
+
 def nix_build(flake_dir: Path, attr: str) -> subprocess.CompletedProcess:
     """Run `nix build` for one flake output.
 
@@ -283,12 +482,8 @@ def nix_build(flake_dir: Path, attr: str) -> subprocess.CompletedProcess:
     from a failure (a fixed-output hash mismatch names the real hash). Raises
     only if nix itself isn't available to run at all.
     """
-    nix = shutil.which("nix")
-    if not nix:
-        msg = "nix not found on PATH; --source needs a working Nix to discover hashes"
-        raise RuntimeError(msg)
     cmd = [
-        nix,
+        nix_bin(),
         "--extra-experimental-features",
         "nix-command flakes",
         "build",
@@ -359,6 +554,25 @@ def do_source_write(repo: str, rev_ref: str, token: str | None, flake_dir: Path)
     original_text = SOURCE_BUILDS.read_text() if SOURCE_BUILDS.exists() else None
     existing = json.loads(original_text) if original_text else {}
 
+    bun_nix = BUN_NIX_DIR / f"{repo}.nix"
+    original_bun_nix = bun_nix.read_text() if repo in SOURCE_BUILD_BUN_NIX and bun_nix.exists() else None
+
+    def rollback() -> None:
+        # Don't leave a placeholder hash — or a generated file for a rev whose
+        # build never came out clean — committed if this fails partway.
+        if original_text is not None:
+            SOURCE_BUILDS.write_text(original_text)
+        elif SOURCE_BUILDS.exists():
+            SOURCE_BUILDS.unlink()
+        # A previously committed bun.nix is restored; a NEWLY generated one is
+        # deliberately left on disk. It has to survive for the `git add` that
+        # generate_bun_nix's own failure message asks for (delete it and the
+        # rerun regenerates it and fails identically, forever), and an untracked
+        # file claims nothing — source-builds.json is what claims a rev
+        # graduated, and that has been rolled back above.
+        if original_bun_nix is not None:
+            bun_nix.write_text(original_bun_nix)
+
     working = dict(existing)
     working[repo] = {
         "rev": sha,
@@ -368,13 +582,15 @@ def do_source_write(repo: str, rev_ref: str, token: str | None, flake_dir: Path)
     }
     attr = f"{TOOLS[repo]}-from-source"
     try:
+        # Before the first build round, not after: source-build.nix imports the
+        # generated expression, so a stale (or absent) one is an EVALUATION
+        # error, which discover_source_hashes would report as "failed for a
+        # reason other than a hash mismatch".
+        if repo in SOURCE_BUILD_BUN_NIX:
+            generate_bun_nix(repo, sha, flake_dir)
         discover_source_hashes(flake_dir, attr, working, repo)
     except Exception:
-        # Don't leave a placeholder hash committed if discovery fails partway.
-        if original_text is not None:
-            SOURCE_BUILDS.write_text(original_text)
-        elif SOURCE_BUILDS.exists():
-            SOURCE_BUILDS.unlink()
+        rollback()
         raise
     log(f"  {repo:<12} {sha[:12]} written to {SOURCE_BUILDS.name} ({attr} builds clean)")
     return 0
@@ -416,6 +632,12 @@ def do_source_verify(targets: list[str], flake_dir: Path) -> int:
         entry = existing.get(repo)
         if not entry:
             log(f"  {repo:<12} FAILED - not pinned in {SOURCE_BUILDS.name}")
+            failed.append(repo)
+            continue
+        if repo in SOURCE_BUILD_BUN_NIX and not (BUN_NIX_DIR / f"{repo}.nix").is_file():
+            # nix would fail this on its own a second later, but on a path error
+            # rather than on the fact — say the fact.
+            log(f"  {repo:<12} FAILED - no {BUN_NIX_DIR.name}/{repo}.nix (rerun --source --tool {repo} --rev <ref>)")
             failed.append(repo)
             continue
         attr = f"{TOOLS[repo]}-from-source"

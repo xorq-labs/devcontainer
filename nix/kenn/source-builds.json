@@ -20,5 +20,10 @@
     "rev": "3806380c51fc6fc734963aaf82196314ac000de1",
     "srcHash": "sha256-OqH5RAnf/Tl/BQaO3SnOKY5qWB+PqGgesQyBAa+E5jQ=",
     "vendorHash": "sha256-KPMgtr3kP02ZVU68YIRHBY52ywuwlWqwtEhQiDopm34="
+  },
+  "roborev": {
+    "rev": "598052a0bb45b87e90b699d353fc8b8df177d26e",
+    "srcHash": "sha256-Zndm7HV80+6jEyDb3R6AFWwxtSTRXxWrwsUMybGRgy0=",
+    "vendorHash": "sha256-rODapTjneAGzeK8+Gb6HCvn6H5RXgPivs6JPr+YChyM="
   }
 }

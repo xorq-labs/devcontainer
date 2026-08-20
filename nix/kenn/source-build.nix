@@ -24,15 +24,17 @@
 # a different reproducibility contract (pinned to a commit + a Go module
 # graph, not to a checksum-verified published artifact).
 #
-# Only kwt and docbank are wired up (ADR-0007 decision 1: tools graduate one
-# at a time, not as a batch). kwt has no cgo dependencies and no embedded
-# frontend — the cheapest shape to prove the mechanism on. docbank is the
-# second proof, chosen for the opposite shape: CGO_ENABLED=1 (mattn/go-sqlite3)
-# plus an npm-built Svelte frontend embedded via go:embed. Extending this to
-# the remaining five tools is real, uneven work — see nix/kenn/README.md's
-# "Building from source" section and ADR-0007's effort table before assuming
-# it generalizes for free. In particular kata/forge/msgvault embed a **bun**
-# frontend instead of npm, and forge additionally carries a Rust component.
+# Five of the seven tools are wired up (ADR-0007 decision 1: tools graduate one
+# at a time, not as a batch) — kwt, docbank, agentsview, msgvault, roborev, in
+# that order, each chosen to exercise a shape the previous ones didn't: no
+# frontend at all; npm + CGO_ENABLED=1; the same plus a vendored sqlite header
+# and a sandbox-hostile Makefile; a bun frontend in a self-contained
+# subdirectory; a bun frontend at whole-repo workspace scope with no committed
+# bun.nix. Extending this to kata and forge is real, uneven work — see
+# nix/kenn/README.md's "Building from source" section and ADR-0007's effort
+# table before assuming it generalizes for free. Both share roborev's
+# workspace-bun shape, and forge additionally carries two frontends and a Rust
+# component.
 let
   mkKennToolFromSource =
     {
@@ -398,6 +400,123 @@ let
         sourceProvenance = [ lib.sourceTypes.fromSource ];
       };
     };
+  # roborev: tool #5, and the first WORKSPACE-scope bun frontend. Two things
+  # differ from msgvault, the other bun tool, and both were load-bearing:
+  #
+  #   1. The bun lockfile is at the REPO ROOT and covers web/ plus
+  #      packages/roborev-ui/ together (`workspaces: ["web", "packages/*"]`),
+  #      not a self-contained web/ subdirectory. So bunRoot is left unset —
+  #      bun2nix's hook then installs at the source root, hoisting every
+  #      dependency into ONE top-level node_modules. That is why the vite call
+  #      below reaches UP out of web/: there is no web/node_modules to find it
+  #      in.
+  #   2. Upstream ships no bun.nix. msgvault commits one, so its per-package
+  #      hashes ride along in srcHash and there is nothing to maintain here;
+  #      roborev's has to be generated (./bun/roborev.nix, written by
+  #      update.py --source; see ADR-0007's 2026-08-20 amendment). bun2nix
+  #      resolves the workspace members' `copyPathToStore ./web` and
+  #      `./packages/roborev-ui` RELATIVE TO THE FILE, which is why the
+  #      generated expression is copied into the source tree rather than read
+  #      from this repo's own directory.
+  #
+  # The Go side is the easiest of the five: modernc.org/sqlite is pure Go, so
+  # no cgo, no sqlite header, no CGO_CFLAGS — everything hard about roborev is
+  # the frontend, which is also why upstream's own flake skips it and ships a
+  # stub-only binary.
+  roborev-from-source =
+    let
+      pin = sourceBuilds.roborev;
+      roborevSrc = fetchFromGitHub {
+        owner = "kenn-io";
+        repo = "roborev";
+        rev = pin.rev;
+        hash = pin.srcHash;
+      };
+      srcWithBunNix = runCommand "roborev-src-with-bun-nix" { } ''
+        cp -R ${roborevSrc} "$out"
+        chmod -R u+w "$out"
+        cp ${./bun/roborev.nix} "$out/bun.nix"
+      '';
+      # Same copyfile/symlink materialization msgvault needs, same reason.
+      bunDeps =
+        let
+          base = bun2nix.fetchBunDeps { bunNix = "${srcWithBunNix}/bun.nix"; };
+        in
+        runCommand "roborev-bun-deps" { } ''
+          mkdir -p "$out/share/bun-cache"
+          cp -RL ${base}/share/bun-cache/. "$out/share/bun-cache/"
+          chmod -R u+w "$out/share/bun-cache"
+        '';
+    in
+    buildGoModule {
+      pname = "roborev";
+      version = pin.rev;
+      src = srcWithBunNix;
+
+      vendorHash = pin.vendorHash;
+
+      inherit bunDeps;
+      # bunRoot deliberately unset — see (1) above.
+      bunInstallFlags = [
+        "--linker=hoisted"
+        "--backend=copyfile"
+      ];
+      dontRunLifecycleScripts = true;
+      dontUseBunBuild = true;
+      dontUseBunCheck = true;
+      dontUseBunInstall = true;
+
+      nativeBuildInputs = [
+        bun2nix.hook
+        nodejs
+      ];
+      # Same two jobs as msgvault's: keep bun2nix's hook out of the go-modules
+      # derivation, and stop preBuild leaking into it (docbank's comment).
+      overrideModAttrs = _: previous: {
+        nativeBuildInputs = builtins.filter (
+          input: (input.name or "") != "bun2nix-hook"
+        ) previous.nativeBuildInputs;
+        preBuild = "";
+      };
+
+      # Mirrors the Makefile's web-embed target (web/scripts/embed-assets.ts),
+      # minus its --restore-stub half, which only exists to keep a developer's
+      # working tree clean afterwards. internal/web/dist ships exactly one
+      # committed file — index.html, the compilation stub — and the real
+      # index.html replaces it, so unlike docbank/msgvault there is nothing in
+      # there to preserve.
+      preBuild = ''
+        pushd web
+        bun ../node_modules/vite/bin/vite.js build
+        popd
+        find internal/web/dist -mindepth 1 -exec rm -rf {} +
+        cp -R web/dist/. internal/web/dist/
+      '';
+
+      subPackages = [ "cmd/roborev" ];
+      doCheck = false;
+
+      # `verify-web-assets` is upstream's own release gate (it walks the
+      # embedded Vite manifest and rejects the compilation stub), so running it
+      # here is a far better answer to "did the frontend actually embed?" than
+      # grepping the binary — and it is the reason this installCheck does more
+      # than the other four's.
+      doInstallCheck = true;
+      installCheckPhase = ''
+        runHook preInstallCheck
+        export HOME="$(mktemp -d)"
+        "$out/bin/roborev" version
+        "$out/bin/roborev" verify-web-assets
+        runHook postInstallCheck
+      '';
+
+      meta = {
+        description = "kenn-io/roborev, built from ${pin.rev} rather than a release binary";
+        homepage = "https://github.com/kenn-io/roborev";
+        mainProgram = "roborev";
+        sourceProvenance = [ lib.sourceTypes.fromSource ];
+      };
+    };
 in
 {
   inherit mkKennToolFromSource;
@@ -410,4 +529,5 @@ in
   inherit docbank-from-source;
   inherit agentsview-from-source;
   inherit msgvault-from-source;
+  inherit roborev-from-source;
 }
