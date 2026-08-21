@@ -458,9 +458,10 @@ manual `--verify` runs.
   concrete instance of reason (2) below rather than a reusable recipe);
   `numtide/llm-agents.nix` maintains a third-party one
   for `agentsview` (also superseded, the same way). Rejected, for three
-  reasons: (1) it never covers all seven — every tool graduated so far is
-  built directly rather than consumed as a flake input, so this can't replace
-  `source-build.nix`, only supplement it, and a
+  reasons: (1) it never covers all seven — and now that all seven ARE
+  graduated, every one of them is built directly rather than consumed as a
+  flake input, so this could only ever have supplemented
+  `source-build.nix`, never replaced it, and a
   flake with two different mechanisms for "source build" depending on which
   tool you ask for is a worse interface than one mechanism with uneven tool
   coverage; (2) it imports someone else's pin cadence and footguns wholesale —
