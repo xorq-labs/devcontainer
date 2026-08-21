@@ -324,9 +324,12 @@ Two claims that ranked forge highest-effort turned out to be wrong when checked
   `packages/github-app-ui` is never built, and its embed dir ships the
   committed `stub.html` that `internal/githubapp/ui/embed.go` documents
   ("holds only a committed stub until `make build` copies the real Vite output
-  in", with `HasBuiltApp()` reporting on it). So the released binary's
-  GitHub-App setup page IS a stub, and release parity means ONE build output,
-  not two. This corrected a claim stated as fact here, in ADR-0007's effort
+  in", with `HasBuiltApp()` reporting on it). Release parity is therefore ONE
+  build output — and building the second would change nothing, because
+  `internal/githubapp/ui`'s only importer is `cmd/kenn-forge-github-app`, a
+  second binary neither `release.yml` nor this derivation builds. Assets for a
+  package outside the binary's import graph are vendored, compiled and
+  discarded. This corrected a claim stated as fact here, in ADR-0007's effort
   table and in the working notes (2026-08-21) — the same "read the release
   config" lesson kata taught, applied one level down: it is the authority on
   what gets embedded, not just on cgo. It also has **two** arity-4 `github:`

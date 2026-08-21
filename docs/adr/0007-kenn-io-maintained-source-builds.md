@@ -176,12 +176,20 @@ estimate this ADR carried for it, in a way worth recording because the pattern
 repeated three times: every claim that made it look expensive was corrected by
 reading a file that had been sitting in the repo all along. Its Rust component
 turned out not to be in the released binary; its "two independent frontends"
-turned out to be one bun workspace, and then only one BUILT frontend, since
-`release.yml` builds `frontend/` alone and leaves `packages/github-app-ui`'s
-embed directory on its committed stub; and its cgo posture and build tags were
+turned out to be one bun workspace, then only one BUILT frontend (`release.yml`
+builds `frontend/` alone and leaves `packages/github-app-ui`'s embed directory
+on its committed stub), and finally one frontend that COULD matter at all: the
+second is embedded by `internal/githubapp/ui`, imported only by
+`cmd/kenn-forge-github-app`, a binary the release does not build either — so
+building those assets would vendor, compile and discard them. And its cgo
+posture and build tags were
 one grep of that same workflow (`CGO_ENABLED: "0"`, no `-tags`). The
 generalisation kata offered — read the release config, not the module graph —
-held, one level further: it is the authority on what gets EMBEDDED too.
+held one level further, and then a level further still: the release config says
+what is embedded, and the IMPORT GRAPH says whether an embed can reach the
+binary at all. Three passes over forge each ended in "less work than the last
+estimate," which is an argument for reading before estimating, not for
+optimism.
 
 Two things it did add, neither anticipated:
 
@@ -219,7 +227,7 @@ remaining tools and auditing forge's Rust component:
 | msgvault | bun frontend (bun2nix, now in place) + `CGO_ENABLED=1` | done — graduated |
 | roborev | bun **workspace** frontend (repo-root scope, not self-contained, unlike msgvault's) + no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) + no committed `bun.nix` and a bun2nix parse bug on its git dependency, neither of which the research pass predicted | done — graduated (was: medium) |
 | kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (a harmless plain directory copy) + `CGO_ENABLED=0` must be set explicitly, which the research pass got backwards. Turned out to be roborev's shape verbatim otherwise | done — graduated (was: medium-high) |
-| forge | **done — graduated.** Re-scoped 2026-08-20 and it shrank; re-checked 2026-08-21 and it shrank again; built the same day. What it actually cost was none of the three things this row worried about — one new upstream-shaped problem (bun records an ANNOTATED TAG's object sha for `@kenn-io/kata-ui`, which nix's `?ref=` resolution rejects at any length, fixed by `expand_unresolvable_github_refs`) and one gate that had to be built rather than called (no `verify-web-assets` equivalent, and `stub.html` is written back into the BUILT dist, so `preBuild` requires an `index.html` and `installCheckPhase` greps the binary for Vite's entry chunk). Its Rust component is not in the released binary (opt-in `KENN_FORGE_PTY_MANAGER` env var; never built by `release.yml`), so the source build omits it. Its "two independent frontends" share ONE bun workspace (root `bun.lock`, `workspaces: ["frontend", "packages/*"]`) — one generated `bun.nix` — and the release builds only `frontend/`, leaving `packages/github-app-ui`'s embed dir on its committed stub, so release parity is ONE build output, not the two this table previously claimed. `CGO_ENABLED: "0"` in both release jobs, no `-tags` anywhere, `./cmd/kenn-forge` only. No `.goreleaser.yaml` (releases from a workflow), and `vite-plus` needs `SSL_CERT_FILE` as docbank's did | low (was: low-medium, was: highest) |
+| forge | **done — graduated.** Re-scoped 2026-08-20 and it shrank; re-checked 2026-08-21 and it shrank again; built the same day. What it actually cost was none of the three things this row worried about — one new upstream-shaped problem (bun records an ANNOTATED TAG's object sha for `@kenn-io/kata-ui`, which nix's `?ref=` resolution rejects at any length, fixed by `expand_unresolvable_github_refs`) and one gate that had to be built rather than called (no `verify-web-assets` equivalent, and `stub.html` is written back into the BUILT dist, so `preBuild` requires an `index.html` and `installCheckPhase` greps the binary for Vite's entry chunk). Its Rust component is not in the released binary (opt-in `KENN_FORGE_PTY_MANAGER` env var; never built by `release.yml`), so the source build omits it. Its "two independent frontends" share ONE bun workspace (root `bun.lock`, `workspaces: ["frontend", "packages/*"]`) — one generated `bun.nix` — and the release builds only `frontend/`, leaving `packages/github-app-ui`'s embed dir on its committed stub, so release parity is ONE build output, not the two this table previously claimed. Building the second would in fact be inert: its embed lives in `internal/githubapp/ui`, whose only importer is the unreleased `cmd/kenn-forge-github-app` binary. `CGO_ENABLED: "0"` in both release jobs, no `-tags` anywhere, `./cmd/kenn-forge` only. No `.goreleaser.yaml` (releases from a workflow), and `vite-plus` needs `SSL_CERT_FILE` as docbank's did | low (was: low-medium, was: highest) |
 
 All three of the then-remaining bun tools (roborev, msgvault, kata) needed
 `bun2nix` —

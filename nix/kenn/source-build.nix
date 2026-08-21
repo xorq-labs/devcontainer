@@ -642,14 +642,19 @@ let
   #      SSL_CERT_FILE docbank's and agentsview's npm frontends do — vp
   #      initialises an HTTP client even for a fully offline build and panics
   #      without a CA bundle. First time that quirk meets a bun tool.
-  #   2. ONE frontend is built, not two. The workspace covers frontend/ AND
-  #      packages/github-app-ui/, but release.yml builds frontend/ alone and
-  #      leaves internal/githubapp/ui/dist on its committed stub — so the
-  #      released binary's GitHub-App setup page is itself a stub, which
-  #      internal/githubapp/ui/embed.go states outright and HasBuiltApp()
-  #      reports at runtime. Matching what the release ships is the standard the
-  #      other six were held to; building the extra frontend here would make
-  #      -from-source a different product from the release pin beside it.
+  #   2. ONE frontend is built, not two, and building the second would have NO
+  #      EFFECT on this output. The workspace covers frontend/ AND
+  #      packages/github-app-ui/, but the latter is embedded by
+  #      internal/githubapp/ui, whose only importer is cmd/kenn-forge-github-app
+  #      — a second binary that release.yml does not build and subPackages below
+  #      does not either. It is therefore not in this binary's import graph at
+  #      all, so its embed does not exist here: building those assets would
+  #      vendor, compile and then discard them. (A developer who does build that
+  #      second binary without `make githubapp-frontend` gets the committed
+  #      stub.html its embed.go documents, HasBuiltApp() false, and a warning
+  #      from create.go telling the browser step to expect instructions instead
+  #      of a setup page. That is upstream's own degradation path, reachable
+  #      only from a binary nothing here ships.)
   #   3. There is no verify-web-assets / _web-assets-check equivalent (roborev
   #      and kata both have one), and the obvious stub test is INVERTED: `make
   #      frontend` writes stub.html back into the BUILT dist, so its presence
