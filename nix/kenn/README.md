@@ -332,9 +332,12 @@ deliberate mismatch (`discover_source_hashes`/`harvest_hash_mismatches` in
 hashes — a clean build **is** the verification, the same way `dev/bump-nix`'s
 installer checksum has no fixture to check against either. What IS
 hermetically guarded is the shape agreement between `SOURCE_BUILD_TOOLS`,
-`source-build.nix`'s exposed attributes, and `source-builds.json`'s keys
+`source-build.nix`'s exposed attributes, `source-builds.json`'s keys and the
+`inherit (sourceBuilds)` list in `flake.nix`'s `packages` output
 (`tests/test-bump-kenn.sh` §6) — see ADR-0007's Decision 3/4 for the full
-reasoning behind that split.
+reasoning behind that split. Note the package attribute is named for the
+tool's BINARY, not its repo, while every key above uses the repo: the two
+differ only for `forge`, whose attribute is `kenn-forge-from-source`.
 
 ## Design notes
 

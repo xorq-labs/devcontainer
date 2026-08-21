@@ -7,6 +7,11 @@
 #   nix/kenn/sources.json  top-level     the generated pins
 #   nix/kenn/flake.nix     systems       must equal update.py's PLATFORMS keys
 #
+# ADR-0007's source-build set is a SECOND, smaller four-encoding set with the
+# same failure mode, guarded in §6 rather than here: SOURCE_BUILD_TOOLS,
+# source-build.nix's exposed attributes, source-builds.json's keys, and
+# flake.nix's re-exposure of those attributes under `packages`.
+#
 # The failure is silent AND out of reach of CI: no workflow evaluates this
 # flake and tests/run-all is nix-free, so a repo added to TOOLS without a
 # toolMeta entry regenerates sources.json cleanly and then throws

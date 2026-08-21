@@ -333,8 +333,9 @@ tool count.** [Implemented — shape half only, by design; see Decision 3.] The
 original text here tied the guard to "the second graduated tool," reasoning
 that a single tool has nothing to disagree with. That reasoning doesn't hold
 up: the coupling `test-bump-kenn.sh` guards is between `update.py`'s
-`SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes, and
-`source-builds.json`'s keys, and that coupling is created the moment Decision
+`SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes,
+`source-builds.json`'s keys and `flake.nix`'s re-exposure of those attributes
+(the fourth, added 2026-08-21), and that coupling is created the moment Decision
 3 exists — at zero, one, or seven tools, it's the same fact needing the same
 guard. Tying it to a tool count would also have handed Decision 1 a way to
 defer the guard indefinitely, since Decision 1 already allows a tool to never
