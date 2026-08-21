@@ -513,6 +513,29 @@ taxonomy and reads as `test:`.
   all three layouts; `unguarded`: the legacy bare-path branch, which has no
   producer left in the tree, so no round-trip can reach it and only a
   hand-built fixture would).
+- Neither `dev/hooks/pre-commit` nor `dev_main_tree()` in `lib/git.sh` may pipe
+  worktree listings into a reader that exits early (`| head -1`): the writer
+  dies of SIGPIPE and `pipefail` fails the hook AFTER a correct assignment, so
+  `git commit` aborts with exit 1 and EMPTY output on both streams. Both are
+  size-dependent races (4 KB for git's stdio buffer, ~60 KB for a builtin
+  `printf` — the "printf is one write, so it cannot take EPIPE" rationale
+  `dev_main_tree()` shipped with is measurably false), so both use `sed -n
+  '1s///p'`, which reads to EOF. Raceless beats reasoned-safe (`test:
+  tests/test-hook-precommit.sh`, which measures both thresholds and lifts each
+  pipeline out of its own source — the lib half went unguarded at first, with
+  the citation already claiming both).
+- `symlink_hooks()` in `lib/git.sh` deletes a `<hook>.legacy` that resolves to
+  the hook it installs, and ONLY that one — a foreign `.legacy` is what
+  pre-commit's migration mode exists for, and a self-referential one makes
+  hook-impl fail every commit while every hook reports green (`test:
+  tests/test-hook-symlinks.sh`). It does not reclaim a slot holding
+  pre-commit's own generated hook, whose baked interpreter path breaks in a
+  container, so that clone keeps committing on the wrong hook until someone
+  removes it by hand (`unguarded`: the removal is deliberate, not missing — the
+  install guard's whole job is refusing to clobber a regular file, and a guard
+  for this would have to encode which file CONTENTS count as "pre-commit's
+  own", i.e. track a third party's generated output. Suite §2 pins the refusal
+  instead, so the accepted behaviour cannot drift into a silent clobber).
 - Main-only state (`project.env`, the `dev/` scripts, the hook symlink targets)
   is resolved with `dev_main_tree()` in `lib/git.sh`, never `git rev-parse
   --show-toplevel`, which inside a linked worktree returns that worktree.
