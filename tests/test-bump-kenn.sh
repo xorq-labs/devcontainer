@@ -262,13 +262,14 @@
 # grew a guard, so it owes preserved behaviour AND a pair: the property the
 # refactor concentrated into one place turned out to be covered by nothing, and
 # the measurement that showed it (below) is what a §2 semantic half is for.
-# The two call sites had the same expression written twice, in the same order, correct at each for
-# a DIFFERENT reason neither site could see — one file's contents (a `/*` inside
-# a `#` comment) and the other's inverted assertion (over-stripping fails open
-# there, closed here). Re-ran every mutation that reads either file, all
-# unchanged from their records above: 7's form-only (78/0), 7's two semantic
-# halves and 8's orphan and 10's re-listing (77/1 each, same assertion named),
-# 10's form-only (78/0).
+# The two call sites had the same expression written twice, in the same order,
+# correct at each for a DIFFERENT reason neither site could see — one file's
+# contents (a `/*` inside a `#` comment) and the other's inverted assertion
+# (over-stripping fails open there, closed here). Re-ran every mutation that
+# reads either file, each naming the same assertion as its record above and
+# each one count higher than it, since the probe below moved the baseline:
+# 7's form-only 79/0, 10's form-only 79/0, 7's two semantic halves 78/1,
+# 8's orphan 78/1, 10's re-listing 78/1.
 #   Aimed at the helper itself — swap the two `re.sub`s so blocks come out
 #   first — that mutation ran GREEN at 78/0: centralising the expression had
 #   moved the order from two copies (a bad edit breaks one check) to one (a bad
