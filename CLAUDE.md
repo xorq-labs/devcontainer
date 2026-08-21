@@ -406,6 +406,45 @@ taxonomy and reads as `test:`.
   ones (`unguarded`: same shape as `lint.yml` — a ban on adding a second
   runner, checkable only by restating a 22-line workflow at rung 3; the loss it
   prevents is bounded because the glob, not the workflow, enumerates suites).
+- The merged compose MOUNT GRAPH is a source of truth, not prose: facts about
+  it (what nests under what, what is absent, and whether a mount is `:ro`) are
+  read by `tests/lib/compose-topology.sh`, never restated in a comment. Two
+  rules ride on it — ADR-0001 (no shared credentials mount, AND the
+  `.claude-host` store reachable read-only) and "a recursive chown must not
+  cross into a bind" (#115) — and all of it was green under mutation until this
+  existed, because the suite could only grep `docker-compose.yml` as text:
+  existence was assertable, nesting, absence and mount options were not (#116).
+  A guard on the graph is the only one that fails from the side that CHANGES,
+  i.e. in the PR editing the mount. Scope, since the rule above is stated
+  unqualified and the guard is not: the nesting assertion reads the BASE file's
+  volumes, while `chown_mount_points` recurses into every named volume in the
+  MERGED config, so a bind nested under an overlay volume (`/nix`, a venv, a
+  cache) is the same #115 hazard and is unguarded — only the `~/.claude` region
+  is covered end to end (`test: tests/test-compose-topology.sh`;
+  `unguarded: binds nested under overlay-declared volumes, see #115`).
+- The graph has SEVERAL committed channels and a guard that reads a subset is
+  evadable through the rest, so the compose-file list is DERIVED — `git
+  ls-files` filtered by `(^|/)(docker-)?compose[^/]*\.ya?ml$`, i.e. `compose`
+  at the START of a path component, so `foo-compose.yml` would NOT be scanned —
+  rather than written down. A hand-kept
+  list leaked a channel three times running: compose-only in rev 1, then
+  `projects/<name>/host-mounts.txt` (which `lib/host-mounts.sh` turns into a
+  generated override landing in the same `services.app.volumes`), then
+  `defaults/compose.override.yml` (a real overlay — `DEV_PROJECT_DIR` falls
+  back to it) and `nix/base/compose.nix-base.yml` (appended by `dc()` on the
+  nix route). Each fix extended the list; each extension leaked again. Only the
+  list files are still enumerated, from a glob (`host-mounts.local.txt` is
+  gitignored per-developer state and deliberately out of scope)
+  (test: `tests/test-compose-topology.sh`).
+- The topology reader re-implements Compose's short-form rules (a source with
+  no `/` is a named volume), so it is itself a restatement and is cross-checked
+  against real `docker compose config` output whenever a docker CLI is present
+  — `config` needs no daemon, but `tests/run-all` must stay hermetic. Absent
+  docker it SKIPs; present-but-unrenderable it FAILs, because a cross-check
+  that silently stops running is the failure being guarded against
+  (`test: tests/test-compose-topology.sh`; `unguarded: on a runner with no
+  docker CLI at all only the hermetic half runs, and the reader's agreement
+  with Compose goes unverified there`).
 - Container-side root logic lives in `lib/*.sh` and is INJECTED per run via
   `dc exec ... sh -c "$script" <argv0> <args...>` — a runtime input: no
   rebuild, no fingerprint entry unless it is also COPYed (test:
