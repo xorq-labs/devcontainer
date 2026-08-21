@@ -8,8 +8,32 @@ Usage: new-worktree <branch-name>
 Create a git worktree for the given branch, set up overlay symlinks/copies,
 and lock it to prevent container-side pruning. The worktree is placed as a
 sibling of the main checkout, named <project>-<branch>.
+
+Run this on the HOST. A worktree is bind-mounted into its container at its own
+host path, so it has to be created where the host can see it.
 USAGE
     exit 0
+fi
+
+# Making that parent writable is NOT the fix and is worse than the error: the
+# worktree would land in the container's filesystem, invisible to the host, with
+# its admin files in the bind-mounted `.git` and its working tree not. Working
+# in-container needs a host-backed sibling root — a DEV_WORKTREE_ROOT mount —
+# which the naming contracts allow, since only the BASENAME is load-bearing
+# downstream (`dev/devcontainer` takes `basename` of it).
+#
+# DEV_CONTAINER_MARKER is a test seam, not an escape hatch: a missing path
+# restores the git error rather than enabling anything.
+if [ -e "${DEV_CONTAINER_MARKER:-/.dockerenv}" ]; then
+    cat >&2 <<'REFUSAL'
+new-worktree: run this on the host, not inside the dev container.
+
+A worktree is bind-mounted into its container at its host path, so it has to be
+created where the host can see it. The sibling directory in here is a
+container-side mount parent — a worktree created in it would be invisible to
+docker compose, so `devcontainer up` from it could not work.
+REFUSAL
+    exit 2
 fi
 
 branch="${1:?usage: new-worktree <branch-name>}"

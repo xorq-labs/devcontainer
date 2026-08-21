@@ -237,5 +237,39 @@ assert_contains "devcontainer help shows list" "list" "$out"
 echo "--- new-worktree --help ---"
 out="$("$DEV_BASE/dev/new-worktree" --help 2>&1)"
 assert_contains "new-worktree help text" "Usage: new-worktree" "$out"
+assert_contains "help says where to run it" "Run this on the HOST" "$out"
+
+# ---------- test: new-worktree refuses to run inside a container ----------
+# Verified (ADR-0005 §2):
+#   1. FORM-ONLY — hoist the default into a `_marker=` assignment above the
+#      guard. Green, assertion count unchanged.
+#   2. SEMANTIC, in a form this suite does not write — leave the guard and point
+#      its DEFAULT at a path that never exists: present, reviewed, inert. Red
+#      only on the real-marker assertion below.
+echo "--- new-worktree container refusal ---"
+_marker="$TMPDIR_ROOT/fake-dockerenv"
+: >"$_marker"
+rc=0
+out="$(cd "$MAIN_TREE" && DEV_CONTAINER_MARKER="$_marker" "$DEV_BASE/dev/new-worktree" wt-guard 2>&1)" || rc=$?
+assert_eq "refuses with exit 2 when the container marker is present" 2 "$rc"
+assert_contains "and says where to run it instead" "run this on the host" "$out"
+assert_contains "and says why, not just where" "would be invisible" "$out"
+assert_true "no worktree directory was created" test ! -e "$TMPDIR_ROOT/fakerepo-wt-guard"
+
+# Conditional on the marker, not the branch.
+rc=0
+out="$(cd "$MAIN_TREE" && DEV_CONTAINER_MARKER="$TMPDIR_ROOT/absent-marker" \
+    "$DEV_BASE/dev/new-worktree" wt-guard 2>&1)" || rc=$?
+assert_not_contains "no refusal when the marker is absent" "run this on the host" "$out"
+
+# The seam proves the guard's body; only the real marker proves its DEFAULT, and
+# an inert default is the regression worth catching. Skipped, loudly, on a CI VM.
+if [ -e /.dockerenv ]; then
+    rc=0
+    out="$(cd "$MAIN_TREE" && "$DEV_BASE/dev/new-worktree" wt-guard 2>&1)" || rc=$?
+    assert_eq "the default marker refuses in a real container" 2 "$rc"
+else
+    echo "  SKIP: no /.dockerenv here, so the default marker's refusal is unobservable"
+fi
 
 finish

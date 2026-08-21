@@ -44,7 +44,7 @@ bash tests/test-resolve-list-cleanup.sh
 
 ## Repo layout
 
-- `dev/` — user-facing scripts: `devcontainer`, `new-worktree`, `setup-worktree`, `cleanup-worktree`, `init`
+- `dev/` — user-facing scripts: `devcontainer`, `new-worktree`, `setup-worktree`, `cleanup-worktree`, `init`. `new-worktree` is HOST-ONLY and refuses in-container: a worktree is bind-mounted into its container at its host path, so it must be created where the host can see it. Its siblings do work in-container, which is exactly why the refusal had to be explicit
 - `lib/` — shared bash libraries sourced by dev/ scripts (`git.sh`, `host-bridge.sh`, `host-mounts.sh`, `list-file.sh`, `command-table.sh`) plus `command-table.tsv`, the declarative `devcontainer` command surface
 - `defaults/` — fallback project overlay (used when no project-specific overlay matches)
 - `projects/<name>/` — project-specific overlays (install-system.sh, setup-env.sh, compose.override.yml, worktree-*.txt)
