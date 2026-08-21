@@ -1,28 +1,32 @@
 # ADR-0007: kenn-io toolkit — maintained source builds, tool by tool
 
-- Status: Proposed
+- Status: Accepted (2026-08-21 — every decision below is implemented; the only
+  things not built are the two this ADR decides not to build, Decision 5's
+  cross-platform builds and Decision 6's CI)
 - Date: 2026-08-20
 - Implemented by: `nix/kenn/source-build.nix` (`kwt-from-source`,
   `docbank-from-source`, `agentsview-from-source`, `msgvault-from-source`,
-  `roborev-from-source`, `kata-from-source`),
+  `roborev-from-source`, `kata-from-source`, `kenn-forge-from-source`),
   `nix/kenn/source-builds.json` (Decision 3's pin
   space), `nix/kenn/bun/` (Decision 3's second pin element, added by the
   2026-08-20 amendment below), `update.py`'s
   `--source`/`--rev` mode (Decision 3: `SOURCE_BUILD_TOOLS`,
   `SOURCE_BUILD_BUN_NIX`, `commit_sha`,
   `nix_build`, `harvest_hash_mismatches`, `discover_source_hashes`,
-  `degrade_git_lock_entries`, `generate_bun_nix`,
+  `degrade_git_lock_entries`, `expand_unresolvable_github_refs`,
+  `generate_bun_nix`,
   `do_source_write`/`do_source_check`/`do_source_verify`), the shape half of
   Decision 4's guard (`tests/test-bump-kenn.sh` §6), a new `bun2nix` flake
   input (`nix-community/bun2nix`, shared infrastructure for msgvault, kata,
-  and roborev, plus an `apps.bun2nix` passthrough so `update.py` can only ever
-  run the pinned version), and the CLAUDE.md invariant lines. **`kwt`,
-  `docbank`, `agentsview`, `msgvault`, `roborev`, and `kata` are now graduated
-  under Decision 1's own
-  four-part definition** — derivation, bump mode, guard, CLAUDE.md line, all
-  four present for all six. What remains unimplemented: `forge`
-  (its own follow-up, per Decision 1) and CI (Decision 6,
-  deliberately out of scope).
+  roborev and forge, plus an `apps.bun2nix` passthrough so `update.py` can only
+  ever run the pinned version), and the CLAUDE.md invariant lines. **All seven
+  tools — `kwt`, `docbank`, `agentsview`, `msgvault`, `roborev`, `kata` and
+  `forge` — are now graduated under Decision 1's own
+  four-part definition**: derivation, bump mode, guard, CLAUDE.md line. Nothing
+  this ADR decides remains unimplemented, which is what moves it to Accepted;
+  CI (Decision 6) and cross-platform builds (Decision 5) are decisions not to
+  build, not gaps, and the `goPinned` coupling in Consequences is an accepted
+  `unguarded:`.
 - Amended 2026-08-20 (Decision 3): a source-build pin is no longer only a rev
   plus hashes. A tool whose bun frontend upstream ships no `bun.nix` for needs
   a whole generated *file* committed beside the pin, because the expression
@@ -167,8 +171,42 @@ config**, not its module graph — `go.mod` here requires two cgo sqlite drivers
 and a pure-Go one simultaneously, and reading it either way in isolation gives
 the wrong answer.
 
-**`kwt`, `docbank`, `agentsview`, `msgvault`, `roborev`, and `kata` count as
-graduated as of this revision.**
+A seventh — `forge` — closed the set on 2026-08-21, and cost less than any
+estimate this ADR carried for it, in a way worth recording because the pattern
+repeated three times: every claim that made it look expensive was corrected by
+reading a file that had been sitting in the repo all along. Its Rust component
+turned out not to be in the released binary; its "two independent frontends"
+turned out to be one bun workspace, and then only one BUILT frontend, since
+`release.yml` builds `frontend/` alone and leaves `packages/github-app-ui`'s
+embed directory on its committed stub; and its cgo posture and build tags were
+one grep of that same workflow (`CGO_ENABLED: "0"`, no `-tags`). The
+generalisation kata offered — read the release config, not the module graph —
+held, one level further: it is the authority on what gets EMBEDDED too.
+
+Two things it did add, neither anticipated:
+
+- **A lockfile ref nix cannot resolve, which is a bun/bun2nix shape rather than
+  a forge one.** `@kenn-io/kata-ui` is declared as `github:kenn-io/kata#v0.14.3`
+  — an ANNOTATED tag — and bun records the sha of the *tag object*, not of a
+  commit. bun2nix asks nix for `github:kenn-io/kata?ref=<sha>`, that form
+  resolves through the commits endpoint whatever the length, and a tag object is
+  not a commit: HTTP 422 at 7 chars and at 40 alike, surfacing deep inside
+  bun2nix. `expand_unresolvable_github_refs` dereferences exactly those refs to
+  the commit the tag names, and leaves an abbreviated COMMIT prefix (roborev's
+  and kata's `kit-ui`) untouched so two committed pins do not churn. Verified by
+  measurement: tag object, dereferenced commit and tag name all prefetch to one
+  NAR hash.
+- **A "not a stub" gate that had to be built rather than called.** roborev and
+  kata both expose one upstream (`verify-web-assets`, `_web-assets-check`);
+  forge exposes none, and its obvious substitute is inverted — `make frontend`
+  writes `stub.html` back into the BUILT dist, so the stub file proves nothing.
+  The derivation therefore gates twice: `preBuild` refuses a dist without an
+  `index.html`, and `installCheckPhase` greps the binary for Vite's
+  `assets/index-<hash>.js` entry chunk, checked in both directions (present in
+  the real build, absent from frontend-less `kwt-from-source`) rather than
+  trusted.
+
+**All seven tools count as graduated as of this revision.**
 
 Extending this to a standing capability is not uniform-cost across the
 remaining tools. Prior assessment, updated after researching all four
@@ -181,7 +219,7 @@ remaining tools and auditing forge's Rust component:
 | msgvault | bun frontend (bun2nix, now in place) + `CGO_ENABLED=1` | done — graduated |
 | roborev | bun **workspace** frontend (repo-root scope, not self-contained, unlike msgvault's) + no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) + no committed `bun.nix` and a bun2nix parse bug on its git dependency, neither of which the research pass predicted | done — graduated (was: medium) |
 | kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (a harmless plain directory copy) + `CGO_ENABLED=0` must be set explicitly, which the research pass got backwards. Turned out to be roborev's shape verbatim otherwise | done — graduated (was: medium-high) |
-| forge | **Re-scoped 2026-08-20 and it shrank; re-checked 2026-08-21 and it shrank again.** Its Rust component is not in the released binary (opt-in `KENN_FORGE_PTY_MANAGER` env var; never built by `release.yml`), so a source build should omit it. Its "two independent frontends" share ONE bun workspace (root `bun.lock`, `workspaces: ["frontend", "packages/*"]`) — one generated `bun.nix` — and the release builds only `frontend/`, leaving `packages/github-app-ui`'s embed dir on its committed stub, so release parity is ONE build output, not the two this table previously claimed. `CGO_ENABLED: "0"` in both release jobs, no `-tags` anywhere, `./cmd/kenn-forge` only. No `.goreleaser.yaml` (releases from a workflow), and `vite-plus` needs `SSL_CERT_FILE` as docbank's did | low (was: low-medium, was: highest) |
+| forge | **done — graduated.** Re-scoped 2026-08-20 and it shrank; re-checked 2026-08-21 and it shrank again; built the same day. What it actually cost was none of the three things this row worried about — one new upstream-shaped problem (bun records an ANNOTATED TAG's object sha for `@kenn-io/kata-ui`, which nix's `?ref=` resolution rejects at any length, fixed by `expand_unresolvable_github_refs`) and one gate that had to be built rather than called (no `verify-web-assets` equivalent, and `stub.html` is written back into the BUILT dist, so `preBuild` requires an `index.html` and `installCheckPhase` greps the binary for Vite's entry chunk). Its Rust component is not in the released binary (opt-in `KENN_FORGE_PTY_MANAGER` env var; never built by `release.yml`), so the source build omits it. Its "two independent frontends" share ONE bun workspace (root `bun.lock`, `workspaces: ["frontend", "packages/*"]`) — one generated `bun.nix` — and the release builds only `frontend/`, leaving `packages/github-app-ui`'s embed dir on its committed stub, so release parity is ONE build output, not the two this table previously claimed. `CGO_ENABLED: "0"` in both release jobs, no `-tags` anywhere, `./cmd/kenn-forge` only. No `.goreleaser.yaml` (releases from a workflow), and `vite-plus` needs `SSL_CERT_FILE` as docbank's did | low (was: low-medium, was: highest) |
 
 All three of the then-remaining bun tools (roborev, msgvault, kata) needed
 `bun2nix` —
@@ -211,16 +249,19 @@ not as a batch.** A tool is "maintained" only once it has all four of:
    - the drift guard this creates (Decision 4),
    - its own line in CLAUDE.md's Invariants section.
 
-   `kwt`, `docbank`, `agentsview`, `msgvault`, `roborev`, and `kata` have
-   completed all four (see the header note). `forge` is explicitly **not**
-   decided here —
-   each graduates (or doesn't) as its own follow-up, evaluated against the
-   effort table above, not committed to en masse. Forge in particular was the
-   one tool this ADR held unscoped pending its Rust component's audit. That
-   audit happened (tractable), and a later pass made it moot: the released
-   binary does not contain that component at all, so a source build need not
-   build it. Nothing about forge is unscoped now, and it is no longer the
-   expensive one — see the effort table.
+   All seven tools have completed all four (see the header note). The
+   one-at-a-time rule is what got them there and still governs: nothing here
+   was committed to en masse, each tool was evaluated against the effort table
+   above on its own, and every one of the last three falsified something the
+   table said about it. `forge` was the tool this ADR originally held unscoped
+   pending its Rust component's audit; that audit happened (tractable), and a
+   later pass made it moot — the released binary does not contain that
+   component, so the source build omits it.
+
+   The rule keeps its teeth now that the set is closed, because Decision 2
+   makes un-graduating a tool reversible per tool: a tool that starts costing
+   more to maintain than its source build is worth can leave the set the same
+   way it entered, one at a time.
 
 **2. Source builds are a separate output surface, never merged into
 `mkKennTool`.** Each graduated tool gets a `<tool>-from-source` package

@@ -118,6 +118,7 @@ SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
     "msgvault": [],
     "roborev": [],  # generated bun.nix, not a committed one — SOURCE_BUILD_BUN_NIX
     "kata": [],  # same shape as roborev, down to the same kit-ui rev
+    "forge": [],  # likewise; note its attr/pname is the BINARY, kenn-forge
 }
 
 # Tools whose bun2nix dependency expression this repo has to GENERATE, because
@@ -136,6 +137,7 @@ SOURCE_BUILD_TOOLS: dict[str, list[str]] = {
 SOURCE_BUILD_BUN_NIX: dict[str, str] = {
     "roborev": "bun.lock",  # workspace root, not a self-contained subdirectory
     "kata": "bun.lock",  # likewise
+    "forge": "bun.lock",  # likewise; workspaces = ["frontend", "packages/*"]
 }
 
 FAKE_HASH = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -374,6 +376,109 @@ def degrade_git_lock_entries(lock_text: str) -> tuple[str, int]:
 
 BOGUS_REGISTRY_URL_RE = re.compile(r'url = "https://registry\.npmjs\.org/[^"]*(?:github:|git\+)')
 
+FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+GITHUB_IDENT_RE = re.compile(r"github:(?P<owner>[^/#]+)/(?P<repo>[^#]+)#(?P<ref>.+)$")
+
+
+def github_ref_is_a_commit(owner: str, repo: str, ref: str, token: str | None) -> bool:
+    """Whether nix's github fetcher can resolve `ref` the ordinary way.
+
+    That fetcher asks /repos/<o>/<r>/commits/<ref> for anything that is not a
+    full 40-char sha, so this is the same question it will ask.
+    """
+    try:
+        http_get(f"https://api.github.com/repos/{owner}/{repo}/commits/{ref}", token)
+    except urllib.error.HTTPError:
+        return False
+    return True
+
+
+def commit_behind_tag_object(owner: str, repo: str, ref: str, token: str | None) -> str | None:
+    """Resolve an abbreviated ANNOTATED TAG OBJECT sha to the COMMIT it names.
+
+    The commit, not the widened tag-object sha: bun2nix asks nix for
+    `github:<o>/<r>?ref=<sha>`, and the `?ref=` form goes through the commits
+    endpoint whatever its length, so a tag object 422s at 40 chars exactly as it
+    does at 7. The commit resolves, and prefetches to the same NAR hash as both
+    the tag object and the tag name (measured, all three).
+
+    Paginated defensively: the repo that needed this has 19 tags, but a listing
+    that silently ended early would look exactly like "no such tag".
+    """
+    for page in range(1, 11):
+        url = f"https://api.github.com/repos/{owner}/{repo}/git/refs/tags?per_page=100&page={page}"
+        try:
+            refs = json.loads(http_get(url, token))
+        except urllib.error.HTTPError:
+            return None
+        if not refs:
+            return None
+        for entry in refs:
+            obj = entry.get("object", {})
+            sha = obj.get("sha", "")
+            if not sha.startswith(ref):
+                continue
+            if obj.get("type") != "tag":
+                # A lightweight tag points straight at a commit, which the
+                # commits endpoint would already have resolved — so reaching
+                # here with one means something else is wrong; say so rather
+                # than pinning a sha nix has just refused.
+                return None
+            deref = json.loads(http_get(f"https://api.github.com/repos/{owner}/{repo}/git/tags/{sha}", token))
+            return deref.get("object", {}).get("sha") or None
+        if len(refs) < 100:
+            return None
+    return None
+
+
+def expand_unresolvable_github_refs(lock_text: str, token: str | None = None) -> tuple[str, int]:
+    """Rewrite `github:` lockfile refs that nix cannot resolve, to a commit sha.
+
+    Bun records the object a `github:owner/repo#<tag>` dependency resolved to as
+    a 7-char abbreviation. For a COMMIT that is fine — nix asks
+    /repos/o/r/commits/<ref>, which accepts a prefix, and roborev's and kata's
+    `@kenn-io/kit-ui` take exactly that path, so this function deliberately
+    leaves them byte-identical rather than churning two committed pins.
+
+    But for an ANNOTATED tag, bun records the sha of the TAG OBJECT, which is
+    not a commit, so that endpoint answers 422 "No commit found for SHA" and the
+    fetch dies deep inside bun2nix, nowhere near its cause. forge's
+    `@kenn-io/kata-ui` (`github:kenn-io/kata#v0.14.3`, recorded as
+    `kata@github:kenn-io/kata#c668572`, the tag object `c6685725...`) is the
+    first instance, and nothing about it is forge-specific — any dependency on
+    an annotated tag will do it.
+
+    Only unresolvable refs are rewritten, and to the COMMIT the tag names, not
+    to the widened tag-object sha: bun2nix asks for `github:<o>/<r>?ref=<sha>`,
+    and that form resolves through the commits endpoint at any length, so the
+    tag object fails at 40 chars too (measured, both forms). Verified equivalent
+    rather than assumed: `nix flake prefetch` of the tag object sha, the commit
+    it dereferences to, and the tag NAME all report the same NAR hash, so this
+    cannot change what gets fetched.
+    """
+    strict = re.sub(r",(\s*[}\]])", r"\1", lock_text)
+    data = json.loads(strict)
+    rewritten = 0
+    for entry in data.get("packages", {}).values():
+        if not isinstance(entry, list) or not entry or not isinstance(entry[0], str):
+            continue
+        m = GITHUB_IDENT_RE.search(entry[0])
+        if not m:
+            continue
+        owner, repo, ref = m.group("owner"), m.group("repo"), m.group("ref")
+        if FULL_SHA_RE.match(ref) or github_ref_is_a_commit(owner, repo, ref, token):
+            continue
+        full = commit_behind_tag_object(owner, repo, ref, token)
+        if not full:
+            msg = (
+                f"{entry[0]}: github ref {ref!r} is neither a commit nor an abbreviated "
+                f"tag object in {owner}/{repo} — cannot pin it, refusing to generate"
+            )
+            raise RuntimeError(msg)
+        entry[0] = entry[0][: m.start("ref")] + full + entry[0][m.end("ref") :]
+        rewritten += 1
+    return json.dumps(data, indent=2) + "\n", rewritten
+
 
 def git_tracks(path: Path) -> bool:
     """Whether git tracks `path`. True when git isn't available to ask.
@@ -419,8 +524,11 @@ def generate_bun_nix(repo: str, rev: str, flake_dir: Path) -> None:
         for path in [work, *work.rglob("*")]:
             path.chmod(path.stat().st_mode | 0o200)
         patched, rewritten = degrade_git_lock_entries((work / lock_rel).read_text())
-        (work / lock_rel).write_text(patched)
         log(f"    rewrote {rewritten} git/github lockfile entr{'y' if rewritten == 1 else 'ies'} for bun2nix")
+        patched, widened = expand_unresolvable_github_refs(patched, github_token())
+        if widened:
+            log(f"    widened {widened} abbreviated github ref{'' if widened == 1 else 's'} to a full sha")
+        (work / lock_rel).write_text(patched)
 
         generated = Path(tmp) / "bun.nix"
         cmd = [

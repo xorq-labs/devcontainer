@@ -132,11 +132,14 @@ nix build .#roborev-from-source
 nix build .#kata-from-source
 ./result/bin/kata version              # same
 ./result/bin/kata _web-assets-check    # kata's equivalent gate (hidden, like roborev's)
+
+nix build .#kenn-forge-from-source     # note: the BINARY name, not `forge`
+./result/bin/kenn-forge version        # same
 ```
 
 See ADR-0007 for the decision this graduates tools under (one at a time, kept
 as a separate output surface from release binaries, host-platform only, no
-CI). Six tools are wired up so far:
+CI). All seven tools are wired up:
 
 - **`kwt`** — no cgo dependencies, no embedded frontend. `buildGoModule`
   against a pinned Go 1.26.6 toolchain and a pinned rev, nothing else.
@@ -264,9 +267,46 @@ CI). Six tools are wired up so far:
     `web.ValidateEmbeddedRelease()` call roborev's `verify-web-assets` makes.
     Both are `Hidden: true` upstream; only the underscore differs.
 
-Only `forge` is left, and it is **no longer the highest-effort tool** — see
-ADR-0007's effort table. Two claims that ranked it there turned out to be
-wrong when checked (2026-08-20):
+- **`forge`** (as `kenn-forge-from-source` — the attribute and `pname` are the
+  BINARY name, the only tool where that differs from the repo) — the last to
+  graduate and, once checked, not the hardest. Two of the three claims that
+  ranked it highest-effort were wrong, and the third had a correction of its
+  own; all three are recorded below because each was falsified by reading a
+  file that had been sitting there the whole time. What it actually needed:
+  - **`SSL_CERT_FILE`, in a bun tool for the first time.** Its frontend tool is
+    `vite-plus` (`vp`), the same Rust-implemented Vite docbank and agentsview
+    use, so it panics on a missing CA bundle in the sandbox exactly as they do
+    — the one predicted quirk that turned up as predicted.
+  - **A lockfile ref nix cannot resolve, which is new and not forge-specific.**
+    Its `@kenn-io/kata-ui` dependency is `github:kenn-io/kata#v0.14.3`, an
+    ANNOTATED tag, and bun records the sha of the *tag object* rather than of a
+    commit (`kata@github:kenn-io/kata#c668572`). bun2nix asks nix for
+    `github:kenn-io/kata?ref=<sha>`, the `?ref=` form resolves through the
+    commits endpoint at any length, and a tag object is not a commit — so it
+    422s ("No commit found for SHA") at 7 chars and at 40 alike, deep inside
+    bun2nix and nowhere near its cause. `update.py`'s
+    `expand_unresolvable_github_refs` dereferences such a ref to the commit the
+    tag names, and only such a ref: an abbreviated COMMIT prefix (roborev's and
+    kata's `kit-ui`) resolves fine and is left byte-identical rather than
+    churning two committed pins. Measured, not assumed — the tag object, the
+    commit it dereferences to, and the tag name all prefetch to the same NAR
+    hash.
+  - **Its "not a stub" gate has to be built, not called.** It has no
+    `verify-web-assets`/`_web-assets-check`; `internal/web/embed.go` exposes
+    only `Assets()`. Worse, the obvious test is inverted: `make frontend`
+    writes `stub.html` back INTO the built dist, so its presence proves
+    nothing. So the derivation gates twice — `preBuild` refuses a dist with no
+    `index.html`, and `installCheckPhase` greps the BINARY for Vite's
+    `assets/index-<hash>.js` entry chunk, which the real build carries 490
+    asset references' worth of and a frontend-less binary carries none of
+    (checked both ways against `kwt-from-source` before trusting it).
+  - **It is the one unfree tool** (Elastic-2.0), so `meta.license` says so and
+    `pname` must stay `kenn-forge` for `flake.nix`'s scoped
+    `allowUnfreePredicate` to keep matching it. No join changes: source builds
+    are not in any join.
+
+Two claims that ranked forge highest-effort turned out to be wrong when checked
+(2026-08-20), and are kept here because the derivation's shape is the result:
 
 - **Its Rust component is out of scope.** The released `kenn-forge` neither
   bundles, fetches, nor requires `rust/pty-manager`:
@@ -295,15 +335,12 @@ wrong when checked (2026-08-20):
   its scope (`kata@github:kenn-io/kata#c668572`).
 
 Forge has **no `.goreleaser.yaml`** (it releases from a workflow, unlike kata
-and roborev), so `CGO_ENABLED` and build tags come from there — read
-2026-08-21: both build jobs set `CGO_ENABLED: "0"` and no job passes `-tags`
-at all, and the release builds `./cmd/kenn-forge` only, not the `Makefile`'s
-second `cmd/kenn-forge-github-app` binary. Its
-frontend tooling is `vite-plus`, the same Rust-implemented Vite docbank and
-agentsview needed `SSL_CERT_FILE` for — expect that CA-bundle panic here too,
-the first time that quirk crosses into a bun tool.
+and roborev), so `CGO_ENABLED` and build tags come from there: both build jobs
+set `CGO_ENABLED: "0"` and no job passes `-tags` at all, and the release builds
+`./cmd/kenn-forge` only, not the `Makefile`'s second `cmd/kenn-forge-github-app`
+binary. The derivation matches all three.
 
-All six are **maintained pins**, not point-in-time proofs:
+All seven are **maintained pins**, not point-in-time proofs:
 `nix/kenn/source-builds.json` holds the committed `rev`/`srcHash`/`vendorHash`
 (and the npm tools' `npmDepsHash`), `nix/kenn/bun/<tool>.nix` holds the
 generated bun2nix expression for the tools that need one, and `update.py` (or

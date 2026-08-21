@@ -626,6 +626,140 @@ let
         sourceProvenance = [ lib.sourceTypes.fromSource ];
       };
     };
+  # forge: tool #7, the last one (ADR-0007 decision 1). Structurally roborev's
+  # and kata's block — root bun.lock workspace, no committed bun.nix, arity-4
+  # `github:` dependencies needing update.py's lockfile rewrite — so their
+  # comments explain this one too and are not repeated. What differs was read
+  # out of .github/workflows/release.yml, not guessed: forge ships no
+  # .goreleaser.yaml, so the workflow IS its release config (ADR-0007's forge
+  # row). CGO_ENABLED: "0" in both its build jobs, no -tags anywhere, and
+  # ./cmd/kenn-forge only — the Makefile's second binary,
+  # cmd/kenn-forge-github-app, is not released and is not built here.
+  #
+  # Four things are forge-specific:
+  #
+  #   1. The frontend tool is vite-plus ("vp"), not vite, so it needs the same
+  #      SSL_CERT_FILE docbank's and agentsview's npm frontends do — vp
+  #      initialises an HTTP client even for a fully offline build and panics
+  #      without a CA bundle. First time that quirk meets a bun tool.
+  #   2. ONE frontend is built, not two. The workspace covers frontend/ AND
+  #      packages/github-app-ui/, but release.yml builds frontend/ alone and
+  #      leaves internal/githubapp/ui/dist on its committed stub — so the
+  #      released binary's GitHub-App setup page is itself a stub, which
+  #      internal/githubapp/ui/embed.go states outright and HasBuiltApp()
+  #      reports at runtime. Matching what the release ships is the standard the
+  #      other six were held to; building the extra frontend here would make
+  #      -from-source a different product from the release pin beside it.
+  #   3. There is no verify-web-assets / _web-assets-check equivalent (roborev
+  #      and kata both have one), and the obvious stub test is INVERTED: `make
+  #      frontend` writes stub.html back into the BUILT dist, so its presence
+  #      proves nothing. index.html is what separates a real build from the
+  #      committed stub, hence the two checks below.
+  #   4. It is the one unfree tool (Elastic-2.0). meta.license says so, and
+  #      pname must stay "kenn-forge" for flake.nix's allowUnfreePredicate
+  #      (`lib.getName pkg == "kenn-forge"`) to keep matching this derivation.
+  kenn-forge-from-source =
+    let
+      pin = sourceBuilds.forge;
+      forgeSrc = fetchFromGitHub {
+        owner = "kenn-io";
+        repo = "forge";
+        rev = pin.rev;
+        hash = pin.srcHash;
+      };
+      srcWithBunNix = runCommand "kenn-forge-src-with-bun-nix" { } ''
+        cp -R ${forgeSrc} "$out"
+        chmod -R u+w "$out"
+        cp ${./bun/forge.nix} "$out/bun.nix"
+      '';
+      bunDeps =
+        let
+          base = bun2nix.fetchBunDeps { bunNix = "${srcWithBunNix}/bun.nix"; };
+        in
+        runCommand "kenn-forge-bun-deps" { } ''
+          mkdir -p "$out/share/bun-cache"
+          cp -RL ${base}/share/bun-cache/. "$out/share/bun-cache/"
+          chmod -R u+w "$out/share/bun-cache"
+        '';
+    in
+    buildGoModule {
+      pname = "kenn-forge"; # the BINARY name — see (4) above before renaming
+      version = pin.rev;
+      src = srcWithBunNix;
+
+      vendorHash = pin.vendorHash;
+
+      inherit bunDeps;
+      # bunRoot deliberately unset — the lockfile is at the repo root.
+      bunInstallFlags = [
+        "--linker=hoisted"
+        "--backend=copyfile"
+      ];
+      dontRunLifecycleScripts = true;
+      dontUseBunBuild = true;
+      dontUseBunCheck = true;
+      dontUseBunInstall = true;
+
+      nativeBuildInputs = [
+        bun2nix.hook
+        nodejs
+      ];
+      overrideModAttrs = _: previous: {
+        nativeBuildInputs = builtins.filter (
+          input: (input.name or "") != "bun2nix-hook"
+        ) previous.nativeBuildInputs;
+        preBuild = "";
+      };
+
+      # See (1) above.
+      env.SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
+
+      # release.yml's "Build frontend" + "Embed frontend" steps, with its `bun
+      # install` replaced by the bun2nix hook's offline one. The vp invocation
+      # is frontend/package.json's own `build` script verbatim, which reaches UP
+      # out of frontend/ because the workspace install is hoisted (roborev's
+      # comment (1) is the explanation).
+      preBuild = ''
+        pushd frontend
+        node ../node_modules/vite-plus/bin/vp build --logLevel warn
+        popd
+        find internal/web/dist -mindepth 1 -exec rm -rf {} +
+        cp -R frontend/dist/. internal/web/dist/
+        # Fail here rather than embedding a stub: see (3) above for why
+        # index.html, and not the absence of stub.html, is the test.
+        test -f internal/web/dist/index.html
+      '';
+
+      subPackages = [ "cmd/kenn-forge" ];
+      env.CGO_ENABLED = 0; # release.yml sets this on both build jobs
+      doCheck = false;
+
+      doInstallCheck = true;
+      installCheckPhase = ''
+        runHook preInstallCheck
+        export HOME="$(mktemp -d)"
+        "$out/bin/kenn-forge" version
+        # The fallback (3) above describes, since there is no subcommand to ask.
+        # preBuild already refused to embed a dist without an index.html; this
+        # asks the stronger question — did it reach the BINARY? Vite names the
+        # entry chunk assets/index-<hash>.js and the stub references nothing of
+        # the sort, so one grep separates a real embed from a stub. The built
+        # binary carries 490 such asset references; requiring the entry chunk
+        # specifically keeps the check from passing on an incidental string.
+        grep -aqE 'assets/index-[A-Za-z0-9_-]+\.js' "$out/bin/kenn-forge"
+        runHook postInstallCheck
+      '';
+
+      meta = {
+        description = "kenn-io/forge, built from ${pin.rev} rather than a release binary";
+        homepage = "https://github.com/kenn-io/forge";
+        mainProgram = "kenn-forge";
+        # Elastic-2.0, which nixpkgs marks unfree — see (4) above and
+        # flake.nix's scoped allowUnfreePredicate.
+        license = lib.licenses.elastic20;
+        sourceProvenance = [ lib.sourceTypes.fromSource ];
+      };
+    };
 in
 {
   inherit mkKennToolFromSource;
@@ -640,4 +774,5 @@ in
   inherit msgvault-from-source;
   inherit roborev-from-source;
   inherit kata-from-source;
+  inherit kenn-forge-from-source;
 }

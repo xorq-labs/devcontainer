@@ -77,37 +77,34 @@
 #
 # Third pair, for §6's ADR-0007 source-build shape guard (added 2026-08-20):
 #   1. FORM-ONLY — reorder SOURCE_BUILD_TOOLS's keys and add a blank line
-#      between two of them in update.py. Green: 76 passed, 0 failed — the shape
+#      between two of them in update.py. Green: 75 passed, 0 failed — the shape
 #      checks read the dict's keys/values, not its literal layout.
-#      (Re-run 2026-08-20: this half said "two keys / 71 passed" from when the
-#      dict had two entries, and went stale unnoticed while the semantic half
-#      beside it was rewritten twice. A recorded run whose numbers no longer
-#      reproduce is the one thing ADR-0005 §2 exists to prevent — so when you
-#      touch one half of a pair, re-run the other.)
-#   2. SEMANTIC, in a form this suite does not write — add an entry for a tool
-#      that has not graduated to SOURCE_BUILD_TOOLS without touching
-#      source-build.nix or source-builds.json (i.e. exactly the mistake of
-#      declaring a tool graduated without building its derivation or pinning
-#      it). Use `"forge": []` — `forge` is the only ungraduated tool left, and
-#      this mutation has now been rewritten twice as tools graduated under it
-#      (it was `"roborev": []`, then briefly `"kata": []`), which is the whole
-#      reason §4 below DERIVES its ungraduated tool instead of naming one.
-#      Re-run 2026-08-20 with `"forge": []`. Observed red:
+#   2. SEMANTIC, in a form this suite does not write — COMMENT OUT (not delete)
+#      ANY ONE entry of SOURCE_BUILD_TOOLS, leaving its derivation in
+#      source-build.nix, its pin in source-builds.json and its attribute in
+#      flake.nix: the mapping and the three things keyed off it fall out of
+#      step, which is this guard's whole subject. Observed red:
 #        FAIL: source-build.nix exposes exactly SOURCE_BUILD_TOOLS's attrs
+#        FAIL: flake.nix's packages output re-exposes exactly those attrs
 #        FAIL: source-builds.json is pinned for exactly SOURCE_BUILD_TOOLS
-#        SKIP: every tool has graduated, nothing left to refuse
-#      Results: 72 passed, 2 failed
-#      The SKIP is expected and is §4 behaving correctly, not collateral
-#      damage: with forge declared graduated there is no ungraduated tool left
-#      for the refusal test to use, so it stands down rather than inventing
-#      one. That is two fewer assertions than the 74/2 of the previous run,
-#      and the same two failures.
-#   (mutation runs 2026-08-20)
+#        FAIL: SOURCE_BUILD_BUN_NIX is a subset of SOURCE_BUILD_TOOLS
+#      Results: 73 passed, 4 failed
+#      NAMES NO TOOL, deliberately. This mutation was rewritten three times as
+#      tools graduated under it — `"roborev": []`, then `"kata": []`, then
+#      `"forge": []`, each a bare "add an ungraduated tool" that stopped being a
+#      mutation the moment that tool graduated. With all seven graduated there
+#      is no ungraduated tool left to name, so the mutation now runs the
+#      coupling backwards instead, and no assertion in the observed output
+#      names a tool either. Same reason §4 below DERIVES its ungraduated tool.
+#      (This form also puts §4 back to work: with one tool declared
+#      ungraduated its refusal test runs instead of skipping, which is why the
+#      total here is 77 assertions against the baseline's 75.)
+#   (mutation runs 2026-08-20; re-run and semantic half rewritten 2026-08-21)
 #
 # Fourth pair, for §6's SOURCE_BUILD_BUN_NIX coverage — the generated-file half
 # of a source-build pin (ADR-0007's 2026-08-20 amendment, added same day):
 #   1. FORM-ONLY — collapse SOURCE_BUILD_BUN_NIX to a single-line dict literal
-#      and hoist its trailing comment above the assignment. Green: 76 passed,
+#      and hoist its trailing comment above the assignment. Green: 75 passed,
 #      0 failed — assertion count unchanged.
 #   2. SEMANTIC, in a form this suite does not write — COMMENT OUT the
 #      `"roborev"` key, leaving nix/kenn/bun/roborev.nix committed and still
@@ -117,7 +114,7 @@
 #      sitting next to it in source-builds.json. Observed red:
 #        FAIL: every committed generated bun.nix belongs to a
 #              SOURCE_BUILD_BUN_NIX tool
-#      Results: 75 passed, 1 failed
+#      Results: 74 passed, 1 failed
 #   And for degrade_git_lock_entries, whose failure is likewise silent —
 #   replace the `"@github:" in entry[0] or "@git+" in entry[0]` detection with
 #   the naive `entry[0].rsplit("@", 1)[-1].startswith(("github:", "git+"))`,
@@ -129,21 +126,44 @@
 #
 # Fifth pair, for §6's flake.nix exposure check — the fourth encoding of the
 # source-build set, unguarded until now (added 2026-08-21):
-#   1. FORM-ONLY — rewrite the single multi-line `inherit (sourceBuilds)` as two
-#      one-line `inherit` statements splitting the six attrs 3/3. Green: 77
+#   1. FORM-ONLY — rewrite the single multi-line `inherit (sourceBuilds)` as
+#      three one-line `inherit` statements. Green: 75
 #      passed, 0 failed — assertion count unchanged. The check reads names out
 #      of the `packages` region, not the shape of the statement carrying them.
-#   2. SEMANTIC, in a form this suite does not write — neutralise
-#      `kata-from-source` with a Nix BLOCK comment (`/* kata-from-source */`)
-#      rather than deleting the line or using a `#`. Observed red:
+#   2. SEMANTIC, in a form this suite does not write — neutralise one attribute
+#      with a Nix BLOCK comment (`/* <attr>-from-source */`) rather than
+#      deleting the line or using a `#`. Observed red:
 #        FAIL: flake.nix's packages output re-exposes exactly those attrs
-#      Results: 76 passed, 1 failed
+#      Results: 74 passed, 1 failed
 #      This mutation earned its keep: the first version of the check stripped
 #      only `#.*` and passed this GREEN — the attribute genuinely unexposed,
 #      every assertion agreeing it was fine. The parser now strips both Nix
 #      comment forms. Recorded because it is the clearest instance in this file
 #      of §2's rule working as designed: the mutation aimed at the invariant
 #      (delete the line) would have passed the broken parser.
+#   (mutation runs 2026-08-21, re-run the same day once forge graduated: the
+#   baseline moved 77 -> 75 because §4's refusal test has no ungraduated tool
+#   left to use and stands down, which is what its SKIP line records.)
+#
+# Sixth pair, for §6's expand_unresolvable_github_refs coverage — the second
+# lockfile rewrite generation does, added with forge (2026-08-21; baseline 76):
+#   1. FORM-ONLY — rewrite the leave-it-alone guard from one `or`-ed `if` into a
+#      `resolvable` local set in two steps. Green: 76 passed, 0 failed — the
+#      test drives the function, so the shape of that condition is not
+#      load-bearing.
+#   2. SEMANTIC, in a form this suite does not write — return the tag OBJECT's
+#      own sha instead of dereferencing it to a commit (the widen-only fix,
+#      which is the version anyone would write first: it is what "expand an
+#      abbreviated sha" literally means, and it fails at 40 chars exactly as at
+#      7 because bun2nix's `?ref=` form resolves through the commits endpoint).
+#      The http_get call is commented out rather than deleted. Observed red:
+#        FAIL: expand_unresolvable_github_refs rewrites only what nix cannot
+#              resolve, to a commit
+#      Results: 75 passed, 1 failed
+#      Worth recording because this mutation is not a hypothetical: widening was
+#      the first implementation, it was committed to a run against the real
+#      registry, and the 422 came back identical. The test asserts the COMMIT
+#      specifically for that reason.
 #   (mutation runs 2026-08-21)
 #
 # Both python-driven blocks below report through `$rc`, not `$?`: under `set -e`
@@ -919,6 +939,124 @@ sys.exit(0 if ok else 1)
 PY
 assert_eq "degrade_git_lock_entries rewrites only git/github entries, and the backstop catches a miss" 0 "$rc"
 
+# expand_unresolvable_github_refs: the SECOND lockfile rewrite generation does,
+# added with forge. Bun records an ANNOTATED tag's object sha for a
+# `github:owner/repo#<tag>` dependency, and bun2nix asks nix for
+# `github:owner/repo?ref=<sha>` — a form that resolves through the commits
+# endpoint at any length, so a tag object is refused at 40 chars exactly as at
+# 7. Two directions to get wrong, hence both are driven here: rewrite too
+# little and forge cannot build at all; rewrite too much and roborev's and
+# kata's committed bun.nix churn for no behaviour change (their kit-ui ref is an
+# abbreviated COMMIT, which resolves fine and must be left alone).
+#
+# Hermetic because update.py's only network entry point is http_get: it is
+# replaced here with a canned GitHub, so the 422-on-a-tag-object shape is
+# exercised for real without touching the network.
+rc=0
+python3 - "$KENN" <<'PY' || rc=$?
+import importlib.util
+import json
+import sys
+import urllib.error
+from pathlib import Path
+
+kenn = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("kenn_update", kenn / "update.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+ok = True
+
+
+def check(name, got, want):
+    global ok
+    if got != want:
+        ok = False
+        print(f"FAIL: {name}: got {got!r}, want {want!r}")
+
+
+TAG_OBJ = "c6685725ecd6a31aaea83cf98908e0c866c5d434"
+COMMIT = "410ee88bca267b117c845a36f8249890c5160e3b"
+LIGHTWEIGHT = "dddddddddddddddddddddddddddddddddddddddd"
+calls = []
+
+
+def fake_http_get(url, token=None):
+    calls.append(url)
+    # A commit prefix resolves; a tag-object prefix does not, which is the whole
+    # asymmetry this function exists for.
+    if "/commits/" in url:
+        ref = url.rsplit("/", 1)[-1]
+        if ref in ("97be355", COMMIT):
+            return json.dumps({"sha": COMMIT}).encode()
+        raise urllib.error.HTTPError(url, 422, "Unprocessable Entity", {}, None)
+    if "/git/refs/tags" in url:
+        return json.dumps(
+            [
+                {"ref": "refs/tags/v0.1.0", "object": {"sha": LIGHTWEIGHT, "type": "commit"}},
+                {"ref": "refs/tags/v0.14.3", "object": {"sha": TAG_OBJ, "type": "tag"}},
+            ]
+        ).encode()
+    if "/git/tags/" in url:
+        return json.dumps({"object": {"sha": COMMIT, "type": "commit"}}).encode()
+    raise AssertionError(f"unexpected URL: {url}")
+
+
+mod.http_get = fake_http_get
+
+lock = json.dumps(
+    {
+        "packages": {
+            "@kenn-io/kit-ui": ["@kenn-io/kit-ui@github:kenn-io/kit-ui#97be355", {}, "sha512-KIT=="],
+            "@kenn-io/kata-ui": ["kata@github:kenn-io/kata#c668572", {}, "sha512-KATA=="],
+            "vite": ["vite@8.1.3", "", {}, "sha512-NPM=="],
+        }
+    }
+)
+out, widened = mod.expand_unresolvable_github_refs(lock, None)
+pkgs = json.loads(out)["packages"]
+
+check("only the unresolvable ref is rewritten", widened, 1)
+check(
+    "an abbreviated COMMIT ref is left byte-identical (no pin churn)",
+    pkgs["@kenn-io/kit-ui"][0],
+    "@kenn-io/kit-ui@github:kenn-io/kit-ui#97be355",
+)
+# The commit the tag dereferences to, NOT the widened tag-object sha: widening
+# alone is the fix that looks right and fails identically.
+check(
+    "a tag-object ref becomes the COMMIT the tag names",
+    pkgs["@kenn-io/kata-ui"][0],
+    f"kata@github:kenn-io/kata#{COMMIT}",
+)
+check("an ordinary npm entry is untouched", pkgs["vite"][0], "vite@8.1.3")
+check("the rewrite dereferences via the tag object, not the refs listing alone", any("/git/tags/" in c for c in calls), True)
+
+# A ref that is neither a commit nor a tag object must REFUSE, not pass through
+# to bun2nix as an unresolvable fetch.
+try:
+    mod.expand_unresolvable_github_refs(
+        json.dumps({"packages": {"x": ["x@github:kenn-io/kata#ffffff9", {}, "sha512-X=="]}}), None
+    )
+    ok = False
+    print("FAIL: an unresolvable github ref should raise, not be written")
+except RuntimeError as exc:
+    if "cannot pin it" not in str(exc):
+        ok = False
+        print(f"FAIL: the refusal should say what it could not do: {exc}")
+
+# A lightweight tag whose sha the commits endpoint already refused is a
+# contradiction, not something to pin anyway.
+check(
+    "a lightweight-tag match is refused rather than pinned",
+    mod.commit_behind_tag_object("kenn-io", "kata", LIGHTWEIGHT[:7], None),
+    None,
+)
+
+sys.exit(0 if ok else 1)
+PY
+assert_eq "expand_unresolvable_github_refs rewrites only what nix cannot resolve, to a commit" 0 "$rc"
+
 # --- argument handling + do_source_check's report contract -------------------
 # Reuses the real driver from section 3, extended with a "commits" map so
 # commit_sha() (do_source_check's only network call) resolves hermetically.
@@ -969,6 +1107,11 @@ assert_eq "--source write/check needs exactly one --tool" 2 \
 # it failed for a reason unrelated to what it checks. Deriving it means this
 # keeps testing the refusal for as long as ANY tool is ungraduated, and turns
 # into a clean skip rather than a false failure when none is.
+#
+# As of 2026-08-21 that skip is the STANDING state, not a hypothetical: forge
+# graduated, so all seven tools have derivations and there is nothing left for
+# this to refuse. It stays because un-graduating a tool is explicitly reversible
+# (ADR-0007's Consequences), which would put it back to work.
 ungraduated="$(comm -23 <(sb_get tools | tr ',' '\n' | sort) <(sb_get sb_tools | tr ',' '\n' | sort) | head -1)"
 if [ -n "$ungraduated" ]; then
     out="$(drive source-universe.json --source --tool "$ungraduated" --rev main || true)"

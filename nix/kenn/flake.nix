@@ -95,6 +95,7 @@
             msgvault-from-source
             roborev-from-source
             kata-from-source
+            kenn-forge-from-source
             ;
         }
       );

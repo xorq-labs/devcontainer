@@ -77,10 +77,11 @@ seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
 taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
 reserved by #81), ADR-0006 (structural auditing as prompted agents, not metric
 tooling; amended 2026-08-04 so committing an audit report is optional),
-ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool;
-kwt, docbank, agentsview, msgvault, roborev and kata graduated so far —
-derivation, `update.py --source` bump mode, drift guard, CLAUDE.md line;
-amended 2026-08-20 so a pin may include a generated file, not only hashes), and
+ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool; all
+seven graduated as of 2026-08-21, each with the four parts — derivation,
+`update.py --source` bump mode, drift guard, CLAUDE.md line; amended 2026-08-20
+so a pin may include a generated file, not only hashes; Accepted, and
+un-graduating a tool stays reversible per tool), and
 nix/base/README.md "Design decisions" for the
 base-image record.
 
@@ -289,8 +290,8 @@ taxonomy and reads as `test:`.
   the fragment against a stubbed direnv over four real on-disk layouts and
   derives the sibling name from the template rather than restating it, so the
   spelling of neither file is load-bearing).
-- Source-build tools (ADR-0007: `kwt`, `docbank`, `agentsview`, `msgvault`,
-  `roborev`, `kata` so far) are a SEPARATE, smaller pin space from the release
+- Source-build tools (ADR-0007 — all seven, as of 2026-08-21) are a SEPARATE,
+  smaller pin space from the release
   toolkit above: `nix/kenn/source-builds.json`
   (a rev + hashes, not a version + per-platform manifest) is read by
   `nix/kenn/source-build.nix`, and `update.py`'s `SOURCE_BUILD_TOOLS` names
@@ -335,6 +336,17 @@ taxonomy and reads as `test:`.
   rewrite missed). Whether a committed file still matches its rev is `tool:`
   like the hashes — the build fails, because a stale `bun.nix` makes the
   offline `bun install` miss packages rather than silently succeed.
+  Generation does a SECOND lockfile rewrite, and its two halves must not be
+  collapsed: `expand_unresolvable_github_refs` dereferences a `github:` ref
+  that nix cannot resolve — bun records an ANNOTATED tag's object sha, and
+  bun2nix's `?ref=` form resolves through the commits endpoint, which 422s on a
+  tag object at 7 chars and at 40 alike — while deliberately leaving an
+  abbreviated COMMIT prefix alone, because rewriting those would churn
+  roborev's and kata's committed `bun.nix` for no behaviour change. Widening
+  instead of dereferencing looks like the fix and is not: it fails identically
+  (`test: tests/test-bump-kenn.sh` §6, which drives both branches plus the
+  refusal against a stubbed `http_get`; equivalence of the three spellings is
+  `tool:` — measured by `nix flake prefetch`, no fixture can assert it).
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and
