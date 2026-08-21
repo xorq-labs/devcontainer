@@ -377,6 +377,23 @@ with the stub frontend as its own flake does (cheap, but delivers strictly less
 than the release binary the flake already ships, which makes the source build
 pointless for the one tool people would reach for it on).
 
+#### Addendum: the generated file is a PAIR, not one file (2026-08-21)
+
+Written as one file above, and `forge` showed it is two. Generation rewrites the
+fetched `bun.lock` before running bun2nix (`expand_unresolvable_github_refs`
+dereferences a `github:` ref nix cannot resolve), and that rewrite has to reach
+the lockfile the BUILD ships, not only bun2nix's input: bun2nix's runtime hook
+re-derives its lookup key from whatever `bun.lock` is present at build time, so
+a widened ref in `bun/<tool>.nix` alone builds cleanly to
+`bunNodeModulesInstallPhase` and dies there on `FailedToOpenSocket` —
+`kenn-forge-from-source` did exactly that. So the same `--source` run also
+commits `nix/kenn/bun/<tool>.lock`, **only when widening actually happened**,
+and `source-build.nix` copies it over the fetched lockfile when present
+(`builtins.pathExists`) for every `SOURCE_BUILD_BUN_NIX` tool alike. The
+consequences above carry over unchanged, including the orphan direction — and
+the shape half of both directions is now guarded for the `.lock` as it already
+was for the `.nix` (`tests/test-bump-kenn.sh` §6).
+
 **4. The drift guard lands in the same change as Decision 3, not gated on any
 tool count.** [Implemented — shape half only, by design; see Decision 3.] The
 original text here tied the guard to "the second graduated tool," reasoning

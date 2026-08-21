@@ -363,10 +363,18 @@ taxonomy and reads as `test:`.
   arity-4 entry, the cache-key element `<owner>-<repo>-<ref>` — and both must
   widen together: bun's own install reads the cache key back when it cannot
   satisfy a dependency locally, so widening `ident` alone left the live error
-  naming the OLD ref (`test: tests/test-bump-kenn.sh` §6 covers both the
-  generated-file plumbing and the two-element widening against a stubbed
-  `http_get`; that a real build now succeeds is `tool:` — no fixture reaches
-  bun's own cache-key lookup, only a real `nix run` does).
+  naming the OLD ref (`test: tests/test-bump-kenn.sh` §6, which drives the
+  two-element widening against a stubbed `http_get` AND covers the second
+  generated file's plumbing in both silent directions the way it already
+  covered the `bun.nix`: every `SOURCE_BUILD_BUN_NIX` tool has a
+  `./bun/<repo>.lock` copy in `source-build.nix` landing on `bun.lock`, and
+  every committed `bun/*.lock` belongs to a tool still in that mapping. The
+  first citation of this invariant claimed the plumbing half and the suite did
+  not have it — an orphan lock and a deleted copy block both merged green,
+  which is #95's shape. An inert-but-present copy block is out of a text
+  search's reach and stays uncovered; the realistic direction is an absent one.
+  That a real build succeeds remains `tool:` — no fixture reaches bun's own
+  cache-key lookup, only a real `nix run` does).
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and

@@ -385,10 +385,21 @@ def github_ref_is_a_commit(owner: str, repo: str, ref: str, token: str | None) -
 
     That fetcher asks /repos/<o>/<r>/commits/<ref> for anything that is not a
     full 40-char sha, so this is the same question it will ask.
+
+    Only a 404/422 answers the question. A 403/429 is a rate limit — the same
+    unauthenticated-API ceiling this tool already warns about — and reading it
+    as "not a commit" sent the caller off to dereference a tag that does not
+    exist, refusing a perfectly good rev with a message pointing away from the
+    cause. Raise instead: unresolvable is unresolvable, but say which.
     """
     try:
         http_get(f"https://api.github.com/repos/{owner}/{repo}/commits/{ref}", token)
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as exc:
+        if exc.code in (403, 429):
+            raise RuntimeError(
+                f"GitHub API rate-limited (HTTP {exc.code}) while resolving {owner}/{repo}@{ref}; "
+                "cannot tell whether the ref is a commit - set GH_TOKEN and retry"
+            ) from exc
         return False
     return True
 
@@ -404,12 +415,21 @@ def commit_behind_tag_object(owner: str, repo: str, ref: str, token: str | None)
 
     Paginated defensively: the repo that needed this has 19 tags, but a listing
     that silently ended early would look exactly like "no such tag".
+
+    A rate limit is distinguished from an empty answer for the same reason as
+    in `github_ref_is_a_commit`: "no such tag" and "GitHub would not tell me"
+    lead the reader to different places.
     """
     for page in range(1, 11):
         url = f"https://api.github.com/repos/{owner}/{repo}/git/refs/tags?per_page=100&page={page}"
         try:
             refs = json.loads(http_get(url, token))
-        except urllib.error.HTTPError:
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 429):
+                raise RuntimeError(
+                    f"GitHub API rate-limited (HTTP {exc.code}) while listing {owner}/{repo} tags; "
+                    "cannot resolve the ref - set GH_TOKEN and retry"
+                ) from exc
             return None
         if not refs:
             return None
@@ -743,7 +763,14 @@ def do_source_write(repo: str, rev_ref: str, token: str | None, flake_dir: Path)
         if repo in SOURCE_BUILD_BUN_NIX:
             generate_bun_nix(repo, sha, flake_dir)
         discover_source_hashes(flake_dir, attr, working, repo)
-    except Exception:
+    except BaseException:
+        # BaseException, not Exception: discovery rewrites source-builds.json
+        # with FAKE_HASH placeholders every round and each round is a full
+        # `nix build` of minutes, so Ctrl-C lands inside the try far more often
+        # than any error does — and an `except Exception` lets KeyboardInterrupt
+        # straight past the rollback, leaving placeholder hashes committed-shaped
+        # on disk under a real rev. Re-raised either way, so this is a cleanup
+        # handler rather than a blind except.
         rollback()
         raise
     log(f"  {repo:<12} {sha[:12]} written to {SOURCE_BUILDS.name} ({attr} builds clean)")
@@ -788,6 +815,14 @@ def do_source_verify(targets: list[str], flake_dir: Path) -> int:
             log(f"  {repo:<12} FAILED - not pinned in {SOURCE_BUILDS.name}")
             failed.append(repo)
             continue
+        rev = entry.get("rev") if isinstance(entry, dict) else None
+        if not rev:
+            # A hand-edited entry with no rev used to reach `entry['rev']` below
+            # and traceback out of the loop, taking the other tools' results
+            # with it. It is a bad pin like any other: report it and carry on.
+            log(f"  {repo:<12} FAILED - no rev in {SOURCE_BUILDS.name} (rerun --source --tool {repo} --rev <ref>)")
+            failed.append(repo)
+            continue
         if repo in SOURCE_BUILD_BUN_NIX and not (BUN_NIX_DIR / f"{repo}.nix").is_file():
             # nix would fail this on its own a second later, but on a path error
             # rather than on the fact — say the fact.
@@ -797,9 +832,9 @@ def do_source_verify(targets: list[str], flake_dir: Path) -> int:
         attr = f"{TOOLS[repo]}-from-source"
         result = nix_build(flake_dir, attr)
         if result.returncode == 0:
-            log(f"  {repo:<12} {entry['rev'][:12]}  OK")
+            log(f"  {repo:<12} {rev[:12]}  OK")
         else:
-            log(f"  {repo:<12} {entry['rev'][:12]}  FAILED - nix build .#{attr} did not succeed")
+            log(f"  {repo:<12} {rev[:12]}  FAILED - nix build .#{attr} did not succeed")
             failed.append(repo)
 
     for repo in sorted(set(existing) - set(SOURCE_BUILD_TOOLS)):
@@ -971,7 +1006,14 @@ def main() -> int:
                 log("--rev cannot be combined with --source --verify: --verify gates the rev already committed")
                 return 2
             targets = args.tool or sorted(SOURCE_BUILD_TOOLS)
-            return do_source_verify(targets, FLAKE_DIR)
+            try:
+                return do_source_verify(targets, FLAKE_DIR)
+            except Exception as exc:  # noqa: BLE001 - a clean error, not a traceback
+                # Same wrapper the write path gets: a malformed
+                # source-builds.json is a gate failure to report, not a stack
+                # trace. Per-tool problems are already reported inside.
+                log(f"FAILED - {exc}")
+                return 1
 
         # write and check both need exactly one tool: unlike a release
         # version, a git ref has no meaning shared across repos.

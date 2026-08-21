@@ -166,6 +166,67 @@
 #      specifically for that reason.
 #   (mutation runs 2026-08-21)
 #
+# Seventh pair, for §6's source-build.nix parse — the fifth pair's fix applied
+# to the OTHER parser in the same block (2026-08-21 review; baseline 78):
+#   1. FORM-ONLY — hoist kata's trailing `# see the block comment` comment onto
+#      its own line, with a blank line above it. Green: 78 passed, 0 failed.
+#   2. SEMANTIC, in a form this suite does not write — comment out, don't
+#      delete, once per parser this file reads out of source-build.nix:
+#      `# inherit kata-from-source;` in the final attrset, and
+#      `/* cp ${./bun/kata.nix} "$out/bun.nix" */`. Observed red, separately:
+#        FAIL: source-build.nix exposes exactly SOURCE_BUILD_TOOLS's attrs
+#        FAIL: source-build.nix imports every generated bun.nix update.py writes
+#      Results: 77 passed, 1 failed each
+#      Both passed GREEN before this run: the fifth pair fixed comment
+#      stripping in the flake.nix parser and left the source-build.nix one
+#      reading raw text, so a commented-out `inherit` — the natural first step
+#      of un-graduating a tool, which ADR-0007 keeps reversible — satisfied
+#      every assertion while `nix build .#kata-from-source` died on `attribute
+#      missing`. The same run showed WHY the `#`-then-block order matters here
+#      and not in the flake: two `#` comments in source-build.nix mention
+#      `packages/*`, so stripping blocks first paired that `/*` with the
+#      mutation's own `*/` and swallowed 150 lines, reporting a second,
+#      unrelated failure.
+#
+# Eighth pair, for §6's bun.lock plumbing — the SECOND generated file, whose
+# absence was the live `FailedToOpenSocket` (2026-08-21 review; baseline 78):
+#   1. FORM-ONLY — reflow forge's `cp ${./bun/forge.lock} "$out/bun.lock"`
+#      across three backslash-continued lines. Green: 78 passed, 0 failed —
+#      which is the point of the window rather than a same-line match.
+#   2. SEMANTIC, in a form this suite does not write — one mutation per
+#      direction: block-comment forge's whole `optionalString` copy block, and
+#      (separately) drop an orphan `nix/kenn/bun/msgvault.lock` in for the one
+#      bun tool deliberately NOT in SOURCE_BUILD_BUN_NIX. Observed red:
+#        FAIL: source-build.nix copies every generated bun.lock over the
+#              fetched one
+#        FAIL: every committed generated bun.lock belongs to a
+#              SOURCE_BUILD_BUN_NIX tool
+#      Results: 77 passed, 1 failed each
+#      A third, unpaired run points the copy at `"$out/web/lockfile"` instead of
+#      removing it, and is red too: the destination is checked, not just the
+#      reference, because a lock copied anywhere else is the live failure again
+#      with the plumbing apparently present. What a text search cannot reach is
+#      a copy block left present but inert (`false && builtins.pathExists ...`);
+#      that is not a plausible accident, and it is stated in CLAUDE.md rather
+#      than pretended away.
+#
+# Ninth pair, for the rate-limit branch in github_ref_is_a_commit /
+# commit_behind_tag_object (2026-08-21 review; baseline 78):
+#   1. FORM-ONLY — hoist `(403, 429)` into a module-level `RATE_LIMIT_CODES`.
+#      Green: 78 passed, 0 failed.
+#   2. SEMANTIC, in a form this suite does not write — restore the blind
+#      `except urllib.error.HTTPError: return False` / `return None`, once per
+#      function. Observed red:
+#        FAIL: the error should name the rate limit and the stage (resolving a
+#              ref): ... while listing kenn-io/kata tags ...
+#        FAIL: a rate limit while listing tags should raise, not read as an
+#              absent ref
+#      Results: 77 passed, 1 failed each
+#      The first line is why the assertion names the STAGE and not just the
+#      word "rate-limited": both lookups sit on one path, so a 403 swallowed by
+#      the commit half still raises a nearly-right error from the tags half a
+#      moment later. Asserted generically, that mutation ran GREEN.
+#
 # Both python-driven blocks below report through `$rc`, not `$?`: under `set -e`
 # a failing block aborts the suite before its own assert_eq can count it, which
 # is still red but reports one line instead of the section.
@@ -688,7 +749,24 @@ spec = importlib.util.spec_from_file_location("kenn_update", kenn / "update.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
-nix = (kenn / "source-build.nix").read_text()
+# Comments come out FIRST, before any of the three checks below read this
+# file: the attrset scan, the `pin.<field>` reference check and the generated
+# bun.nix/bun.lock import checks are all name searches, and a commented-out
+# line satisfies every one of them while the derivation genuinely loses the
+# thing named — #86/#97's shape, measured green here for `# inherit
+# kata-from-source;` and for a `#`-ed `cp ${./bun/kata.nix}` before this
+# stripping existed. Both Nix comment forms, for the reason recorded in the
+# fifth §2 pair (a `/* ... */` mutation walked through the `#.*`-only version
+# of the flake check). source-build.nix carries no `#` inside a string, and
+# over-stripping one day fails CLOSED — a lost `pin.` or import reference is a
+# red assertion, not a silent pass.
+#
+# `#` first, THEN blocks, which is not the order the flake half uses and is
+# load-bearing here: two `#` comments in this file mention `packages/*`, and
+# block-stripping first pairs that `/*` with the next real `*/` and eats
+# everything between — measured, a `/* ... */` mutation at kata's bun.nix copy
+# took kata's bun.lock line with it and reported a second, unrelated failure.
+nix = re.sub(r"/\*.*?\*/", "", re.sub(r"#.*", "", (kenn / "source-build.nix").read_text()), flags=re.S)
 # The final `in { ... }` attrset is where every exposed package attribute is
 # either bound directly (`kwt-from-source = ...`) or re-exposed via `inherit`
 # (`inherit docbank-from-source;`) — a single name-pattern search over just
@@ -771,6 +849,27 @@ out("sb_bun_nix_committed", ",".join(committed))
 rel_dir = mod.BUN_NIX_DIR.name
 missing_imports = sorted(r for r in mod.SOURCE_BUILD_BUN_NIX if f"./{rel_dir}/{r}.nix" not in nix)
 out("sb_bun_nix_missing_imports", ",".join(missing_imports) or "<none>")
+
+# The SECOND generated file: the widened bun.lock. Its plumbing is the one
+# coupling here whose failure was observed LIVE rather than reasoned about —
+# a widened ref that reaches bun/<repo>.nix but not the bun.lock the real
+# build ships builds all the way to bunNodeModulesInstallPhase and dies there
+# on FailedToOpenSocket, because bun2nix's runtime hook re-derives its lookup
+# key from the shipped lockfile. Two directions, both silent:
+#   - a SOURCE_BUILD_BUN_NIX tool source-build.nix never copies the lock for
+#     (generation writes it, the build ignores it — the live failure),
+#   - a committed bun/<repo>.lock for a tool no longer in SOURCE_BUILD_BUN_NIX
+#     (regenerated by nothing, so it rots against the rev beside it, the same
+#     orphan direction as the bun.nix check above).
+# The destination is checked too, not just the reference: a copy landing
+# anywhere other than bun.lock is the live failure again with the plumbing
+# apparently present. Window rather than same-line, so reflowing the copy
+# across lines stays form-only.
+lock_ref_pats = {r: re.escape(f"./{rel_dir}/{r}.lock") + r"[\s\S]{0,120}?bun\.lock" for r in mod.SOURCE_BUILD_BUN_NIX}
+missing_lock_plumbing = sorted(r for r, pat in lock_ref_pats.items() if not re.search(pat, nix))
+out("sb_bun_lock_missing_plumbing", ",".join(missing_lock_plumbing) or "<none>")
+committed_locks = sorted(p.stem for p in mod.BUN_NIX_DIR.glob("*.lock")) if mod.BUN_NIX_DIR.is_dir() else []
+out("sb_bun_lock_orphans", ",".join(sorted(set(committed_locks) - set(mod.SOURCE_BUILD_BUN_NIX))) or "<none>")
 PY
 )"
 
@@ -793,6 +892,10 @@ assert_eq "every committed generated bun.nix belongs to a SOURCE_BUILD_BUN_NIX t
     "$(sb_get sb_bun_nix)" "$(sb_get sb_bun_nix_committed)"
 assert_eq "source-build.nix imports every generated bun.nix update.py writes" \
     "<none>" "$(sb_get sb_bun_nix_missing_imports)"
+assert_eq "source-build.nix copies every generated bun.lock over the fetched one" \
+    "<none>" "$(sb_get sb_bun_lock_missing_plumbing)"
+assert_eq "every committed generated bun.lock belongs to a SOURCE_BUILD_BUN_NIX tool" \
+    "<none>" "$(sb_get sb_bun_lock_orphans)"
 
 # harvest_hash_mismatches: the one genuinely new parsing logic in this mode,
 # tested directly against canned `nix build` stderr rather than trusted.
@@ -1074,6 +1177,47 @@ check(
     mod.commit_behind_tag_object("kenn-io", "kata", LIGHTWEIGHT[:7], None),
     None,
 )
+
+
+# A rate limit is not an answer. Read as "not a commit" — which is what any
+# HTTPError meant here — it sent a perfectly resolvable rev off to be
+# dereferenced as a tag, and refused it with a message naming the wrong cause.
+# This tool already runs unauthenticated by default, so the 403 is the ordinary
+# case, not the exotic one.
+def rate_limited(url, token=None):
+    raise urllib.error.HTTPError(url, 403, "rate limit exceeded", {}, None)
+
+
+mod.http_get = rate_limited
+# The expected fragment names the STAGE, not just "rate-limited": both lookups
+# are on the same path, so a check for the generic word passes while the
+# commit-resolution half is still swallowing 403s — the tags listing raises
+# a moment later and the message is nearly right. Measured: with only the
+# generic fragment asserted, reverting `github_ref_is_a_commit` to a blind
+# `except urllib.error.HTTPError: return False` left this GREEN.
+for label, fragment, call in (
+    (
+        "resolving a ref",
+        "whether the ref is a commit",
+        lambda: mod.expand_unresolvable_github_refs(
+            json.dumps({"packages": {"x": ["x@github:kenn-io/kata#97be355", {}, "sha512-X=="]}}), None
+        ),
+    ),
+    (
+        "listing tags",
+        "while listing",
+        lambda: mod.commit_behind_tag_object("kenn-io", "kata", TAG_OBJ[:7], None),
+    ),
+):
+    try:
+        call()
+        ok = False
+        print(f"FAIL: a rate limit while {label} should raise, not read as an absent ref")
+    except RuntimeError as exc:
+        if "rate-limited" not in str(exc) or fragment not in str(exc):
+            ok = False
+            print(f"FAIL: the error should name the rate limit and the stage ({label}): {exc}")
+mod.http_get = fake_http_get
 
 sys.exit(0 if ok else 1)
 PY
