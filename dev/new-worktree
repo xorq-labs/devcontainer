@@ -8,8 +8,42 @@ Usage: new-worktree <branch-name>
 Create a git worktree for the given branch, set up overlay symlinks/copies,
 and lock it to prevent container-side pruning. The worktree is placed as a
 sibling of the main checkout, named <project>-<branch>.
+
+Run this on the HOST. A worktree is bind-mounted into its container at its own
+host path, so it has to be created where the host can see it.
 USAGE
     exit 0
+fi
+
+# Host-only, and now it says so instead of dying five lines down inside `git
+# worktree add`. A worktree is a HOST artifact here: `dev/devcontainer` binds
+# it into the container at its own host path, so compose needs the directory to
+# exist on the host. In-container the sibling directory is a daemon-created
+# bind-mount parent, root-owned, which is where the unexplained `could not
+# create leading directories` came from.
+#
+# Making that parent writable is NOT the fix and is worse than the error: the
+# worktree would land in the container's own filesystem, invisible to the host,
+# with its admin files in the bind-mounted `.git` (durable) and its working
+# tree not. Half-durable is worse than absent. Working in-container needs a
+# sibling root that is host-backed on both sides — a DEV_WORKTREE_ROOT bind
+# mount — which the naming contracts allow, since only the worktree's BASENAME
+# is load-bearing downstream (`dev/devcontainer` takes `basename` of it;
+# `dev/devcontainer-sessions` parses names, not parents).
+#
+# DEV_CONTAINER_MARKER is a test seam, not an escape hatch: pointing it at a
+# path that does not exist does not make an in-container worktree work, it just
+# restores the git error this replaced.
+if [ -e "${DEV_CONTAINER_MARKER:-/.dockerenv}" ]; then
+    cat >&2 <<'REFUSAL'
+new-worktree: run this on the host, not inside the dev container.
+
+A worktree is bind-mounted into its container at its host path, so it has to be
+created where the host can see it. The sibling directory in here is a
+container-side mount parent — a worktree created in it would be invisible to
+docker compose, so `devcontainer up` from it could not work.
+REFUSAL
+    exit 2
 fi
 
 branch="${1:?usage: new-worktree <branch-name>}"

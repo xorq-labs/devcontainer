@@ -237,5 +237,54 @@ assert_contains "devcontainer help shows list" "list" "$out"
 echo "--- new-worktree --help ---"
 out="$("$DEV_BASE/dev/new-worktree" --help 2>&1)"
 assert_contains "new-worktree help text" "Usage: new-worktree" "$out"
+assert_contains "help says where to run it" "Run this on the HOST" "$out"
+
+# ---------- test: new-worktree refuses to run inside a container ----------
+# A worktree created in-container lands in the container's own filesystem,
+# invisible to the host that has to bind-mount it, so this refusal is the
+# correct outcome rather than a missing capability — see the script's comment.
+# It used to fail anyway, deep inside `git worktree add`, on a message about
+# leading directories that named neither the cause nor the fix.
+#
+# Verified (ADR-0005 §2):
+#   1. FORM-ONLY — rewrite the guard as
+#      `[ -e "$_marker" ] && { ...; }` with the default hoisted into a
+#      `_marker=` assignment above it. Green, assertion count unchanged.
+#   2. SEMANTIC, in a form this suite does not write — leave the guard in place
+#      and change its DEFAULT to a path that never exists
+#      (`${DEV_CONTAINER_MARKER:-/nonexistent}`), i.e. a guard that is present,
+#      reviewed, and inert. Red on "the default marker refuses in a real
+#      container" — but only when the suite runs inside a container, which is
+#      what the skip below is about, and why this seam alone would not have
+#      caught it.
+echo "--- new-worktree container refusal ---"
+_marker="$TMPDIR_ROOT/fake-dockerenv"
+: >"$_marker"
+rc=0
+out="$(cd "$MAIN_TREE" && DEV_CONTAINER_MARKER="$_marker" "$DEV_BASE/dev/new-worktree" wt-guard 2>&1)" || rc=$?
+assert_eq "refuses with exit 2 when the container marker is present" 2 "$rc"
+assert_contains "and says where to run it instead" "run this on the host" "$out"
+assert_contains "and says why, not just where" "would be invisible" "$out"
+assert_true "no worktree directory was created" test ! -e "$TMPDIR_ROOT/fakerepo-wt-guard"
+
+# Conditional on the marker, not on the branch: with the marker absent the
+# script gets past the guard and fails on git's own terms instead.
+rc=0
+out="$(cd "$MAIN_TREE" && DEV_CONTAINER_MARKER="$TMPDIR_ROOT/absent-marker" \
+    "$DEV_BASE/dev/new-worktree" wt-guard 2>&1)" || rc=$?
+assert_not_contains "no refusal when the marker is absent" "run this on the host" "$out"
+
+# The seam proves the guard's BODY; only the real marker proves its DEFAULT, and
+# an inert default is the regression worth catching (a guard everyone reads and
+# nothing fires). Observable only where /.dockerenv actually exists — true for
+# every developer and agent working in this container, false on a CI VM runner,
+# so it is asserted where it can be and skipped loudly where it cannot.
+if [ -e /.dockerenv ]; then
+    rc=0
+    out="$(cd "$MAIN_TREE" && "$DEV_BASE/dev/new-worktree" wt-guard 2>&1)" || rc=$?
+    assert_eq "the default marker refuses in a real container" 2 "$rc"
+else
+    echo "  SKIP: no /.dockerenv here, so the default marker's refusal is unobservable"
+fi
 
 finish
