@@ -455,6 +455,17 @@ def expand_unresolvable_github_refs(lock_text: str, token: str | None = None) ->
     rather than assumed: `nix flake prefetch` of the tag object sha, the commit
     it dereferences to, and the tag NAME all report the same NAR hash, so this
     cannot change what gets fetched.
+
+    An arity-4 entry carries the SAME abbreviated ref a second time, as its
+    cache-key element (`[ident, meta, cacheKey, integrity]`, cacheKey spelled
+    `<owner>-<repo>-<ref>`) — and it is this element, not `ident`, that bun's
+    own install reads back when it cannot satisfy the dependency locally: the
+    live `FailedToOpenSocket` error names the OLD abbreviated ref even after
+    `ident` alone was widened (measured against a real build). Both copies of
+    the ref have to move together or bun2nix's generated attribute name
+    (derived from `ident`) and bun's own cache lookup (derived from cacheKey)
+    disagree, and the dependency falls through to a network fetch the build
+    sandbox refuses.
     """
     strict = re.sub(r",(\s*[}\]])", r"\1", lock_text)
     data = json.loads(strict)
@@ -476,6 +487,8 @@ def expand_unresolvable_github_refs(lock_text: str, token: str | None = None) ->
             )
             raise RuntimeError(msg)
         entry[0] = entry[0][: m.start("ref")] + full + entry[0][m.end("ref") :]
+        if len(entry) >= 3 and entry[2] == f"{owner}-{repo}-{ref}":
+            entry[2] = f"{owner}-{repo}-{full}"
         rewritten += 1
     return json.dumps(data, indent=2) + "\n", rewritten
 
@@ -515,6 +528,7 @@ def generate_bun_nix(repo: str, rev: str, flake_dir: Path) -> None:
         msg = f"{repo}@{rev[:12]} has no {lock_rel}; SOURCE_BUILD_BUN_NIX is out of date"
         raise RuntimeError(msg)
 
+    build_lock_path = BUN_NIX_DIR / f"{repo}.lock"
     with tempfile.TemporaryDirectory(prefix=f"kenn-bun-{repo}-") as tmp:
         work = Path(tmp) / "tree"
         shutil.copytree(tree, work)
@@ -523,11 +537,22 @@ def generate_bun_nix(repo: str, rev: str, flake_dir: Path) -> None:
         # write_text only needing the file bit.
         for path in [work, *work.rglob("*")]:
             path.chmod(path.stat().st_mode | 0o200)
-        patched, rewritten = degrade_git_lock_entries((work / lock_rel).read_text())
-        log(f"    rewrote {rewritten} git/github lockfile entr{'y' if rewritten == 1 else 'ies'} for bun2nix")
-        patched, widened = expand_unresolvable_github_refs(patched, github_token())
+        original_lock = (work / lock_rel).read_text()
+        # Widen BEFORE degrading, and on the UNDEGRADED text: a widened ref is
+        # not only bun2nix's problem. bun2nix derives its `github:<o>-<r>-<rev>`
+        # attribute name from this same ref text at hook-run time too, by
+        # re-parsing whatever bun.lock actually ships in the build — and that
+        # is upstream's own arity-4 entry, never the degraded copy below, which
+        # exists only to route bun2nix's generator down the right branch. If
+        # the ref bun2nix generated from and the ref the real build's lockfile
+        # carries disagree, the runtime hook misses its own cache and bun
+        # falls through to a live fetch, which the build sandbox has no
+        # network for (see build_lock_path below).
+        widened_lock, widened = expand_unresolvable_github_refs(original_lock, github_token())
         if widened:
             log(f"    widened {widened} abbreviated github ref{'' if widened == 1 else 's'} to a full sha")
+        patched, rewritten = degrade_git_lock_entries(widened_lock)
+        log(f"    rewrote {rewritten} git/github lockfile entr{'y' if rewritten == 1 else 'ies'} for bun2nix")
         (work / lock_rel).write_text(patched)
 
         generated = Path(tmp) / "bun.nix"
@@ -579,6 +604,25 @@ def generate_bun_nix(repo: str, rev: str, flake_dir: Path) -> None:
             f"and rerun this command. (The file is left in place for exactly that.)"
         )
         raise RuntimeError(msg)
+
+    # The widened lockfile source-build.nix must lay over upstream's own
+    # bun.lock before the real build's bunNodeModulesInstallPhase runs — see
+    # the comment above the widen/degrade split. Only written when widening
+    # actually happened; a stale one from an earlier rev whose ref no longer
+    # needs widening is removed rather than left to shadow upstream's lock.
+    if widened:
+        build_lock_path.write_text(widened_lock)
+        if not git_tracks(build_lock_path):
+            rel = build_lock_path.relative_to(FLAKE_DIR.parent.parent)
+            msg = (
+                f"wrote {rel}, but git does not track it yet — nix reads only tracked "
+                f"files from a dirty work tree, so source-build.nix cannot see it. Run\n"
+                f"    git add {rel}\n"
+                f"and rerun this command. (The file is left in place for exactly that.)"
+            )
+            raise RuntimeError(msg)
+    elif build_lock_path.exists():
+        build_lock_path.unlink()
 
 
 def nix_build(flake_dir: Path, attr: str) -> subprocess.CompletedProcess:
@@ -662,6 +706,8 @@ def do_source_write(repo: str, rev_ref: str, token: str | None, flake_dir: Path)
 
     bun_nix = BUN_NIX_DIR / f"{repo}.nix"
     original_bun_nix = bun_nix.read_text() if repo in SOURCE_BUILD_BUN_NIX and bun_nix.exists() else None
+    bun_lock = BUN_NIX_DIR / f"{repo}.lock"
+    original_bun_lock = bun_lock.read_text() if repo in SOURCE_BUILD_BUN_NIX and bun_lock.exists() else None
 
     def rollback() -> None:
         # Don't leave a placeholder hash — or a generated file for a rev whose
@@ -670,14 +716,16 @@ def do_source_write(repo: str, rev_ref: str, token: str | None, flake_dir: Path)
             SOURCE_BUILDS.write_text(original_text)
         elif SOURCE_BUILDS.exists():
             SOURCE_BUILDS.unlink()
-        # A previously committed bun.nix is restored; a NEWLY generated one is
-        # deliberately left on disk. It has to survive for the `git add` that
-        # generate_bun_nix's own failure message asks for (delete it and the
-        # rerun regenerates it and fails identically, forever), and an untracked
-        # file claims nothing — source-builds.json is what claims a rev
-        # graduated, and that has been rolled back above.
+        # A previously committed bun.nix/bun.lock is restored; a NEWLY
+        # generated one is deliberately left on disk. It has to survive for
+        # the `git add` that generate_bun_nix's own failure message asks for
+        # (delete it and the rerun regenerates it and fails identically,
+        # forever), and an untracked file claims nothing — source-builds.json
+        # is what claims a rev graduated, and that has been rolled back above.
         if original_bun_nix is not None:
             bun_nix.write_text(original_bun_nix)
+        if original_bun_lock is not None:
+            bun_lock.write_text(original_bun_lock)
 
     working = dict(existing)
     working[repo] = {

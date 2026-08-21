@@ -347,6 +347,26 @@ taxonomy and reads as `test:`.
   (`test: tests/test-bump-kenn.sh` §6, which drives both branches plus the
   refusal against a stubbed `http_get`; equivalence of the three spellings is
   `tool:` — measured by `nix flake prefetch`, no fixture can assert it).
+- The widened lockfile `expand_unresolvable_github_refs` produces is not only
+  bun2nix's input — a widened ref that reaches `nix/kenn/bun/<repo>.nix` but
+  not the real build's `bun.lock` builds `<repo>-from-source` clean up to
+  `bunNodeModulesInstallPhase` and then fails there with `FailedToOpenSocket`,
+  because bun2nix's runtime hook re-derives its lookup key from whatever
+  `bun.lock` the build actually ships, not from the copy generation ran
+  against (found live: `kenn-forge-from-source` built this way through
+  2026-08-21 and failed on every `nix run`). `generate_bun_nix` now also
+  writes that widened lock to `nix/kenn/bun/<repo>.lock` — a SECOND generated
+  file, only when widening actually happened — and `source-build.nix` copies
+  it over each tool's fetched `bun.lock` when present
+  (`builtins.pathExists`), for every `SOURCE_BUILD_BUN_NIX` tool alike, not
+  only forge. Within one entry, the ref appears TWICE — `ident` and, for an
+  arity-4 entry, the cache-key element `<owner>-<repo>-<ref>` — and both must
+  widen together: bun's own install reads the cache key back when it cannot
+  satisfy a dependency locally, so widening `ident` alone left the live error
+  naming the OLD ref (`test: tests/test-bump-kenn.sh` §6 covers both the
+  generated-file plumbing and the two-element widening against a stubbed
+  `http_get`; that a real build now succeeds is `tool:` — no fixture reaches
+  bun's own cache-key lookup, only a real `nix run` does).
 - Linter pins (ruff, yamllint, hadolint) live in exactly two places —
   `.pre-commit-config.yaml` (which CI also consumes, via the single
   `pre-commit` job in `.github/workflows/lint.yml`) and

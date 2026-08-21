@@ -1007,8 +1007,16 @@ mod.http_get = fake_http_get
 lock = json.dumps(
     {
         "packages": {
-            "@kenn-io/kit-ui": ["@kenn-io/kit-ui@github:kenn-io/kit-ui#97be355", {}, "sha512-KIT=="],
-            "@kenn-io/kata-ui": ["kata@github:kenn-io/kata#c668572", {}, "sha512-KATA=="],
+            # Real arity-4 shape bun writes for a github: dependency —
+            # [ident, meta, cacheKey, integrity] — cacheKey spelled
+            # `<owner>-<repo>-<ref>`, the SAME abbreviated ref ident carries.
+            "@kenn-io/kit-ui": [
+                "@kenn-io/kit-ui@github:kenn-io/kit-ui#97be355",
+                {},
+                "kenn-io-kit-ui-97be355",
+                "sha512-KIT==",
+            ],
+            "@kenn-io/kata-ui": ["kata@github:kenn-io/kata#c668572", {}, "kenn-io-kata-c668572", "sha512-KATA=="],
             "vite": ["vite@8.1.3", "", {}, "sha512-NPM=="],
         }
     }
@@ -1022,12 +1030,26 @@ check(
     pkgs["@kenn-io/kit-ui"][0],
     "@kenn-io/kit-ui@github:kenn-io/kit-ui#97be355",
 )
+check(
+    "its cache key is left byte-identical too",
+    pkgs["@kenn-io/kit-ui"][2],
+    "kenn-io-kit-ui-97be355",
+)
 # The commit the tag dereferences to, NOT the widened tag-object sha: widening
 # alone is the fix that looks right and fails identically.
 check(
     "a tag-object ref becomes the COMMIT the tag names",
     pkgs["@kenn-io/kata-ui"][0],
     f"kata@github:kenn-io/kata#{COMMIT}",
+)
+# bun's own install reads the CACHE KEY back, not ident, when it cannot
+# satisfy a dependency locally (measured against a real build's
+# `FailedToOpenSocket kata@github:kenn-io/kata#c668572` — the OLD ref —
+# even after ident alone had been widened). Both copies must move together.
+check(
+    "its cache key widens to the same commit, not just ident",
+    pkgs["@kenn-io/kata-ui"][2],
+    f"kenn-io-kata-{COMMIT}",
 )
 check("an ordinary npm entry is untouched", pkgs["vite"][0], "vite@8.1.3")
 check("the rewrite dereferences via the tag object, not the refs listing alone", any("/git/tags/" in c for c in calls), True)

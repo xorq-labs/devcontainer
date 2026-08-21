@@ -439,6 +439,9 @@ let
         cp -R ${roborevSrc} "$out"
         chmod -R u+w "$out"
         cp ${./bun/roborev.nix} "$out/bun.nix"
+        ${lib.optionalString (builtins.pathExists ./bun/roborev.lock) ''
+          cp ${./bun/roborev.lock} "$out/bun.lock"
+        ''}
       '';
       # Same copyfile/symlink materialization msgvault needs, same reason.
       bunDeps =
@@ -551,6 +554,9 @@ let
         cp -R ${kataSrc} "$out"
         chmod -R u+w "$out"
         cp ${./bun/kata.nix} "$out/bun.nix"
+        ${lib.optionalString (builtins.pathExists ./bun/kata.lock) ''
+          cp ${./bun/kata.lock} "$out/bun.lock"
+        ''}
       '';
       bunDeps =
         let
@@ -676,6 +682,9 @@ let
         cp -R ${forgeSrc} "$out"
         chmod -R u+w "$out"
         cp ${./bun/forge.nix} "$out/bun.nix"
+        ${lib.optionalString (builtins.pathExists ./bun/forge.lock) ''
+          cp ${./bun/forge.lock} "$out/bun.lock"
+        ''}
       '';
       bunDeps =
         let
