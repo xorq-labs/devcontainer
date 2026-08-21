@@ -258,6 +258,25 @@
 #      `override`/`overrideDerivation`. Ongoing, that is `--source --verify`'s
 #      job — it builds through this very output.
 #
+# Eleventh entry, for `strip_nix_comments()` (#147, 2026-08-21). A refactor, so
+# what it owes is preserved behaviour rather than a new pair: the two call sites
+# had the same expression written twice, in the same order, correct at each for
+# a DIFFERENT reason neither site could see — one file's contents (a `/*` inside
+# a `#` comment) and the other's inverted assertion (over-stripping fails open
+# there, closed here). Re-ran every mutation that reads either file, all
+# unchanged from their records above: 7's form-only (78/0), 7's two semantic
+# halves and 8's orphan and 10's re-listing (77/1 each, same assertion named),
+# 10's form-only (78/0).
+#   Aimed at the helper itself — swap the two `re.sub`s so blocks come out
+#   first. On the committed tree: 78 passed, 0 failed. The order is NOT
+#   observable here, and saying so is the point: it only surfaces under a
+#   block-comment mutation, where it turns 7's semantic-b from one failure into
+#   two (the swallowed region takes kata's bun.lock line with it, reporting a
+#   second unrelated failure). So the order is carried by the docstring and by
+#   this measurement, not by an assertion — the honest disposition, and the
+#   reason the reasoning must live in ONE place rather than at two call sites
+#   where a third reader would copy whichever spelling was nearest.
+#
 # Both python-driven blocks below report through `$rc`, not `$?`: under `set -e`
 # a failing block aborts the suite before its own assert_eq can count it, which
 # is still red but reports one line instead of the section.
@@ -780,24 +799,45 @@ spec = importlib.util.spec_from_file_location("kenn_update", kenn / "update.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
-# Comments come out FIRST, before any of the three checks below read this
-# file: the attrset scan, the `pin.<field>` reference check and the generated
-# bun.nix/bun.lock import checks are all name searches, and a commented-out
-# line satisfies every one of them while the derivation genuinely loses the
-# thing named — #86/#97's shape, measured green here for `# inherit
-# kata-from-source;` and for a `#`-ed `cp ${./bun/kata.nix}` before this
-# stripping existed. Both Nix comment forms, for the reason recorded in the
-# fifth §2 pair (a `/* ... */` mutation walked through the `#.*`-only version
-# of the flake check). source-build.nix carries no `#` inside a string, and
-# over-stripping one day fails CLOSED — a lost `pin.` or import reference is a
-# red assertion, not a silent pass.
-#
-# `#` first, THEN blocks, which is not the order the flake half uses and is
-# load-bearing here: two `#` comments in this file mention `packages/*`, and
-# block-stripping first pairs that `/*` with the next real `*/` and eats
-# everything between — measured, a `/* ... */` mutation at kata's bun.nix copy
-# took kata's bun.lock line with it and reported a second, unrelated failure.
-nix = re.sub(r"/\*.*?\*/", "", re.sub(r"#.*", "", (kenn / "source-build.nix").read_text()), flags=re.S)
+
+def strip_nix_comments(text):
+    """Remove both Nix comment forms, `#` before `/* */`.
+
+    Every check in this block is a name search over Nix source, and a comment
+    is what makes a name search lie — in whichever direction the assertion
+    points (see each call site). So no check reads a raw file; they all read
+    this.
+
+    The ORDER is load-bearing, and for a reason no call site can see on its
+    own: source-build.nix carries two `#` comments mentioning `packages/*`.
+    Strip blocks first and that `/*` pairs with the next real `*/`, swallowing
+    everything between — measured, a `/* ... */` mutation at kata's bun.nix
+    copy took kata's bun.lock line with it and reported a second, unrelated
+    failure. Taking `#` comments out first removes the stray opener with them.
+
+    ONE definition on purpose (#147). This lived at two call sites, in this
+    order at both, correct at each for a different reason: one file's contents
+    made the order matter and the other file's inverted assertion made
+    over-stripping fail open rather than closed. Neither reason was visible
+    where the expression sat, and a third reader would have copied whichever
+    spelling was nearest.
+
+    Not a Nix lexer: a `#` inside a string would be stripped as a comment.
+    Neither file has one, and over-stripping is loud at the two call sites that
+    search for a name they expect to FIND.
+    """
+    return re.sub(r"/\*.*?\*/", "", re.sub(r"#.*", "", text), flags=re.S)
+
+
+# Stripped before any of the three checks below read this file: the attrset
+# scan, the `pin.<field>` reference check and the generated bun.nix/bun.lock
+# import checks are all searches for a name they expect to find, so a
+# commented-out line satisfies every one of them while the derivation
+# genuinely loses the thing named — #86/#97's shape, measured green here for
+# `# inherit kata-from-source;` and for a `#`-ed `cp ${./bun/kata.nix}` before
+# the stripping existed. Fails CLOSED if it ever over-strips: a lost `pin.` or
+# import reference is a red assertion, not a silent pass.
+nix = strip_nix_comments((kenn / "source-build.nix").read_text())
 # The final `in { ... }` attrset is where every exposed package attribute is
 # either bound directly (`kwt-from-source = ...`) or re-exposed via `inherit`
 # (`inherit docbank-from-source;`) — a single name-pattern search over just
@@ -838,10 +878,9 @@ out("sb_json_keys", ",".join(sorted(source_builds)))
 # restores the encoding. Note the assertion is INVERTED against the one it
 # replaces, which flips what stripping is for: a name inside a comment is not a
 # hand-list, so stripping prevents a FALSE FAILURE here rather than a fail-open
-# — and over-stripping now fails OPEN, which is why `#` comes out before
-# blocks, as it does for source-build.nix above. A stray `/*` inside a `#`
-# comment would otherwise pair with the next real `*/` and swallow the very
-# region being searched.
+# — and over-stripping fails OPEN here, the one direction
+# strip_nix_comments()'s own docstring cannot warn about, since the other call
+# site is the opposite.
 #
 # Still scoped by paren depth rather than grepped whole-file: a `-from-source`
 # name legitimately appearing elsewhere (an `apps` entry, say) is not this
@@ -859,7 +898,7 @@ for j in range(start, len(flake_src)):
             break
 else:
     raise SystemExit("flake.nix: `packages = forAllSystems (` never closes")
-packages_region = re.sub(r"/\*.*?\*/", "", re.sub(r"#.*", "", flake_src[start : j + 1]), flags=re.S)
+packages_region = strip_nix_comments(flake_src[start : j + 1])
 listed = sorted(set(re.findall(r"\b([A-Za-z][\w-]*-from-source)\b", packages_region)))
 out("sb_flake_listed", ",".join(listed) or "<none>")
 # Every extra hash field a tool's SOURCE_BUILD_TOOLS entry names must appear
