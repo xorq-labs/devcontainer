@@ -71,7 +71,13 @@ COPY audit-hook /usr/local/bin/audit-hook
 COPY lib/git.sh /usr/local/lib/devcontainer/git.sh
 COPY lib/claude-code-token-env.sh /usr/local/lib/devcontainer/claude-code-token-env.sh
 COPY --from=project setup-env.sh /usr/local/bin/setup-env
-RUN chmod +x /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
+# An ABSOLUTE mode, never `+x`. COPY preserves the source's mode, and setup-env.sh
+# comes from a project overlay — a contributor's working tree, where the mode is
+# whatever their umask made it. `chmod +x` only ADDS execute bits, so a 0700 source
+# (umask 0077) lands as 0711: root-owned, so the owner bits no longer apply to
+# vscode, and bash must READ an interpreted script to run it. The failure is
+# `setup-env: Permission denied` at every container entry (#129).
+RUN chmod 755 /usr/local/bin/setup-claude /usr/local/bin/audit-hook /usr/local/bin/setup-env
 
 # Inject a claude-profile setup-token as CLAUDE_CODE_OAUTH_TOKEN for every claude
 # entry point (docs/adr/0002-devcontainer-setup-token-env-delivery.md). Unlike an
