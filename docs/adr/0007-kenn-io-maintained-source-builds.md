@@ -316,12 +316,11 @@ build succeeds clean; `do_source_verify` re-runs the same build against the
 committed hashes with no placeholders, and a clean build IS the verification
 — there is no separate comparison, because there is no manifest to compare
 against. The *shape* agreement (`SOURCE_BUILD_TOOLS` vs. `source-build.nix`'s
-exposed attributes vs. `source-builds.json`'s keys vs. the `inherit
-(sourceBuilds)` list in `flake.nix`'s `packages` output — a fourth encoding,
-added to the guard 2026-08-21, and the one that decides whether `nix build
-.#<binary>-from-source` resolves for a tool the other three call graduated) is
-hermetically tested
-(`tests/test-bump-kenn.sh` §6, `test:`); the *correctness* of a committed hash
+exposed attributes vs. `source-builds.json`'s keys) is hermetically tested
+(`tests/test-bump-kenn.sh` §6, `test:`) — a fourth encoding, `flake.nix`'s
+hand-written re-exposure list, was added to that guard on 2026-08-21 and
+deleted the same day; see Decision 4's amendment. The *correctness* of a
+committed hash
 is not (`tool:`, same family as `dev/bump-nix`'s installer checksum) — proven
 instead by actually running `nix build .#kwt-from-source` /
 `.#docbank-from-source` for real when each pin was written, not by a fixture.
