@@ -399,13 +399,29 @@ tool count.** [Implemented — shape half only, by design; see Decision 3.] The
 original text here tied the guard to "the second graduated tool," reasoning
 that a single tool has nothing to disagree with. That reasoning doesn't hold
 up: the coupling `test-bump-kenn.sh` guards is between `update.py`'s
-`SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes,
-`source-builds.json`'s keys and `flake.nix`'s re-exposure of those attributes
-(the fourth, added 2026-08-21), and that coupling is created the moment Decision
+`SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes and
+`source-builds.json`'s keys, and that coupling is created the moment Decision
 3 exists — at zero, one, or seven tools, it's the same fact needing the same
 guard. Tying it to a tool count would also have handed Decision 1 a way to
 defer the guard indefinitely, since Decision 1 already allows a tool to never
 graduate.
+
+Amended 2026-08-21: a fourth encoding was added and then removed within the
+day. `flake.nix`'s `packages` output re-exposed the source builds as a
+hand-written `inherit (sourceBuilds) ...` list of seven names — the encoding
+that decides whether `nix build .#<x>-from-source` resolves at all, guarded
+first by comparing the parsed list against `SOURCE_BUILD_TOOLS`. Review asked
+why a Nix file was being text-parsed to answer a question the evaluator
+answers exactly, and the honest answer was that nothing evaluates this flake
+(Decision 6), so a hermetic suite has only text to read. The list existed only
+to exclude `mkKennToolFromSource`, which is a suffix filter spelled in seven
+lines: `lib.filterAttrs (n: _: lib.hasSuffix "-from-source" n) sourceBuilds`
+exposes whatever `source-build.nix` exposes, at zero tools or seven. **Prefer
+deleting an encoding to guarding it** — the conventions already say to
+generate the second copy from the first, and the guard that stood in for it had
+needed two fail-open repairs in two days (a `#` comment, then a `/* */` one).
+What remains is one assertion that the list has not grown back, and the
+evaluator itself via `--source --verify`.
 
 docbank was still the right second proof to build before Decision 3, for a
 different reason than the original text gave: not because it's when the guard
@@ -432,8 +448,9 @@ manual `--verify` runs.
 - `nix/kenn` gains a second maintenance axis alongside the existing
   `TOOLS`/`toolMeta`/`sources.json`/`systems` four-way encoding: each
   graduated tool adds a row to `source-builds.json`, a case in the new
-  `update.py` mode, an entry in `flake.nix`'s `packages` output, and a CLAUDE.md
-  invariant line — plus, for a tool upstream
+  `update.py` mode, and a CLAUDE.md invariant line — but nothing in
+  `flake.nix`, whose `packages` output derives the set (see Decision 4's
+  2026-08-21 amendment) — plus, for a tool upstream
   ships no `bun.nix` for, an entry in `SOURCE_BUILD_BUN_NIX` and a generated
   `nix/kenn/bun/<tool>.nix`. Smaller per tool, but real,
   and it grows with every tool that graduates.

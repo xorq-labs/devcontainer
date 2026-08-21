@@ -86,17 +86,19 @@
           sourceBuilds = sourceBuildsFor system;
         in
         tools
+        # DERIVED, never listed. A hand-written `inherit (sourceBuilds) ...`
+        # block here was a fourth encoding of the source-build set, and the one
+        # whose omission had no symptom but `nix build .#<x>-from-source` dying
+        # on `does not provide attribute` for a tool every other encoding
+        # agreed was graduated. Filtering on the suffix removes the encoding
+        # rather than guarding it: this exposes whatever source-build.nix
+        # exposes, at zero tools or seven. The filter also drops what a
+        # per-tool list dropped by hand — `mkKennToolFromSource` and the
+        # `override`/`overrideDerivation` pair `callPackage` adds — since none
+        # of them carries the suffix.
+        // lib.filterAttrs (name: _: lib.hasSuffix "-from-source" name) sourceBuilds
         // {
           default = tools.kenn-io-toolkit;
-          inherit (sourceBuilds)
-            kwt-from-source
-            docbank-from-source
-            agentsview-from-source
-            msgvault-from-source
-            roborev-from-source
-            kata-from-source
-            kenn-forge-from-source
-            ;
         }
       );
 

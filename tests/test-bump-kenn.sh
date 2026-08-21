@@ -7,10 +7,12 @@
 #   nix/kenn/sources.json  top-level     the generated pins
 #   nix/kenn/flake.nix     systems       must equal update.py's PLATFORMS keys
 #
-# ADR-0007's source-build set is a SECOND, smaller four-encoding set with the
-# same failure mode, guarded in §6 rather than here: SOURCE_BUILD_TOOLS,
-# source-build.nix's exposed attributes, source-builds.json's keys, and
-# flake.nix's re-exposure of those attributes under `packages`.
+# ADR-0007's source-build set is a SECOND, smaller encoding set with the same
+# failure mode, guarded in §6 rather than here: SOURCE_BUILD_TOOLS,
+# source-build.nix's exposed attributes, and source-builds.json's keys. It was
+# four until flake.nix's hand-written `inherit (sourceBuilds) ...` list became
+# a `lib.filterAttrs` on the suffix, which deleted the fourth rather than
+# guarding it — the tenth §2 pair below.
 #
 # The failure is silent AND out of reach of CI: no workflow evaluates this
 # flake and tests/run-all is nix-free, so a repo added to TOOLS without a
@@ -124,8 +126,12 @@
 #   (a git+ssh URL carries its own "@", so splitting at the last one loses it)
 #   (mutation runs 2026-08-20)
 #
-# Fifth pair, for §6's flake.nix exposure check — the fourth encoding of the
-# source-build set, unguarded until now (added 2026-08-21):
+# Fifth pair, for §6's flake.nix exposure check (added 2026-08-21). THE CHECK
+# THIS PAIR DESCRIBES IS GONE — flake.nix now derives its `-from-source` attrs
+# with `lib.filterAttrs`, so there is no hand-written list to compare against
+# and no fourth encoding to guard; see the tenth pair. Kept because its lesson
+# outlived it: the block-comment fail-open it found is why both Nix comment
+# forms are still stripped in the two parsers that remain.
 #   1. FORM-ONLY — rewrite the single multi-line `inherit (sourceBuilds)` as
 #      three one-line `inherit` statements. Green: 75
 #      passed, 0 failed — assertion count unchanged. The check reads names out
@@ -226,6 +232,31 @@
 #      word "rate-limited": both lookups sit on one path, so a 403 swallowed by
 #      the commit half still raises a nearly-right error from the tags half a
 #      moment later. Asserted generically, that mutation ran GREEN.
+#
+# Tenth pair, for the replacement of the fifth (2026-08-21; baseline 78). The
+# fourth encoding is not guarded better — it is DELETED: flake.nix's `packages`
+# output filters `sourceBuilds` on the `-from-source` suffix instead of listing
+# seven names, so it exposes whatever source-build.nix exposes at zero tools or
+# seven. What §6 still asserts is that it stays derived:
+#   1. FORM-ONLY — split the `lib.filterAttrs` call across lines and rename its
+#      lambda argument. Green: 78 passed, 0 failed.
+#   2. SEMANTIC, in a form this suite does not write — add
+#      `inherit (sourceBuilds) kwt-from-source;` back BESIDE the filter, which
+#      is the shape the regression actually takes: not a deletion but somebody
+#      being explicit about what the flake exposes — redundant, harmless-
+#      looking, and the first line of a list that grows back. Observed red:
+#        FAIL: flake.nix derives its -from-source attrs instead of listing them
+#      Results: 77 passed, 1 failed
+#      This assertion is INVERTED relative to the one it replaces (a literal is
+#      the failure), so the fail-open direction inverts with it: over-stripping
+#      comments now HIDES a hand-written name, which is why `#` is stripped
+#      before blocks here too.
+#      That the filter genuinely exposes the seven is not asserted here and
+#      cannot be — it needs the evaluator. Verified directly instead, by
+#      `nix eval .#packages.x86_64-linux --apply builtins.attrNames` before and
+#      after the change: the same 17 attributes, no `mkKennToolFromSource`, no
+#      `override`/`overrideDerivation`. Ongoing, that is `--source --verify`'s
+#      job — it builds through this very output.
 #
 # Both python-driven blocks below report through `$rc`, not `$?`: under `set -e`
 # a failing block aborts the suite before its own assert_eq can count it, which
@@ -791,19 +822,30 @@ out("sb_exposed", ",".join(exposed))
 out("sb_expected_attrs", ",".join(sorted(f"{mod.TOOLS[r]}-from-source" for r in mod.SOURCE_BUILD_TOOLS)))
 out("sb_json_keys", ",".join(sorted(source_builds)))
 
-# flake.nix is the FOURTH encoding of the source-build set, and the one whose
-# omission has no other symptom: source-build.nix can expose an attribute the
-# flake's `packages` output never re-exposes, and then `nix build
-# .#<x>-from-source` dies with `does not provide attribute` for a tool every
-# other encoding agrees is graduated — the broken-direnv shape this suite's
-# header describes, one file further out. Scoped to the `packages =
-# forAllSystems (...)` region by paren depth rather than grepped whole-file: a
-# name bound in a `let` and never re-exposed is not exposure. Comments are
-# stripped first (flake.nix carries no `#` inside a string), so a comment
-# naming an attribute cannot stand in for wiring it — #86's shape. BOTH Nix
-# comment forms are stripped: the `#.*` half alone shipped green against a
-# `/* kata-from-source */` mutation, i.e. the fail-open this guard exists to
-# prevent, found by §2's own "in a form you did not write" clause.
+# flake.nix WAS the fourth encoding of the source-build set — a hand-written
+# `inherit (sourceBuilds) kwt-from-source docbank-from-source ...` list, whose
+# omission had no symptom but `nix build .#<x>-from-source` dying on `does not
+# provide attribute` for a tool every other encoding agreed was graduated. It
+# is now `lib.filterAttrs` on the `-from-source` suffix, so the flake exposes
+# whatever source-build.nix exposes and the encoding is gone rather than
+# guarded: `structural` per ADR-0005, with the filter's correctness `tool:`
+# (--source --verify runs `nix build <flake_dir>#<attr>` THROUGH this output,
+# so a broken filter fails every tool at once and loudly).
+#
+# What is left to check is that it STAYS derived. Any `-from-source` literal in
+# the `packages` region means somebody has started listing them again — the
+# edit that reads as harmless ("be explicit about what we expose") and quietly
+# restores the encoding. Note the assertion is INVERTED against the one it
+# replaces, which flips what stripping is for: a name inside a comment is not a
+# hand-list, so stripping prevents a FALSE FAILURE here rather than a fail-open
+# — and over-stripping now fails OPEN, which is why `#` comes out before
+# blocks, as it does for source-build.nix above. A stray `/*` inside a `#`
+# comment would otherwise pair with the next real `*/` and swallow the very
+# region being searched.
+#
+# Still scoped by paren depth rather than grepped whole-file: a `-from-source`
+# name legitimately appearing elsewhere (an `apps` entry, say) is not this
+# check's business, and the scan fails loudly on an unbalanced region.
 flake_src = (kenn / "flake.nix").read_text()
 anchor = "packages = forAllSystems ("
 start = flake_src.index(anchor) + len(anchor) - 1
@@ -817,8 +859,9 @@ for j in range(start, len(flake_src)):
             break
 else:
     raise SystemExit("flake.nix: `packages = forAllSystems (` never closes")
-packages_region = re.sub(r"#.*", "", re.sub(r"/\*.*?\*/", "", flake_src[start : j + 1], flags=re.S))
-out("sb_flake_exposed", ",".join(sorted(set(re.findall(r"\b([A-Za-z][\w-]*-from-source)\b", packages_region)))))
+packages_region = re.sub(r"/\*.*?\*/", "", re.sub(r"#.*", "", flake_src[start : j + 1]), flags=re.S)
+listed = sorted(set(re.findall(r"\b([A-Za-z][\w-]*-from-source)\b", packages_region)))
+out("sb_flake_listed", ",".join(listed) or "<none>")
 # Every extra hash field a tool's SOURCE_BUILD_TOOLS entry names must appear
 # referenced somewhere in source-build.nix, or update.py would discover it
 # but source-build.nix would never read it back.
@@ -878,8 +921,8 @@ sb_get() { printf '%s\n' "$source_build_encodings" | sed -n "s/^$1=//p"; }
 assert_true "SOURCE_BUILD_TOOLS is a subset of TOOLS" test -z "$(comm -23 <(sb_get sb_tools | tr ',' '\n' | sort) <(sb_get tools | tr ',' '\n' | sort))"
 assert_eq "source-build.nix exposes exactly SOURCE_BUILD_TOOLS's attrs" \
     "$(sb_get sb_expected_attrs)" "$(sb_get sb_exposed)"
-assert_eq "flake.nix's packages output re-exposes exactly those attrs" \
-    "$(sb_get sb_expected_attrs)" "$(sb_get sb_flake_exposed)"
+assert_eq "flake.nix derives its -from-source attrs instead of listing them" \
+    "<none>" "$(sb_get sb_flake_listed)"
 assert_eq "source-builds.json is pinned for exactly SOURCE_BUILD_TOOLS" \
     "$(sb_get sb_tools)" "$(sb_get sb_json_keys)"
 assert_eq "every SOURCE_BUILD_TOOLS extra hash field is read in source-build.nix" \
