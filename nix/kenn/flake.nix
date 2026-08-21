@@ -3,10 +3,21 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # Only for source builds (ADR-0007): msgvault, kata, and roborev embed a
+    # bun-built frontend, and this is the vendoring recipe msgvault's own
+    # nix/package.nix already uses. Shared infrastructure for three tools, not
+    # a per-tool cost — see nix/kenn/README.md's "Building from source".
+    bun2nix.url = "github:nix-community/bun2nix/2.1.2";
+    bun2nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      bun2nix,
+    }:
     let
       inherit (nixpkgs) lib;
 
@@ -44,14 +55,51 @@
       binaries = lib.mapAttrsToList (_: v: v.binary) (
         builtins.fromJSON (builtins.readFile ./sources.json)
       );
+
+      # Building from a git revision instead of a release binary needs its own
+      # Go toolchain (pinned to the exact patch every kenn-io go.mod requires,
+      # same as kenn-io/roborev's and kenn-io/msgvault's own flakes do for
+      # their source builds) rather than the fetchurl-only pkgsFor above.
+      sourceBuildsFor =
+        system:
+        let
+          pkgs = pkgsFor system;
+          goPinned = pkgs.go_1_26.overrideAttrs (_: rec {
+            version = "1.26.6";
+            src = pkgs.fetchurl {
+              url = "https://go.dev/dl/go${version}.src.tar.gz";
+              hash = "sha256-oHIcVMaIkBRI13rZs+x+p8R0cwdV/4kTgukuy5P/LLE=";
+            };
+          });
+          buildGoModule = pkgs.buildGoModule.override { go = goPinned; };
+        in
+        pkgs.callPackage ./source-build.nix {
+          inherit buildGoModule;
+          bun2nix = bun2nix.packages.${system}.default;
+        };
     in
     {
       packages = forAllSystems (
         system:
         let
           tools = toolsFor system;
+          sourceBuilds = sourceBuildsFor system;
         in
-        tools // { default = tools.kenn-io-toolkit; }
+        tools
+        # DERIVED, never listed. A hand-written `inherit (sourceBuilds) ...`
+        # block here was a fourth encoding of the source-build set, and the one
+        # whose omission had no symptom but `nix build .#<x>-from-source` dying
+        # on `does not provide attribute` for a tool every other encoding
+        # agreed was graduated. Filtering on the suffix removes the encoding
+        # rather than guarding it: this exposes whatever source-build.nix
+        # exposes, at zero tools or seven. The filter also drops what a
+        # per-tool list dropped by hand — `mkKennToolFromSource` and the
+        # `override`/`overrideDerivation` pair `callPackage` adds — since none
+        # of them carries the suffix.
+        // lib.filterAttrs (name: _: lib.hasSuffix "-from-source" name) sourceBuilds
+        // {
+          default = tools.kenn-io-toolkit;
+        }
       );
 
       # Individual tools only — the toolkit joins are flake-level conveniences
@@ -73,6 +121,19 @@
         lib.genAttrs binaries mkApp
         // {
           default = mkApp "kata";
+
+          # nix run .#bun2nix  — the bun2nix CLI at THIS flake's pinned
+          # version. update.py --source runs it through here for the tools
+          # upstream ships no bun.nix for (SOURCE_BUILD_BUN_NIX): bun.nix has
+          # no schema stability guarantee across bun2nix versions, so the
+          # generator and the bun2nix.hook that consumes its output must not be
+          # able to drift apart. Exposed as an app rather than a package so it
+          # stays out of `packages` (it is a build-time tool for this repo, not
+          # one of the kenn-io tools this flake exists to ship).
+          bun2nix = {
+            type = "app";
+            program = "${bun2nix.packages.${system}.default}/bin/bun2nix";
+          };
 
           # nix run .#update  — regenerate sources.json from GitHub releases.
           # Deliberately runs the checkout's copy rather than a store copy:

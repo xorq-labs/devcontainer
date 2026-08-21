@@ -24,6 +24,15 @@ set -euo pipefail
 # checksum manifests without downloading any tarballs. It also handles the
 # upstream inconsistencies (kwt's checksums.txt naming, forge's "./"-prefixed
 # entries, kata's homebrew_* decoy assets); see nix/kenn/README.md.
+#
+# A separate --source mode (ADR-0007) builds select tools from a git revision
+# instead of a release, pinned in nix/kenn/source-builds.json rather than
+# sources.json:
+#   devcontainer bump-kenn --source --tool kwt --rev main       # bump to a branch's HEAD
+#   devcontainer bump-kenn --source --check --tool kwt --rev main
+#   devcontainer bump-kenn --source --verify                    # rebuild every committed pin
+# This mode needs a working `nix` on PATH — discovering a source-build hash
+# means actually running `nix build`, there is no manifest to read it from.
 
 base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 updater="$base/nix/kenn/update.py"
