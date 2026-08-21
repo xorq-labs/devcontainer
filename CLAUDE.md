@@ -300,9 +300,18 @@ taxonomy and reads as `test:`.
   the ordinary `srcHash`). Bump via `devcontainer bump-kenn --source
   --tool <name> --rev <ref>`. Its `--check`/`--verify` split has one more
   layer than the release path's: the SHAPE agreement between
-  `SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes, and
-  `source-builds.json`'s keys is hermetically checkable and guarded
-  (`test: tests/test-bump-kenn.sh` §6); whether a COMMITTED hash is still
+  `SOURCE_BUILD_TOOLS`, `source-build.nix`'s exposed attributes,
+  `source-builds.json`'s keys, and — a fourth encoding, unguarded until
+  2026-08-21 — the `inherit (sourceBuilds)` list in `nix/kenn/flake.nix`'s
+  `packages` output is hermetically checkable and guarded
+  (`test: tests/test-bump-kenn.sh` §6). That fourth one is where the set is
+  actually DELIVERED: an attribute `source-build.nix` exposes but the flake
+  never re-exposes makes `nix build .#<binary>-from-source` fail with
+  `does not provide attribute` for a tool the other three agree is graduated
+  — the broken-direnv shape of the release-toolkit invariant above, one file
+  further out. Note the attribute is named for the BINARY, not the repo
+  (`TOOLS[repo] + "-from-source"`), which only bites on forge, the one tool
+  where the two differ: `kenn-forge-from-source`. Whether a COMMITTED hash is still
   correct is not — there is no manifest to re-derive it from, so `nix build`
   succeeding is the only oracle, same as `dev/bump-nix`'s installer checksum
   (`tool: nix/kenn/update.py`'s `do_source_verify`, which actually rebuilds

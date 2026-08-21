@@ -181,7 +181,7 @@ remaining tools and auditing forge's Rust component:
 | msgvault | bun frontend (bun2nix, now in place) + `CGO_ENABLED=1` | done — graduated |
 | roborev | bun **workspace** frontend (repo-root scope, not self-contained, unlike msgvault's) + no cgo, but IS embedded (its own upstream flake omits the frontend entirely, producing a stub binary — the original "same shape as kwt" guess was wrong) + no committed `bun.nix` and a bun2nix parse bug on its git dependency, neither of which the research pass predicted | done — graduated (was: medium) |
 | kata | bun **workspace** frontend (repo-root scope) + embed/restore-stub sequencing (a harmless plain directory copy) + `CGO_ENABLED=0` must be set explicitly, which the research pass got backwards. Turned out to be roborev's shape verbatim otherwise | done — graduated (was: medium-high) |
-| forge | **Re-scoped 2026-08-20 and it shrank.** Its Rust component is not in the released binary (opt-in `KENN_FORGE_PTY_MANAGER` env var; never built by `release.yml`), so a source build should omit it. Its "two independent frontends" share ONE bun workspace (root `bun.lock`, `workspaces: ["frontend", "packages/*"]`) — one generated `bun.nix`, two build outputs. No `.goreleaser.yaml` (releases from a workflow), and `vite-plus` needs `SSL_CERT_FILE` as docbank's did | low-medium (was: highest) |
+| forge | **Re-scoped 2026-08-20 and it shrank; re-checked 2026-08-21 and it shrank again.** Its Rust component is not in the released binary (opt-in `KENN_FORGE_PTY_MANAGER` env var; never built by `release.yml`), so a source build should omit it. Its "two independent frontends" share ONE bun workspace (root `bun.lock`, `workspaces: ["frontend", "packages/*"]`) — one generated `bun.nix` — and the release builds only `frontend/`, leaving `packages/github-app-ui`'s embed dir on its committed stub, so release parity is ONE build output, not the two this table previously claimed. `CGO_ENABLED: "0"` in both release jobs, no `-tags` anywhere, `./cmd/kenn-forge` only. No `.goreleaser.yaml` (releases from a workflow), and `vite-plus` needs `SSL_CERT_FILE` as docbank's did | low (was: low-medium, was: highest) |
 
 All three of the then-remaining bun tools (roborev, msgvault, kata) needed
 `bun2nix` —
@@ -224,7 +224,10 @@ not as a batch.** A tool is "maintained" only once it has all four of:
 
 **2. Source builds are a separate output surface, never merged into
 `mkKennTool`.** Each graduated tool gets a `<tool>-from-source` package
-attribute, exactly as `kwt-from-source` does today. A release binary and a
+attribute, exactly as `kwt-from-source` does today — named for the tool's
+BINARY rather than its repo (`TOOLS[repo]`, the same string `sources.json`
+keys its `binary` field on), which is invisible for six of the seven and only
+differs for forge: `kenn-forge-from-source`. A release binary and a
 source build are different reproducibility contracts — a checksum-verified
 published artifact vs. a commit plus a resolved module graph — and collapsing
 them into one derivation function would force every consumer of
@@ -264,7 +267,11 @@ build succeeds clean; `do_source_verify` re-runs the same build against the
 committed hashes with no placeholders, and a clean build IS the verification
 — there is no separate comparison, because there is no manifest to compare
 against. The *shape* agreement (`SOURCE_BUILD_TOOLS` vs. `source-build.nix`'s
-exposed attributes vs. `source-builds.json`'s keys) is hermetically tested
+exposed attributes vs. `source-builds.json`'s keys vs. the `inherit
+(sourceBuilds)` list in `flake.nix`'s `packages` output — a fourth encoding,
+added to the guard 2026-08-21, and the one that decides whether `nix build
+.#<binary>-from-source` resolves for a tool the other three call graduated) is
+hermetically tested
 (`tests/test-bump-kenn.sh` §6, `test:`); the *correctness* of a committed hash
 is not (`tool:`, same family as `dev/bump-nix`'s installer checksum) — proven
 instead by actually running `nix build .#kwt-from-source` /
@@ -358,7 +365,8 @@ manual `--verify` runs.
 - `nix/kenn` gains a second maintenance axis alongside the existing
   `TOOLS`/`toolMeta`/`sources.json`/`systems` four-way encoding: each
   graduated tool adds a row to `source-builds.json`, a case in the new
-  `update.py` mode, and a CLAUDE.md invariant line — plus, for a tool upstream
+  `update.py` mode, an entry in `flake.nix`'s `packages` output, and a CLAUDE.md
+  invariant line — plus, for a tool upstream
   ships no `bun.nix` for, an entry in `SOURCE_BUILD_BUN_NIX` and a generated
   `nix/kenn/bun/<tool>.nix`. Smaller per tool, but real,
   and it grows with every tool that graduates.

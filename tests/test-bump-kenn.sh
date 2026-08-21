@@ -122,6 +122,25 @@
 #   (a git+ssh URL carries its own "@", so splitting at the last one loses it)
 #   (mutation runs 2026-08-20)
 #
+# Fifth pair, for §6's flake.nix exposure check — the fourth encoding of the
+# source-build set, unguarded until now (added 2026-08-21):
+#   1. FORM-ONLY — rewrite the single multi-line `inherit (sourceBuilds)` as two
+#      one-line `inherit` statements splitting the six attrs 3/3. Green: 77
+#      passed, 0 failed — assertion count unchanged. The check reads names out
+#      of the `packages` region, not the shape of the statement carrying them.
+#   2. SEMANTIC, in a form this suite does not write — neutralise
+#      `kata-from-source` with a Nix BLOCK comment (`/* kata-from-source */`)
+#      rather than deleting the line or using a `#`. Observed red:
+#        FAIL: flake.nix's packages output re-exposes exactly those attrs
+#      Results: 76 passed, 1 failed
+#      This mutation earned its keep: the first version of the check stripped
+#      only `#.*` and passed this GREEN — the attribute genuinely unexposed,
+#      every assertion agreeing it was fine. The parser now strips both Nix
+#      comment forms. Recorded because it is the clearest instance in this file
+#      of §2's rule working as designed: the mutation aimed at the invariant
+#      (delete the line) would have passed the broken parser.
+#   (mutation runs 2026-08-21)
+#
 # Both python-driven blocks below report through `$rc`, not `$?`: under `set -e`
 # a failing block aborts the suite before its own assert_eq can count it, which
 # is still red but reports one line instead of the section.
@@ -668,6 +687,35 @@ out("sb_tools", ",".join(sorted(mod.SOURCE_BUILD_TOOLS)))
 out("sb_exposed", ",".join(exposed))
 out("sb_expected_attrs", ",".join(sorted(f"{mod.TOOLS[r]}-from-source" for r in mod.SOURCE_BUILD_TOOLS)))
 out("sb_json_keys", ",".join(sorted(source_builds)))
+
+# flake.nix is the FOURTH encoding of the source-build set, and the one whose
+# omission has no other symptom: source-build.nix can expose an attribute the
+# flake's `packages` output never re-exposes, and then `nix build
+# .#<x>-from-source` dies with `does not provide attribute` for a tool every
+# other encoding agrees is graduated — the broken-direnv shape this suite's
+# header describes, one file further out. Scoped to the `packages =
+# forAllSystems (...)` region by paren depth rather than grepped whole-file: a
+# name bound in a `let` and never re-exposed is not exposure. Comments are
+# stripped first (flake.nix carries no `#` inside a string), so a comment
+# naming an attribute cannot stand in for wiring it — #86's shape. BOTH Nix
+# comment forms are stripped: the `#.*` half alone shipped green against a
+# `/* kata-from-source */` mutation, i.e. the fail-open this guard exists to
+# prevent, found by §2's own "in a form you did not write" clause.
+flake_src = (kenn / "flake.nix").read_text()
+anchor = "packages = forAllSystems ("
+start = flake_src.index(anchor) + len(anchor) - 1
+depth = 0
+for j in range(start, len(flake_src)):
+    if flake_src[j] == "(":
+        depth += 1
+    elif flake_src[j] == ")":
+        depth -= 1
+        if depth == 0:
+            break
+else:
+    raise SystemExit("flake.nix: `packages = forAllSystems (` never closes")
+packages_region = re.sub(r"#.*", "", re.sub(r"/\*.*?\*/", "", flake_src[start : j + 1], flags=re.S))
+out("sb_flake_exposed", ",".join(sorted(set(re.findall(r"\b([A-Za-z][\w-]*-from-source)\b", packages_region)))))
 # Every extra hash field a tool's SOURCE_BUILD_TOOLS entry names must appear
 # referenced somewhere in source-build.nix, or update.py would discover it
 # but source-build.nix would never read it back.
@@ -706,6 +754,8 @@ sb_get() { printf '%s\n' "$source_build_encodings" | sed -n "s/^$1=//p"; }
 assert_true "SOURCE_BUILD_TOOLS is a subset of TOOLS" test -z "$(comm -23 <(sb_get sb_tools | tr ',' '\n' | sort) <(sb_get tools | tr ',' '\n' | sort))"
 assert_eq "source-build.nix exposes exactly SOURCE_BUILD_TOOLS's attrs" \
     "$(sb_get sb_expected_attrs)" "$(sb_get sb_exposed)"
+assert_eq "flake.nix's packages output re-exposes exactly those attrs" \
+    "$(sb_get sb_expected_attrs)" "$(sb_get sb_flake_exposed)"
 assert_eq "source-builds.json is pinned for exactly SOURCE_BUILD_TOOLS" \
     "$(sb_get sb_tools)" "$(sb_get sb_json_keys)"
 assert_eq "every SOURCE_BUILD_TOOLS extra hash field is read in source-build.nix" \

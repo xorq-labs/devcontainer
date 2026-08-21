@@ -276,14 +276,29 @@ wrong when checked (2026-08-20):
   never invokes cargo, the `Makefile`'s `rust-pty-manager` target is wired
   into nothing, and the crate is `publish = false`. A source build should
   match what the release ships: no `buildRustPackage`.
-- **Its "two independent frontends" are one bun workspace.** Root `bun.lock`
-  and `workspaces: ["frontend", "packages/*"]` cover `frontend/` and
-  `packages/github-app-ui/` together — one generated `bun.nix`, one vendoring
-  problem, two build outputs to embed. No committed `bun.nix` and the same
-  arity-4 `github:` kit-ui at the same rev, so it is roborev's route exactly.
+- **Its "two independent frontends" are one bun workspace — and the release
+  builds only one of them.** Root `bun.lock` and `workspaces: ["frontend",
+  "packages/*"]` cover `frontend/` and `packages/github-app-ui/` together, so
+  it is one generated `bun.nix` and one vendoring problem. But
+  `release.yml` builds `frontend/` alone and copies it to `internal/web/dist`;
+  `packages/github-app-ui` is never built, and its embed dir ships the
+  committed `stub.html` that `internal/githubapp/ui/embed.go` documents
+  ("holds only a committed stub until `make build` copies the real Vite output
+  in", with `HasBuiltApp()` reporting on it). So the released binary's
+  GitHub-App setup page IS a stub, and release parity means ONE build output,
+  not two. This corrected a claim stated as fact here, in ADR-0007's effort
+  table and in the working notes (2026-08-21) — the same "read the release
+  config" lesson kata taught, applied one level down: it is the authority on
+  what gets embedded, not just on cgo. It also has **two** arity-4 `github:`
+  dependencies for `degrade_git_lock_entries` to fix, not one — `kit-ui` at
+  roborev's and kata's rev, plus `kata-ui`, whose resolved lockfile key drops
+  its scope (`kata@github:kenn-io/kata#c668572`).
 
-Note forge has **no `.goreleaser.yaml`** (it releases from a workflow, unlike
-kata and roborev), so read `CGO_ENABLED` and build tags from there. Its
+Forge has **no `.goreleaser.yaml`** (it releases from a workflow, unlike kata
+and roborev), so `CGO_ENABLED` and build tags come from there — read
+2026-08-21: both build jobs set `CGO_ENABLED: "0"` and no job passes `-tags`
+at all, and the release builds `./cmd/kenn-forge` only, not the `Makefile`'s
+second `cmd/kenn-forge-github-app` binary. Its
 frontend tooling is `vite-plus`, the same Rust-implemented Vite docbank and
 agentsview needed `SSL_CERT_FILE` for — expect that CA-bundle panic here too,
 the first time that quirk crosses into a bun tool.
