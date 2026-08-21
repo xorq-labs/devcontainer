@@ -15,25 +15,15 @@ USAGE
     exit 0
 fi
 
-# Host-only, and now it says so instead of dying five lines down inside `git
-# worktree add`. A worktree is a HOST artifact here: `dev/devcontainer` binds
-# it into the container at its own host path, so compose needs the directory to
-# exist on the host. In-container the sibling directory is a daemon-created
-# bind-mount parent, root-owned, which is where the unexplained `could not
-# create leading directories` came from.
-#
 # Making that parent writable is NOT the fix and is worse than the error: the
-# worktree would land in the container's own filesystem, invisible to the host,
-# with its admin files in the bind-mounted `.git` (durable) and its working
-# tree not. Half-durable is worse than absent. Working in-container needs a
-# sibling root that is host-backed on both sides — a DEV_WORKTREE_ROOT bind
-# mount — which the naming contracts allow, since only the worktree's BASENAME
-# is load-bearing downstream (`dev/devcontainer` takes `basename` of it;
-# `dev/devcontainer-sessions` parses names, not parents).
+# worktree would land in the container's filesystem, invisible to the host, with
+# its admin files in the bind-mounted `.git` and its working tree not. Working
+# in-container needs a host-backed sibling root — a DEV_WORKTREE_ROOT mount —
+# which the naming contracts allow, since only the BASENAME is load-bearing
+# downstream (`dev/devcontainer` takes `basename` of it).
 #
-# DEV_CONTAINER_MARKER is a test seam, not an escape hatch: pointing it at a
-# path that does not exist does not make an in-container worktree work, it just
-# restores the git error this replaced.
+# DEV_CONTAINER_MARKER is a test seam, not an escape hatch: a missing path
+# restores the git error rather than enabling anything.
 if [ -e "${DEV_CONTAINER_MARKER:-/.dockerenv}" ]; then
     cat >&2 <<'REFUSAL'
 new-worktree: run this on the host, not inside the dev container.
