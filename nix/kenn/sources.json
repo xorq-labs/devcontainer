@@ -1,45 +1,45 @@
 {
   "agentsview": {
-    "version": "0.40.1",
+    "version": "0.42.0",
     "binary": "agentsview",
     "platforms": {
       "aarch64-darwin": {
-        "asset": "agentsview_0.40.1_darwin_arm64.tar.gz",
-        "hash": "sha256-zZTxF7xVzmMAs5VrNICtVLumkmz5ui6r/hZ0+giTW6E="
+        "asset": "agentsview_0.42.0_darwin_arm64.tar.gz",
+        "hash": "sha256-V/Q3oIny+dQcczXXziqW8rqVoR1FF2eMamhmplOQo/M="
       },
       "aarch64-linux": {
-        "asset": "agentsview_0.40.1_linux_arm64.tar.gz",
-        "hash": "sha256-MeponohCLYt7CWuKJHSdap9MszdHVXB/OzfgbgjbeLg="
+        "asset": "agentsview_0.42.0_linux_arm64.tar.gz",
+        "hash": "sha256-wUjvjIvJcV4sNRwb9yYTVHm153hpP4at5pIA4evMCco="
       },
       "x86_64-darwin": {
-        "asset": "agentsview_0.40.1_darwin_amd64.tar.gz",
-        "hash": "sha256-84QISpX/cyxrveUf1qBnKpM8haZyR6eAi7zueJKXgdk="
+        "asset": "agentsview_0.42.0_darwin_amd64.tar.gz",
+        "hash": "sha256-rfPOgqENoonHXqoH6Ch/j0DY0+JcvPy7O0iUAbCAeVc="
       },
       "x86_64-linux": {
-        "asset": "agentsview_0.40.1_linux_amd64.tar.gz",
-        "hash": "sha256-2ajcY+ajoJ2osLAzyiCIIl+qVCvSQTMP288ss4JodM8="
+        "asset": "agentsview_0.42.0_linux_amd64.tar.gz",
+        "hash": "sha256-8riieLYHdu6O23Rctbs9orXeVycbSaadlK9Por2xdBQ="
       }
     }
   },
   "docbank": {
-    "version": "0.12.0",
+    "version": "0.14.0",
     "binary": "docbank",
     "platforms": {
       "aarch64-darwin": {
-        "asset": "docbank_0.12.0_darwin_arm64.tar.gz",
-        "hash": "sha256-V0VlYujgpvB/6LqbwVNgRcgLPcc7DIJtA0quRlzVT5o="
+        "asset": "docbank_0.14.0_darwin_arm64.tar.gz",
+        "hash": "sha256-b2qpRxNmCW4yVugNzSZ6LXZb7tuTLSSrhgGpbfJwqRc="
       },
       "aarch64-linux": {
-        "asset": "docbank_0.12.0_linux_arm64.tar.gz",
-        "hash": "sha256-peGk1VXKiduUMYKOsOKYtukocevmfqv1t3BVEzDkhc4="
+        "asset": "docbank_0.14.0_linux_arm64.tar.gz",
+        "hash": "sha256-zEMNpOGzfIDv+4TJ0ZBgK0Q8vPmQaBK4ycNM4Or7Ewk="
       },
       "x86_64-darwin": {
-        "asset": "docbank_0.12.0_darwin_amd64.tar.gz",
-        "hash": "sha256-2ed3MTVUSWMxDR7bkT8pQVMKkC1ZIj/7lWT4mCbfeiI="
+        "asset": "docbank_0.14.0_darwin_amd64.tar.gz",
+        "hash": "sha256-8AyV8IC7sKyX0yzMpkjUyHBoBjjEug2DEMJG/ZqyYKY="
       },
       "x86_64-linux": {
-        "asset": "docbank_0.12.0_linux_amd64.tar.gz",
-        "hash": "sha256-L2dl/rntrCkD+JSHDRmTj+s4t8qv+Fv1fBa3zGWxw3I="
+        "asset": "docbank_0.14.0_linux_amd64.tar.gz",
+        "hash": "sha256-JjC4/FVV0TTpIEeF0NxudvHFzyIcU1jMUWbBiLm3VQo="
       }
     }
   },
@@ -49,7 +49,7 @@
     "platforms": {
       "aarch64-darwin": {
         "asset": "forge_0.2.0_darwin_arm64.tar.gz",
-        "hash": "sha256-6cgcQf1b+VA7qkf6WIOgWaO5JFu+fhL0Z45Zz3aPc88="
+        "hash": "sha256-6XbTtTT/yftgrxG01DDeDWvtaIz2atK/o7blu573v/M="
       },
       "aarch64-linux": {
         "asset": "forge_0.2.0_linux_arm64.tar.gz",
@@ -57,7 +57,7 @@
       },
       "x86_64-darwin": {
         "asset": "forge_0.2.0_darwin_amd64.tar.gz",
-        "hash": "sha256-K4Jfu2BeTDIhTz/lgNG/1SlMuoxnS9l47CIg3sObJdI="
+        "hash": "sha256-CEzbAsgrTIZbtXYb7zD3ZGFzPP+sEfg/UezL1CrtIXY="
       },
       "x86_64-linux": {
         "asset": "forge_0.2.0_linux_amd64.tar.gz",
@@ -66,46 +66,46 @@
     }
   },
   "kata": {
-    "version": "0.14.3",
+    "version": "0.17.2",
     "binary": "kata",
     "platforms": {
       "aarch64-darwin": {
-        "asset": "kata_0.14.3_darwin_arm64.tar.gz",
-        "hash": "sha256-auloMBtpbJBa1jHP8gtURWeBWidTLsLrJx2RzyTBKQY="
+        "asset": "kata_0.17.2_darwin_arm64.tar.gz",
+        "hash": "sha256-v4tFvGSoX22G66/ASsyXza/4j6UrMPtyUk0qo2B6tUM="
       },
       "aarch64-linux": {
-        "asset": "kata_0.14.3_linux_arm64.tar.gz",
-        "hash": "sha256-bfQYlf0CK83DFEbmw1CRcGRsBqhxdxW5h0HtzI3MKiM="
+        "asset": "kata_0.17.2_linux_arm64.tar.gz",
+        "hash": "sha256-eDpoQImVaaFkhrkkKMHDAnPZi0Li8WkH0ysNxe/oavU="
       },
       "x86_64-darwin": {
-        "asset": "kata_0.14.3_darwin_amd64.tar.gz",
-        "hash": "sha256-clWCWc/NWvUVkaZ+WdLL/FwZnNRUV5/QHcuKN2blFko="
+        "asset": "kata_0.17.2_darwin_amd64.tar.gz",
+        "hash": "sha256-hlSt+uUzbkIte417ls1WT1d/Q7cqQm828XI7v+UNFMU="
       },
       "x86_64-linux": {
-        "asset": "kata_0.14.3_linux_amd64.tar.gz",
-        "hash": "sha256-1Wnu/3D7b6n2fbPFHEO7OnraqgzTECdKS9CkLKL/PsA="
+        "asset": "kata_0.17.2_linux_amd64.tar.gz",
+        "hash": "sha256-qz2oHQCn9HvnDp76mY7mS64wwAp7ragd+3DBIN3EnPI="
       }
     }
   },
   "kwt": {
-    "version": "0.4.0",
+    "version": "0.6.1",
     "binary": "kwt",
     "platforms": {
       "aarch64-darwin": {
-        "asset": "kwt_0.4.0_darwin_arm64.tar.gz",
-        "hash": "sha256-8jmAe8gMJVQyxgqn+vwJxvadE/ygaHIsM8FquuoOHCY="
+        "asset": "kwt_0.6.1_darwin_arm64.tar.gz",
+        "hash": "sha256-r7MhJIL0/M2JZ2GCR4k2a4vzZlhSs5oDL8S9kZcger8="
       },
       "aarch64-linux": {
-        "asset": "kwt_0.4.0_linux_arm64.tar.gz",
-        "hash": "sha256-7JXnPsu0Jgoj+i3KBVlVOabldDAROdpOxuzy/hI9Or8="
+        "asset": "kwt_0.6.1_linux_arm64.tar.gz",
+        "hash": "sha256-7KX//SraxLOQwaZt+HsfUpyUioYhWDE+0tF29ER7AGM="
       },
       "x86_64-darwin": {
-        "asset": "kwt_0.4.0_darwin_amd64.tar.gz",
-        "hash": "sha256-VESqqPZzlsnhYm6AeQUuzRMl/e83bPpMUnDNv3TBqCc="
+        "asset": "kwt_0.6.1_darwin_amd64.tar.gz",
+        "hash": "sha256-SJGi707DzSjUSiCcv+MK6US2R4bzFY5NuRJITP3PFYg="
       },
       "x86_64-linux": {
-        "asset": "kwt_0.4.0_linux_amd64.tar.gz",
-        "hash": "sha256-OFLNTVIz5NpWSu+dm0iiP6RjfH0as8yfqGSxAdAlwR0="
+        "asset": "kwt_0.6.1_linux_amd64.tar.gz",
+        "hash": "sha256-GGGJ4HxIIrEVkC0mA5fqBlJCjBebmHf116wHhPjgLGI="
       }
     }
   },
@@ -115,7 +115,7 @@
     "platforms": {
       "aarch64-darwin": {
         "asset": "msgvault_0.19.3_darwin_arm64.tar.gz",
-        "hash": "sha256-VIYhwfXd3bl9zdsbO7+0n7F4fVp8pf0hM7nV6RC1o3o="
+        "hash": "sha256-/WOdEr2RRl8K3IPZNGqCULli4vZRm5pDJaiWHTZBqHI="
       },
       "aarch64-linux": {
         "asset": "msgvault_0.19.3_linux_arm64.tar.gz",
@@ -123,7 +123,7 @@
       },
       "x86_64-darwin": {
         "asset": "msgvault_0.19.3_darwin_amd64.tar.gz",
-        "hash": "sha256-utII1V9DUYz8rdCJPvophxKiBq5KcDTN6M3vO1IbcvY="
+        "hash": "sha256-Ez3h/Nfib+i0I+yL3LErvwz/BCJk77XDaJ1Z7A7wChg="
       },
       "x86_64-linux": {
         "asset": "msgvault_0.19.3_linux_amd64.tar.gz",
@@ -132,24 +132,24 @@
     }
   },
   "roborev": {
-    "version": "0.64.0",
+    "version": "0.67.0",
     "binary": "roborev",
     "platforms": {
       "aarch64-darwin": {
-        "asset": "roborev_0.64.0_darwin_arm64.tar.gz",
-        "hash": "sha256-2Vs031/Xwbgu9VF2pUn3WtI5T20CJy1C9H/dyiul/xk="
+        "asset": "roborev_0.67.0_darwin_arm64.tar.gz",
+        "hash": "sha256-KOO4Trjg1vgaMGx8H3XJU5VMGS3i2ZpHqP5Gxu6TsJA="
       },
       "aarch64-linux": {
-        "asset": "roborev_0.64.0_linux_arm64.tar.gz",
-        "hash": "sha256-QpqYbRFA1JEGgD6V0RZG6bMu/AU+5YtluvMOHgoPRy0="
+        "asset": "roborev_0.67.0_linux_arm64.tar.gz",
+        "hash": "sha256-71oT9IDs6cO/36BwJZumatg9crvUZkhPrFEsCvCkGgI="
       },
       "x86_64-darwin": {
-        "asset": "roborev_0.64.0_darwin_amd64.tar.gz",
-        "hash": "sha256-Sb3KsEmYQiDOvqmNOt5Dybx/eat6p9VBei0vaZX3Jxc="
+        "asset": "roborev_0.67.0_darwin_amd64.tar.gz",
+        "hash": "sha256-sQ0U8fraIxY25edmKOCioBqFqPlqfwNSCJ5p+q2TW2c="
       },
       "x86_64-linux": {
-        "asset": "roborev_0.64.0_linux_amd64.tar.gz",
-        "hash": "sha256-6X6iuP2d/XpYD3McqEeqFwpfqVOHcnt60taHW3O5Auc="
+        "asset": "roborev_0.67.0_linux_amd64.tar.gz",
+        "hash": "sha256-aLoixYaBO9VXl5c8sXYVf6NpNrAtstS+5Gu9SZv/u4c="
       }
     }
   }
