@@ -137,6 +137,9 @@ CI mutation testing rejected below.
 
 ### 3. Derive over restate
 
+*Amended 2026-08-21 — see "rung 0" below. The ladder's top is not generation;
+it is asking whether the copy has to exist.*
+
 Three rungs, in order of preference. Choose consciously and say which in the
 guard's header:
 
@@ -258,3 +261,60 @@ semantics by running the real lib, while pinning the driver line as a literal.
 Annotating the suite as `test:` says nothing about which of its assertions are
 derived, and a single derived check will otherwise vouch for its restated
 neighbours.
+
+## Amendment (2026-08-21): rung 0 — delete the encoding
+
+**Status: Accepted.**
+
+§3's ladder starts at *generate*, which reads as though producing the second
+copy is the best available outcome. It is not the top. Before choosing a rung,
+ask whether the copy has to exist at all:
+
+0. **Delete the encoding.** There is no second copy, so there is nothing to
+   generate, derive, or restate. No guard, and — unlike rung 1 — no generator
+   to own either.
+
+Numbered 0 rather than renumbering the ladder: `CLAUDE.md` and several test
+headers already cite "rung 3" and "rung 2 on the fact" by number, and shifting
+them all to insert a step is a rename masquerading as a decision.
+
+**Rung 0 is not rung 1.** Generation leaves the second copy on disk and moves
+the maintenance to a generator: `lib/command-table.tsv` → `show_usage` plus
+three shell completion scripts is rung 1, and the completions are real files
+that a stale generator can get wrong. Rung 0 means the copy is gone.
+`nix/kenn/flake.nix` listing seven `-from-source` attributes by hand was a
+fourth encoding of the source-build set; `lib.filterAttrs` on the suffix
+(`65b32e2`) is not a generated list but the absence of one, and the set agrees
+with `source-build.nix` at zero tools or seven because there is nothing left to
+agree with. See ADR-0007 Decision 4's 2026-08-21 amendment for the worked
+instance, including the guard it retired.
+
+**The test for whether rung 0 is available:** does something outside your
+control require the copy to exist? Where it does, the encoding stays and earns
+a guard — this repo's invariant list is mostly such cases, and the amendment
+must not be read as a criticism of them:
+
+- the `BASE_IMAGE` pin in `nix/base/compose.nix-base.yml` — the byte form *is*
+  the invariant, and four separate readers each need their own pattern;
+- `NIX_USER` in `lib/nix-seed.sh` versus the `EXTRA_PATH` lines in every nix
+  overlay — compose cannot read a bash variable, so the copies are imposed;
+- the workflow trigger-path lists in `docker-build.yml` and `nix-base.yml` —
+  GitHub requires a literal list inside each workflow file.
+
+**Rung 0 has a cost, which is why this is a preference and not a rule.**
+Deleting an encoding can move the fact from *hermetically checkable* to
+*needs the real toolchain*. That is exactly what happened here: with the list
+gone there is nothing for `tests/run-all` to compare, and whether the filter
+genuinely exposes the seven attributes is now `tool:` — answered by
+`update.py --source --verify`, which builds through that output, and by a
+direct `nix eval .#packages.<system> --apply builtins.attrNames` on two
+systems. A restatement you can check offline is traded for a construction that
+cannot drift but cannot be checked offline either. Usually the right trade;
+never an automatic one. Say which you chose, as §3 already requires.
+
+Prompted by review of #146, where a rung-3 guard was written for the
+hand-written list, needed two fail-open repairs in two days (a `#` comment,
+then a `/* */` one), and was then deleted along with the list it guarded. The
+question that produced this — *why are we parsing a Nix file to answer a
+question the evaluator answers exactly?* — is the one §3 should provoke on its
+own.
