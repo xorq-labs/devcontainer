@@ -30,25 +30,28 @@
 # and stay green forever once pre-commit moved on.
 #
 # Verified (ADR-0005 §2), three mutations — the semantic pair deliberately
-# pushes in OPPOSITE directions, because this guard can fail either way:
+# pushes in OPPOSITE directions, because this guard can fail either way. Which
+# assertions move is recorded; totals are not, and the hooks are named by role
+# rather than by name, because both are restatements of things this suite reads
+# at check time — dev/hooks/'s listing and its own assertion count (ADR-0005,
+# amendment of 2026-08-20, Proposed at the time of writing; the rest of the
+# suites still quote totals).
 #   1. FORM-ONLY — rewrite the legacy block as an `[ ... ] && [ ... ] && rm -f`
 #      one-liner instead of an `if`, and hoist `legacy=` above the re-link.
-#      Green: 15 passed, 0 failed — assertion count unchanged.
+#      Green, with no assertion lost.
 #   2. SEMANTIC (under-removal), in a form this suite does not write — COMMENT
-#      OUT (not delete) the `rm -f "$legacy"` line. Observed red:
-#        FAIL: removes the self-referential post-checkout.legacy
-#        FAIL: removes the self-referential pre-commit.legacy
-#        FAIL: a .legacy in the shared dir is removed when run from a worktree
-#      Results: 12 passed, 3 failed
+#      OUT (not delete) the `rm -f "$legacy"` line. Red on every removal
+#      assertion and nothing else: the self-reference check for each name in
+#      dev/hooks/, plus the shared-hooks-dir worktree check.
 #   3. SEMANTIC (over-removal) — drop the resolved-path test so every .legacy
-#      goes unconditionally. Observed red:
-#        FAIL: keeps a third-party post-checkout.legacy
-#        FAIL: and does not rewrite it
-#      Results: 13 passed, 2 failed
+#      goes unconditionally. Red on the survival pair only — that a foreign
+#      .legacy is kept, and that it is not rewritten.
 #   Mutation 3 is the one a single aimed mutation would have missed: an
 #   unconditional `rm` closes the incident and quietly breaks the feature
-#   migration mode exists for.
-#   (mutation runs 2026-08-18)
+#   migration mode exists for. Note 2 and 3 go red on DISJOINT sets; a change
+#   that reddens both is removing the wrong thing, not more of the right one.
+#   (mutation runs 2026-08-18; all three re-run 2026-08-25 when this record
+#   was rewritten to drop totals, each red set confirmed unchanged)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"

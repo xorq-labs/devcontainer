@@ -30,20 +30,24 @@
 # reason that line exists, and a hook that "works" by resolving nothing would
 # lose the container/worktree fallback it was written for (#7).
 #
-# Verified (ADR-0005 §2), three mutations:
+# Verified (ADR-0005 §2), three mutations. Which assertions move is recorded,
+# totals are not: a total restates this suite's own assertion count, which it
+# reads at check time (ADR-0005, amendment of 2026-08-20, Proposed at the time
+# of writing; the rest of the suites still quote totals).
 #   1. FORM-ONLY — respell the fix as `sed -e '1!d' -e 's/^worktree //'` (same
-#      read-to-EOF behaviour, different sed program). Green: 16 passed, 0
-#      failed — assertion count unchanged.
+#      read-to-EOF behaviour, different sed program). Green, with no assertion
+#      lost.
 #   2. SEMANTIC, in the form this bug actually shipped in — restore
-#      `| head -1` in dev/hooks/pre-commit. Observed red on 10 assertions:
-#      "the shipped form resolves the main checkout and survives", both
-#      "exits 0" checks, "dispatched exactly once", all four argv checks, the
-#      worktree .tools/bin check, and the install hint.
-#      Results: 6 passed, 10 failed
+#      `| head -1` in dev/hooks/pre-commit. Red on everything downstream of
+#      resolution and nothing upstream: the shipped-form check, both "exits 0"
+#      checks, the dispatch count, every argv check, the worktree .tools/bin
+#      check, and the install hint. What stays green is the fixture's own
+#      preconditions — which is the tell that the fixture is still valid and
+#      the hook is what broke.
 #   3. SEMANTIC, narrow — drop `--hook-dir` from all three exec branches, i.e.
-#      revert 12c15c7's flag. Observed red:
-#        FAIL: passes --hook-dir
-#      Results: 15 passed, 1 failed
+#      revert the flag added with the nix/kenn toolkit (#143). Red on the
+#      --hook-dir assertion alone; mutation 2's blast radius versus this one's
+#      is the point, since only one of them is a resolution failure.
 #   The pair earns its place twice over: mutation 2 found TWO fail-opens in
 #   this suite as first written, neither of them in the code under test.
 #   (a) It ABORTED instead of reporting — the failure being guarded is a
@@ -55,38 +59,40 @@
 #       distinguishes the two forms. That is this bug's whole character —
 #       correct value, poisoned status — so the guard reproduced the bug's
 #       invisibility inside itself.
-#   (mutation runs 2026-08-19)
+#   (mutation runs 2026-08-19 and, for section 5, at its introduction. Rewriting
+#   this record to drop totals re-ran 1-5 on 2026-08-25 and confirmed each red
+#   set; 6 and 7 were not re-run — they mutate this suite's own lift anchors,
+#   so re-running them is a different edit from the one being recorded.)
 #
 # Section 5 was added after an independent review found this suite fully green
 # with dev_main_tree() reverted: the invariant named two copies of the pipeline
 # and only one was guarded. Its own §2 runs:
 #   4. SEMANTIC, in the form the bug shipped in — restore `| head -1` in
-#      dev_main_tree(). Observed red:
-#        FAIL: the shipped dev_main_tree pipeline survives 148284 bytes
-#      Results: 20 passed, 1 failed. The VALUE assertion stayed green, which is
-#      this bug's whole character and why section 5 asserts status AND value.
+#      dev_main_tree(). Red on the STATUS assertion for the shipped pipeline,
+#      and on that alone. The VALUE assertion stayed green, which is this bug's
+#      whole character and why section 5 asserts status AND value.
 #   5. FORM-ONLY — respell the fix as `sed -e '1!d' -e 's/^worktree //'` (same
-#      read-to-EOF, different program). Green: 21 passed, 0 failed, no drop.
+#      read-to-EOF, different program). Green, with no assertion lost.
 #   6. FAIL-CLOSED PROBE — move the pipe to a continuation line so the lift
 #      anchor cannot match. The line still parses and behaves identically, so a
 #      guard that cannot find what it lifts must REPORT. First run produced NO
 #      OUTPUT AT ALL: `grep -m1` exits 1 on no match and `set -e` killed the run
 #      before any assertion could speak. That is fail-open (a) above, reintroduced
 #      by the new section — hence `|| true` on BOTH lifts; the `^MAIN=` one had
-#      the same defect latent. After the fix, red:
-#        FAIL: dev_main_tree's pipeline is still findable in lib/git.sh
-#        FAIL: and still resolves the first worktree
-#      Results: 19 passed, 2 failed
+#      the same defect latent. After the fix, red on the pair that depends on
+#      the lift: that the pipeline is still findable, and that it still resolves
+#      the first worktree.
 #   7. The same probe against the pre-existing lift — break the hook's `MAIN=`
-#      across a continuation. Reports rather than aborting: 11 passed, 10 failed.
+#      across a continuation. Reports rather than aborting, which is the whole
+#      point; the red set is large because every later section reads that lift.
 #   Mutations 4-6 all ran green locally and section 5 STILL failed in CI, on the
 #   anchor: it pinned exit 141, which only holds where SIGPIPE is default. The
 #   failing element is a bash builtin, and Actions runs steps with SIGPIPE
 #   ignored, so the builtin gets EPIPE back and exits 1 instead of dying. Fixed
 #   by asserting non-zero — the invariant was always "the old form fails", never
 #   a particular code — and both dispositions are now exercised here:
-#     default SIGPIPE   status 141, 21 passed / 0 failed; revert -> 20/1
-#     SIGPIPE ignored   status 1,   21 passed / 0 failed; revert -> 20/1
+#     default SIGPIPE   status 141; green, and red on revert
+#     SIGPIPE ignored   status 1;   green, and red on revert
 #   (`trap '' PIPE` in the parent reproduces the CI shape.) Section 1's anchor
 #   keeps its 141: it pipes GIT, a real process that resets SIGPIPE to default,
 #   so there the signal is portable and worth naming.
