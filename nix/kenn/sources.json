@@ -66,24 +66,24 @@
     }
   },
   "kata": {
-    "version": "0.17.2",
+    "version": "0.18.0",
     "binary": "kata",
     "platforms": {
       "aarch64-darwin": {
-        "asset": "kata_0.17.2_darwin_arm64.tar.gz",
-        "hash": "sha256-v4tFvGSoX22G66/ASsyXza/4j6UrMPtyUk0qo2B6tUM="
+        "asset": "kata_0.18.0_darwin_arm64.tar.gz",
+        "hash": "sha256-xUiBQV98MrBBd4V0Fb/9Fn91hGLJoYoMRrfbXy8uH+E="
       },
       "aarch64-linux": {
-        "asset": "kata_0.17.2_linux_arm64.tar.gz",
-        "hash": "sha256-eDpoQImVaaFkhrkkKMHDAnPZi0Li8WkH0ysNxe/oavU="
+        "asset": "kata_0.18.0_linux_arm64.tar.gz",
+        "hash": "sha256-Ft3LJd9SEkaf1J/RnC49L55tjVUuvgmCTPIrcTW4BnQ="
       },
       "x86_64-darwin": {
-        "asset": "kata_0.17.2_darwin_amd64.tar.gz",
-        "hash": "sha256-hlSt+uUzbkIte417ls1WT1d/Q7cqQm828XI7v+UNFMU="
+        "asset": "kata_0.18.0_darwin_amd64.tar.gz",
+        "hash": "sha256-A0hTww+ANOp78h5TrSplaZMOdk8/HhhM+10OwyyI2+8="
       },
       "x86_64-linux": {
-        "asset": "kata_0.17.2_linux_amd64.tar.gz",
-        "hash": "sha256-qz2oHQCn9HvnDp76mY7mS64wwAp7ragd+3DBIN3EnPI="
+        "asset": "kata_0.18.0_linux_amd64.tar.gz",
+        "hash": "sha256-vaSmokt0we5xvhI3zi4W/29ifG5b7mf8uXUl07Kr4FI="
       }
     }
   },
