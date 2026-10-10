@@ -359,7 +359,7 @@ Per-pid session status stubs are written to `.claude/container-sessions/` in the
 
 ### Session transcripts live on the host
 
-Transcripts are the one thing in `~/.claude` that can't be rebuilt, so they don't live in the `claude-home` volume: `${HOME}/.claude/projects/-devcontainer-<container-name>` is bind-mounted over the container's own project key. `reset` and `clean` both remove the project's volumes (`docker compose down --volumes --remove-orphans`, plus any volume a renamed service left behind), and a bind is not a volume — the history survives them, and survives `cleanup-worktree` too. Because the host side sits under `~/.claude/projects`, host tooling that walks that directory reads each container's history as an ordinary project.
+Transcripts are the one thing in `~/.claude` that can't be rebuilt, so they don't live in the `claude-home` volume: `${HOME}/.claude/projects/-devcontainer-<container-name>` is bind-mounted over the container's own project key. `reset` and `clean` both remove the worktree's volumes (`teardown_volumes` in `dev/devcontainer`), and a bind is not a volume — the history survives them, and survives `cleanup-worktree` too. Because the host side sits under `~/.claude/projects`, host tooling that walks that directory reads each container's history as an ordinary project.
 
 `dev/devcontainer-sessions` reports what's there — session id, last activity, branch, and opening prompt, joined against `docker inspect` for the container and worktree:
 

@@ -443,6 +443,15 @@ taxonomy and reads as `test:`.
   filesystem boundary, changing behaviour for reasons unrelated to this
   invariant. The suite pins the current, unsafe behaviour rather than
   asserting the safe one).
+- Every compose command goes through `dc()`, which sets
+  `COMPOSE_REMOVE_ORPHANS=true` so `up` as well as `down` removes the
+  containers of services an overlay renamed. A flag on each `down` missed `up`,
+  where a still-running orphan keeps its ports. Orphaned volumes survive both,
+  so `reset`/`clean` call `teardown_volumes`, which sweeps the project's
+  labelled volumes after `down --volumes`. The sweep is restricted to compose's
+  `<container-name>_` prefix, because a shared cache that compose created
+  before the overlay marked it external still carries the label
+  (`test: tests/test-teardown-orphans.sh`).
 - The chown driver reads mount points from `dc config`, so the compose query in
   `mount_point_targets` decides what the lib ever sees; the query itself needs
   docker, but the python snippet inside it is lifted out and run against a

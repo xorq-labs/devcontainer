@@ -39,8 +39,9 @@ services:
       # credentials mount: each container refreshes its own token.
       - claude-home:/home/vscode/.claude
       # Claude: session transcripts on the host, carved out of claude-home.
-      # `reset`/`clean` are `down --volumes`, and transcripts are the one thing
-      # in that volume that cannot be rebuilt. Mounted at the container's own
+      # `reset`/`clean` remove the per-worktree volumes (teardown_volumes in
+      # dev/devcontainer), and transcripts are the one thing in that volume that
+      # cannot be rebuilt. Mounted at the container's own
       # project key so Claude finds them where it expects; the host side lives in
       # ~/.claude/projects, so host tooling reads it as an ordinary project dir.
       # (long syntax purely to stay inside the line limit)
