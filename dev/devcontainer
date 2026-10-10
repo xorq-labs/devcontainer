@@ -382,8 +382,14 @@ dc() {
     # rather than as a flag per call, because the orphan that matters is often
     # still running when `up` is the next command (a teardown from before this,
     # or a sidecar whose restart policy outlived the app container) and keeps
-    # its ports, so the renamed service fails to bind.
-    COMPOSE_REMOVE_ORPHANS=true docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
+    # its ports, so the renamed service fails to bind. COMPOSE_IGNORE_ORPHANS
+    # is cleared because compose refuses `up` with both set ("cannot combine
+    # COMPOSE_IGNORE_ORPHANS and --remove-orphans"), and it is a common way to
+    # silence the orphan warning. Measured on compose v2.29.7; a compose that
+    # ignores the variable leaves the orphan behind, and removing it once with
+    # `docker rm -f <container>` is enough after the rename.
+    COMPOSE_IGNORE_ORPHANS='' COMPOSE_REMOVE_ORPHANS=true \
+        docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
 }
 
 # Remove volumes compose created for this worktree's project but that no
@@ -395,15 +401,22 @@ dc() {
 # not enough: a shared cache compose created before the overlay marked it
 # `external: true` keeps the label (ensure_external_volumes never relabels an
 # existing volume), and the reset prompt promises to keep those. They are named
-# `<project-name>-<cache>`, never `<container-name>_...`. Never fatal: a volume
-# docker refuses to remove is named and left.
+# `<project-name>-<cache>`, never `<container-name>_...`. The cost is that an
+# orphan the overlay named explicitly (`name:` without `external:`) is never
+# swept either; remove it by hand with `docker volume rm`. Never fatal: a volume
+# docker refuses to remove, or a listing that fails, is warned about with
+# docker's own reason and left.
 remove_orphan_volumes() {
-    local v
+    local v vols err
+    if ! vols="$(docker volume ls -q --filter "label=com.docker.compose.project=$DEV_CONTAINER_NAME" 2>&1)"; then
+        echo "warning: could not list orphaned volumes: $vols" >&2
+        return 0
+    fi
     while IFS= read -r v; do
         [[ "$v" == "${DEV_CONTAINER_NAME}_"* ]] || continue
-        docker volume rm "$v" >/dev/null 2>&1 \
-            || echo "warning: could not remove orphaned volume $v" >&2
-    done < <(docker volume ls -q --filter "label=com.docker.compose.project=$DEV_CONTAINER_NAME")
+        err="$(docker volume rm "$v" 2>&1 >/dev/null)" \
+            || echo "warning: could not remove orphaned volume $v: $err" >&2
+    done <<< "$vols"
 }
 
 # reset and clean: the per-worktree volumes, declared and orphaned. The sweep

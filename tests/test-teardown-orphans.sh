@@ -6,7 +6,8 @@
 # only warns about it, so it keeps running and holding its ports, and the
 # renamed sidecar then fails to bind. dc() therefore runs every compose command
 # with COMPOSE_REMOVE_ORPHANS=true (honoured by both `up` and `down`, measured
-# against compose v2.29.7). Removing an orphan container does not remove its
+# against compose v2.29.7) and COMPOSE_IGNORE_ORPHANS cleared, since compose
+# refuses `up` with both set. Removing an orphan container does not remove its
 # named volume, though, and neither does `down --volumes`, which only removes
 # declared volumes, so reset/clean (teardown_volumes) also sweep the project's
 # leftover volumes. The sweep must not reach the shared caches.
@@ -17,23 +18,31 @@
 # teardown_volumes rather than being repeated in each arm, so the arm check only
 # has to show that the call is live code.
 #
-# Verified (ADR-0005 §2), fresh copy of the tree per mutation, 2026-10-10:
+# Verified (ADR-0005 §2), fresh copy of the tree per mutation, 2026-10-10
+# (17 assertions):
 #   FORM-ONLY (must stay green, same assertion count):
-#     a. dc(): hoist the assignment into `local -x COMPOSE_REMOVE_ORPHANS=true`
-#        on its own line before `docker compose ...` -> green.
-#     b. reset arm: `teardown_volumes  # per-worktree volumes` (trailing
-#        comment) -> green.
+#     a. dc(): hoist the assignments into
+#        `local -x COMPOSE_IGNORE_ORPHANS='' COMPOSE_REMOVE_ORPHANS=true` on its
+#        own line before `docker compose ...` -> green, 17.
+#     b. reset arm: `teardown_volumes  # per-worktree volumes` -> green, 17.
 #   SEMANTIC (must go red), each written in a form the author did not write:
-#     c. dc(): comment out the prefix assignment by moving it to a
-#        `# COMPOSE_REMOVE_ORPHANS=true` line above an unprefixed call -> red.
-#     d. remove_orphan_volumes: comment out the prefix test line -> red (the
+#     c. dc(): the assignments moved into a comment above an unprefixed call
+#        -> red (both dc assertions).
+#     d. dc(): `COMPOSE_IGNORE_ORPHANS="${COMPOSE_IGNORE_ORPHANS:-}"`, which
+#        keeps the user's value -> red (both dc assertions).
+#     e. remove_orphan_volumes: comment out the prefix test -> red (the
 #        stale-labelled shared cache is removed).
-#     e. teardown_volumes: swap the two calls -> red (order).
-#     f. clean arm: `# teardown_volumes` -> red.
-#     g. add `docker compose -p x down` as a new line outside dc() -> red.
-#     h. the same, written `if ! docker compose -p x down; then :; fi` -> red
-#        (the first version of this check matched only command position after
-#        `;&|(` and missed it).
+#     f. remove_orphan_volumes: `|| true` inside the listing's `$(...)` -> red
+#        (failed listing not warned about).
+#     g. remove_orphan_volumes: `2>/dev/null` in place of `2>&1 >/dev/null` on
+#        the rm -> red (docker's reason missing from the warning).
+#     h. teardown_volumes: swap the two calls -> red (order).
+#     i. clean arm: `# teardown_volumes` -> red.
+#     j-m. a new function outside dc() running, in turn,
+#        `docker compose -p x down`, `if ! docker compose -p x down; then :;
+#        fi`, `docker-compose -p x down`, `docker --context x compose -p x
+#        down` -> red each (the first version of this check matched only
+#        `docker compose` after `;&|(` and missed k; the second missed l, m).
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -56,19 +65,22 @@ cat > "$RUNNER" <<'RUNNER_EOF'
 set -euo pipefail
 COMPOSE_FILE=/x/docker-compose.yml COMPOSE_OVERRIDE=/nonexistent
 DEV_USE_NIX_BASE=false DEV_BASE_DIR=/x DEV_CONTAINER_NAME=proj-dev-wt
-docker() { echo "${COMPOSE_REMOVE_ORPHANS:-unset} $*"; }
+export COMPOSE_IGNORE_ORPHANS=true   # as a user's shell profile might
+docker() { echo "remove=${COMPOSE_REMOVE_ORPHANS:-} ignore=${COMPOSE_IGNORE_ORPHANS:-} $*"; }
 RUNNER_EOF
 printf '%s\n' "$dc_body" 'dc up -d' 'dc down --volumes' >> "$RUNNER"
 out="$(bash "$RUNNER")"
-assert_contains "dc up runs with orphan removal" \
-    "true compose -f /x/docker-compose.yml -p proj-dev-wt up -d" "$out"
-assert_contains "dc down runs with orphan removal" \
-    "true compose -f /x/docker-compose.yml -p proj-dev-wt down --volumes" "$out"
+assert_contains "dc up runs with orphan removal, ignore cleared" \
+    "remove=true ignore= compose -f /x/docker-compose.yml -p proj-dev-wt up -d" "$out"
+assert_contains "dc down runs with orphan removal, ignore cleared" \
+    "remove=true ignore= compose -f /x/docker-compose.yml -p proj-dev-wt down --volumes" "$out"
 
-# dc() is the only door to compose: a `docker compose` anywhere else bypasses
-# the setting above. Any occurrence counts (`if ! docker compose`, `x &&
-# docker compose`), except in comments and in a double-quoted string with no
-# expansion in it, which is a message naming the command rather than running it.
+# dc() is the only door to compose: compose run anywhere else bypasses the
+# setting above. Any occurrence counts (`if ! docker compose`, `x && docker
+# compose`, `docker --context x compose`, the standalone `docker-compose`),
+# except in comments and in a double-quoted string with no expansion in it,
+# which is a message naming the command rather than running it. Not caught, and
+# accepted: a call split across lines with `\`, or built up and run by `eval`.
 strays=()
 for f in "$DC" "$DEV_BASE"/lib/*.sh; do
     while IFS= read -r hit; do
@@ -78,10 +90,10 @@ for f in "$DC" "$DEV_BASE"/lib/*.sh; do
         in_dc { if (/^}$/) in_dc = 0; next }
         /^[[:space:]]*#/ { next }
         { line = $0; gsub(/"[^"$]*"/, "", line) }
-        line ~ /docker[[:space:]]+compose([[:space:]]|$)/ { print NR": "$0 }
+        line ~ /docker(-compose|[[:space:]](.*[[:space:]])?compose)([[:space:]]|$)/ { print NR": "$0 }
     ' "$f")
 done
-assert_eq "no docker compose call outside dc()" "" "${strays[*]:-}"
+assert_eq "no compose call outside dc()" "" "${strays[*]:-}"
 
 # ---------- remove_orphan_volumes takes only this worktree's own volumes ----------
 sweep_body="$(fn_body remove_orphan_volumes)"
@@ -98,14 +110,20 @@ DEV_CONTAINER_NAME="proj-dev-wt"
 #   proj-dev-wt_busy        one docker refuses (still in use)   -> warned, kept
 #   proj-uv-cache           a shared cache compose created before the overlay
 #                           marked it external, so it kept the label -> kept
+# LS_FAILS=1 makes the listing fail the way an unreachable daemon does.
 docker() {
     case "$1 $2" in
         "volume ls")
+            if [ -n "${LS_FAILS:-}" ]; then
+                echo "Cannot connect to the Docker daemon" >&2; return 1
+            fi
             if [ "$*" = "volume ls -q --filter label=com.docker.compose.project=proj-dev-wt" ]; then
                 printf '%s\n' proj-dev-wt_minio-data proj-dev-wt_busy proj-uv-cache
             fi ;;
         "volume rm")
-            [ "$3" = proj-dev-wt_busy ] && return 1
+            if [ "$3" = proj-dev-wt_busy ]; then
+                echo "volume is in use - [c0ffee]" >&2; return 1
+            fi
             echo "rm $3" >> "$LOG" ;;
         *) echo "unexpected: docker $*" >> "$LOG" ;;
     esac
@@ -119,7 +137,15 @@ stderr="$(bash "$RUNNER" "$LOG" 2>&1 >/dev/null)" && rc=0 || rc=$?
 assert_eq "a volume that cannot be removed does not abort teardown" 0 "$rc"
 assert_eq "removes the orphaned volume and nothing else, including the stale-labelled cache" \
     "rm proj-dev-wt_minio-data" "$(cat "$LOG")"
-assert_contains "names the volume it could not remove" "proj-dev-wt_busy" "$stderr"
+assert_contains "names the volume it could not remove, with docker's reason" \
+    "proj-dev-wt_busy: volume is in use - [c0ffee]" "$stderr"
+
+: > "$LOG"
+stderr="$(LS_FAILS=1 bash "$RUNNER" "$LOG" 2>&1 >/dev/null)" && rc=0 || rc=$?
+assert_eq "a failed listing does not abort teardown" 0 "$rc"
+assert_contains "a failed listing is warned about, with docker's reason" \
+    "could not list orphaned volumes: Cannot connect to the Docker daemon" "$stderr"
+assert_eq "a failed listing removes nothing" "" "$(cat "$LOG")"
 
 # ---------- teardown_volumes sweeps after down ----------
 td_body="$(fn_body teardown_volumes)"
