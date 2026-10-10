@@ -480,16 +480,17 @@ taxonomy and reads as `test:`.
   the fail-open shell-parser shape ADR-0005 warns about. Accepted because all
   three sites sit together in `ensure_up`, inline with the comment stating the
   rule).
-- Every compose command goes through `dc()`, which sets
-  `COMPOSE_REMOVE_ORPHANS=true` (and clears `COMPOSE_IGNORE_ORPHANS`, which
-  compose refuses alongside it) so `up` as well as `down` removes the
-  containers of services an overlay renamed. A flag on each `down` missed `up`,
-  where a still-running orphan keeps its ports. Orphaned volumes survive both,
-  so `reset`/`clean` call `teardown_volumes`, which sweeps the project's
-  labelled volumes after `down --volumes`. The sweep is restricted to compose's
-  `<container-name>_` prefix, because a shared cache that compose created
-  before the overlay marked it external still carries the label
-  (`test: tests/test-teardown-orphans.sh`).
+- Every compose command goes through `dc()`, which removes orphans on `up`
+  and `down`; `reset`/`clean` go through `teardown_volumes`, which also sweeps
+  orphaned volumes. The reasoning lives in the comments above `dc()` and
+  `remove_orphan_volumes` in `dev/devcontainer`, not here
+  (`test: tests/test-teardown-orphans.sh`, which runs both with docker
+  stubbed and rejects any compose call outside `dc()` in `dev/` or `lib/`;
+  `unguarded:` a call split across lines with `\` or run through `eval`, since
+  catching those means parsing shell; a compose that ignores
+  `COMPOSE_REMOVE_ORPHANS`, which needs a real compose and is accepted with a
+  one-time manual `docker rm -f`; and an orphan's anonymous volumes, which
+  carry no project label to find them by).
 - Compose file order in `dc()` is load-bearing: the nix-base override is
   appended after the project override so its `build.dockerfile` wins;
   host-mounts override generation must run before the first `dc` call

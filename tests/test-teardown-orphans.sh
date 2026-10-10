@@ -19,12 +19,12 @@
 # has to show that the call is live code.
 #
 # Verified (ADR-0005 §2), fresh copy of the tree per mutation, 2026-10-10
-# (17 assertions):
+# (18 assertions):
 #   FORM-ONLY (must stay green, same assertion count):
 #     a. dc(): hoist the assignments into
 #        `local -x COMPOSE_IGNORE_ORPHANS='' COMPOSE_REMOVE_ORPHANS=true` on its
-#        own line before `docker compose ...` -> green, 17.
-#     b. reset arm: `teardown_volumes  # per-worktree volumes` -> green, 17.
+#        own line before `docker compose ...` -> green, 18.
+#     b. reset arm: `teardown_volumes  # per-worktree volumes` -> green, 18.
 #   SEMANTIC (must go red), each written in a form the author did not write:
 #     c. dc(): the assignments moved into a comment above an unprefixed call
 #        -> red (both dc assertions).
@@ -36,13 +36,18 @@
 #        (failed listing not warned about).
 #     g. remove_orphan_volumes: `2>/dev/null` in place of `2>&1 >/dev/null` on
 #        the rm -> red (docker's reason missing from the warning).
+#     p. remove_orphan_volumes: `2>&1` inside the listing's `$(...)` -> red
+#        (docker's reason swallowed into the name list).
 #     h. teardown_volumes: swap the two calls -> red (order).
+#     o. teardown_volumes: comment out the flock block -> red (lock not held).
 #     i. clean arm: `# teardown_volumes` -> red.
 #     j-m. a new function outside dc() running, in turn,
 #        `docker compose -p x down`, `if ! docker compose -p x down; then :;
 #        fi`, `docker-compose -p x down`, `docker --context x compose -p x
 #        down` -> red each (the first version of this check matched only
 #        `docker compose` after `;&|(` and missed k; the second missed l, m).
+#     n. `docker compose -p x down` appended to dev/cleanup-worktree -> red
+#        (the check scanned only dev/devcontainer and lib/ until round 3).
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -82,7 +87,8 @@ assert_contains "dc down runs with orphan removal, ignore cleared" \
 # which is a message naming the command rather than running it. Not caught, and
 # accepted: a call split across lines with `\`, or built up and run by `eval`.
 strays=()
-for f in "$DC" "$DEV_BASE"/lib/*.sh; do
+for f in "$DEV_BASE"/dev/* "$DEV_BASE"/lib/*.sh; do
+    [ -f "$f" ] || continue
     while IFS= read -r hit; do
         strays+=("$f:$hit")
     done < <(awk -v skip="$([ "$f" = "$DC" ] && echo 1)" '
@@ -143,19 +149,25 @@ assert_contains "names the volume it could not remove, with docker's reason" \
 : > "$LOG"
 stderr="$(LS_FAILS=1 bash "$RUNNER" "$LOG" 2>&1 >/dev/null)" && rc=0 || rc=$?
 assert_eq "a failed listing does not abort teardown" 0 "$rc"
-assert_contains "a failed listing is warned about, with docker's reason" \
-    "could not list orphaned volumes: Cannot connect to the Docker daemon" "$stderr"
+assert_contains "a failed listing is warned about" \
+    "could not list orphaned volumes" "$stderr"
+assert_contains "docker's own reason for the failed listing reaches the user" \
+    "Cannot connect to the Docker daemon" "$stderr"
 assert_eq "a failed listing removes nothing" "" "$(cat "$LOG")"
 
 # ---------- teardown_volumes sweeps after down ----------
 td_body="$(fn_body teardown_volumes)"
 assert_nonempty "extracted teardown_volumes()" "$td_body"
-out="$(bash -c "set -euo pipefail
-dc() { echo \"dc \$*\"; }
-remove_orphan_volumes() { echo sweep; }
+# Each stub reports whether the per-worktree lock is held, by trying to take
+# it from a separate process.
+out="$(DEV_LOCKFILE="$TMPDIR_ROOT/wt.lock" bash -c "set -euo pipefail
+held() { flock -n \"\$DEV_LOCKFILE\" true && echo unlocked || echo locked; }
+dc() { echo \"dc \$* \$(held)\"; }
+remove_orphan_volumes() { echo \"sweep \$(held)\"; }
 $td_body
 teardown_volumes")"
-assert_eq "down --volumes, then the sweep" $'dc down --volumes\nsweep' "$out"
+assert_eq "down --volumes, then the sweep, both under the worktree lock" \
+    $'dc down --volumes locked\nsweep locked' "$out"
 
 # ---------- reset and clean call teardown_volumes ----------
 arm_body() { # <arm name> — the body of `    <name>)` up to its `;;`
