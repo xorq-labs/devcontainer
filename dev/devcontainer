@@ -340,10 +340,10 @@ DEV_CONTAINER_PROJECT_KEY="$(echo "$DEV_CONTAINER_WORKSPACE" | sed 's|[^a-zA-Z0-
 export DEV_HOST_PROJECT_KEY DEV_CONTAINER_PROJECT_KEY
 
 # Session transcripts live on the host rather than in the per-worktree
-# claude-home volume, so `reset`/`clean` (both `docker compose down --volumes`)
-# cannot take them with it — they are the only thing in that volume that cannot
-# be rebuilt. Sited under ~/.claude/projects so the host's own tooling sees it as
-# an ordinary project directory.
+# claude-home volume, so `reset`/`clean` (see teardown_volumes) cannot take them
+# with it — they are the only thing in that volume that cannot be rebuilt. Sited
+# under ~/.claude/projects so the host's own tooling sees it as an ordinary
+# project directory.
 DEV_CLAUDE_LOGS="${DEV_CLAUDE_LOGS:-$HOME/.claude/projects/-devcontainer-${DEV_CONTAINER_NAME}}"
 export DEV_CLAUDE_LOGS
 
@@ -377,7 +377,73 @@ dc() {
     # by ensure_nix_base() at up time.
     $DEV_USE_NIX_BASE && files+=(-f "$DEV_BASE_DIR/nix/base/compose.nix-base.yml")
     [ -n "${DEV_HOST_MOUNTS_OVERRIDE:-}" ] && files+=(-f "$DEV_HOST_MOUNTS_OVERRIDE")
-    docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
+    # Every up and down removes orphans: containers of services no current file
+    # declares, left behind when an overlay renames one (minio -> s3). Set here
+    # rather than as a flag per call, because the orphan that matters is often
+    # still running when `up` is the next command (a teardown from before this,
+    # or a sidecar whose restart policy outlived the app container) and keeps
+    # its ports, so the renamed service fails to bind. COMPOSE_IGNORE_ORPHANS
+    # is cleared because compose refuses `up` with both set ("cannot combine
+    # COMPOSE_IGNORE_ORPHANS and --remove-orphans"), and it is a common way to
+    # silence the orphan warning. It is exported EMPTY rather than unset: compose
+    # fills a COMPOSE_* variable from the project directory's .env only when it
+    # is absent from the environment, so an unset one could come back as true
+    # from there. Measured on compose v2.29.7; a compose that
+    # ignores the variable leaves the orphan behind, and removing it once with
+    # `docker rm -f <container>` is enough after the rename. Two consequences
+    # are accepted: running this worktree under a different overlay removes the
+    # first overlay's sidecars on `up`, without a prompt; and an orphan's
+    # anonymous volumes (an image VOLUME the overlay never named) outlive it
+    # carrying no project label, so nothing here can find them again.
+    # `docker volume prune` reclaims them.
+    COMPOSE_IGNORE_ORPHANS='' COMPOSE_REMOVE_ORPHANS=true \
+        docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
+}
+
+# Remove volumes compose created for this worktree's project but that no
+# current file declares. `down --volumes` only removes declared volumes, so an
+# overlay that renames a service (minio -> s3, minio-data -> s3-data) would
+# otherwise leave the old volume behind through every reset and clean; removing
+# orphan containers does not take their volumes. A candidate needs this
+# project's label AND compose's own `<container-name>_` name prefix (the compose
+# project is DEV_CONTAINER_NAME, not DEV_PROJECT_NAME). The label alone is
+# not enough: a shared cache compose created before the overlay marked it
+# `external: true` keeps the label (ensure_external_volumes never relabels an
+# existing volume), and the reset prompt promises to keep those. They are named
+# `<project-name>-<cache>`, never `<container-name>_...`. The cost is that an
+# orphan the overlay named explicitly (`name:` without `external:`) is never
+# swept either; remove it by hand with `docker volume rm`. Never fatal: a volume
+# docker refuses to remove, or a listing that fails, is warned about with
+# docker's own reason and left. The listing's stderr goes straight to the user,
+# never into the list of names.
+remove_orphan_volumes() {
+    local v vols err
+    if ! vols="$(docker volume ls -q --filter "label=com.docker.compose.project=$DEV_CONTAINER_NAME")"; then
+        echo "warning: could not list orphaned volumes (docker's error above)" >&2
+        return 0
+    fi
+    while IFS= read -r v; do
+        [[ "$v" == "${DEV_CONTAINER_NAME}_"* ]] || continue
+        err="$(docker volume rm "$v" 2>&1 >/dev/null)" \
+            || echo "warning: could not remove orphaned volume $v: $err" >&2
+    done <<< "$vols"
+}
+
+# reset and clean: the per-worktree volumes, declared and orphaned. The sweep
+# must come after `down`: until then every project volume is still attached to a
+# container and docker refuses to remove it. Both run under the per-worktree
+# lock ensure_up takes, because between them a concurrent `up` could create a
+# fresh volume the sweep would then remove before the container attaches it.
+# Nothing here is backgrounded, so fd 9 cannot leak (see ensure_up).
+teardown_volumes() {
+    (
+        if ! flock -n 9; then
+            echo "Another devcontainer operation is in progress, waiting..."
+            flock 9
+        fi
+        dc down --volumes
+        remove_orphan_volumes
+    ) 9>"$DEV_LOCKFILE"
 }
 
 dc_exec() {
@@ -1054,7 +1120,7 @@ case "${1:-up}" in
         stop_ssh_forward
         stop_gpg_forward
         stop_x11_forward
-        dc down --volumes
+        teardown_volumes
         ;;
     clean)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
@@ -1068,7 +1134,7 @@ case "${1:-up}" in
         stop_x11_forward
         # No --rmi: the image is project-shared ($DEV_IMAGE_REPO) — siblings may
         # run on it. clean-images removes it project-wide.
-        dc down --volumes
+        teardown_volumes
         # Sweep legacy per-worktree image names from before the shared-image
         # scheme (compose default <container>-app + <container>:<hash> tags).
         # Known ambiguity inherent to the legacy naming: with sibling worktrees
