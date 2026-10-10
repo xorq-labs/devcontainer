@@ -385,7 +385,10 @@ dc() {
     # its ports, so the renamed service fails to bind. COMPOSE_IGNORE_ORPHANS
     # is cleared because compose refuses `up` with both set ("cannot combine
     # COMPOSE_IGNORE_ORPHANS and --remove-orphans"), and it is a common way to
-    # silence the orphan warning. Measured on compose v2.29.7; a compose that
+    # silence the orphan warning. It is exported EMPTY rather than unset: compose
+    # fills a COMPOSE_* variable from the project directory's .env only when it
+    # is absent from the environment, so an unset one could come back as true
+    # from there. Measured on compose v2.29.7; a compose that
     # ignores the variable leaves the orphan behind, and removing it once with
     # `docker rm -f <container>` is enough after the rename. Two consequences
     # are accepted: running this worktree under a different overlay removes the

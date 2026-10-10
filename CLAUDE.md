@@ -485,7 +485,8 @@ taxonomy and reads as `test:`.
   orphaned volumes. The reasoning lives in the comments above `dc()` and
   `remove_orphan_volumes` in `dev/devcontainer`, not here
   (`test: tests/test-teardown-orphans.sh`, which runs both with docker
-  stubbed and rejects any compose call outside `dc()` in `dev/` or `lib/`;
+  stubbed and rejects any compose call outside `dc()` in `dev/`, `dev/hooks/` or
+  `lib/`;
   `unguarded:` a call split across lines with `\` or run through `eval`, since
   catching those means parsing shell; a compose that ignores
   `COMPOSE_REMOVE_ORPHANS`, which needs a real compose and is accepted with a

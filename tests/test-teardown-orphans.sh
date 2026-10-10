@@ -48,6 +48,13 @@
 #        `docker compose` after `;&|(` and missed k; the second missed l, m).
 #     n. `docker compose -p x down` appended to dev/cleanup-worktree -> red
 #        (the check scanned only dev/devcontainer and lib/ until round 3).
+#     q. dc(): `( unset COMPOSE_IGNORE_ORPHANS; COMPOSE_REMOVE_ORPHANS=true
+#        docker compose ... )`, unset instead of exported empty -> red (both dc
+#        assertions). Green before the stub printed `${VAR+set}`.
+#     r. `docker compose -p x down` appended to dev/hooks/post-checkout -> red.
+#        Green before the scan included dev/hooks/.
+#   (q and r re-measured 2026-10-10 against both this suite and the one at
+#    36f5728, a fresh copy each; c-p re-run unchanged at 18 assertions.)
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -71,14 +78,16 @@ set -euo pipefail
 COMPOSE_FILE=/x/docker-compose.yml COMPOSE_OVERRIDE=/nonexistent
 DEV_USE_NIX_BASE=false DEV_BASE_DIR=/x DEV_CONTAINER_NAME=proj-dev-wt
 export COMPOSE_IGNORE_ORPHANS=true   # as a user's shell profile might
-docker() { echo "remove=${COMPOSE_REMOVE_ORPHANS:-} ignore=${COMPOSE_IGNORE_ORPHANS:-} $*"; }
+# `ignore=set:` means exported and empty; unset would print `ignore=:` (dc()
+# says why the difference matters).
+docker() { echo "remove=${COMPOSE_REMOVE_ORPHANS:-} ignore=${COMPOSE_IGNORE_ORPHANS+set}:${COMPOSE_IGNORE_ORPHANS:-} $*"; }
 RUNNER_EOF
 printf '%s\n' "$dc_body" 'dc up -d' 'dc down --volumes' >> "$RUNNER"
 out="$(bash "$RUNNER")"
 assert_contains "dc up runs with orphan removal, ignore cleared" \
-    "remove=true ignore= compose -f /x/docker-compose.yml -p proj-dev-wt up -d" "$out"
+    "remove=true ignore=set: compose -f /x/docker-compose.yml -p proj-dev-wt up -d" "$out"
 assert_contains "dc down runs with orphan removal, ignore cleared" \
-    "remove=true ignore= compose -f /x/docker-compose.yml -p proj-dev-wt down --volumes" "$out"
+    "remove=true ignore=set: compose -f /x/docker-compose.yml -p proj-dev-wt down --volumes" "$out"
 
 # dc() is the only door to compose: compose run anywhere else bypasses the
 # setting above. Any occurrence counts (`if ! docker compose`, `x && docker
@@ -87,7 +96,7 @@ assert_contains "dc down runs with orphan removal, ignore cleared" \
 # which is a message naming the command rather than running it. Not caught, and
 # accepted: a call split across lines with `\`, or built up and run by `eval`.
 strays=()
-for f in "$DEV_BASE"/dev/* "$DEV_BASE"/lib/*.sh; do
+for f in "$DEV_BASE"/dev/* "$DEV_BASE"/dev/hooks/* "$DEV_BASE"/lib/*.sh; do
     [ -f "$f" ] || continue
     while IFS= read -r hit; do
         strays+=("$f:$hit")
