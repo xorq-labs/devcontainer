@@ -380,6 +380,25 @@ dc() {
     docker compose "${files[@]}" -p "$DEV_CONTAINER_NAME" "$@"
 }
 
+# Remove volumes compose labelled for this worktree's project but that no
+# current file declares. `down --volumes` only removes declared volumes, so an
+# overlay that renames a service (minio -> s3, minio-data -> s3-data) would
+# otherwise leave the old volume behind through every reset and clean, even with
+# --remove-orphans, which takes the old container but not its volume. Run after
+# `dc down --volumes`, when every volume still carrying the label is one of
+# these. External volumes are created by `docker volume create` without compose
+# labels, and the label is the exact project name, so neither the shared caches
+# nor a sibling worktree's volumes match. Never fatal: a volume docker refuses
+# to remove is named and left.
+remove_orphan_volumes() {
+    local v
+    while IFS= read -r v; do
+        [ -n "$v" ] || continue
+        docker volume rm "$v" >/dev/null 2>&1 \
+            || echo "warning: could not remove orphaned volume $v" >&2
+    done < <(docker volume ls -q --filter "label=com.docker.compose.project=$DEV_CONTAINER_NAME")
+}
+
 dc_exec() {
     dc exec \
         -e DEV_WORKTREE="$DEV_WORKTREE" \
@@ -999,7 +1018,7 @@ ensure_up() {
             read -rp "Choice [r/c/q]: " answer
             case "$answer" in
                 [rR]*)
-                    dc down
+                    dc down --remove-orphans
                     ensure_image
                     dc_up
                     save_config_hashes
@@ -1042,7 +1061,7 @@ case "${1:-up}" in
         stop_ssh_forward
         stop_gpg_forward
         stop_x11_forward
-        dc down
+        dc down --remove-orphans
         ;;
     reset)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
@@ -1054,7 +1073,8 @@ case "${1:-up}" in
         stop_ssh_forward
         stop_gpg_forward
         stop_x11_forward
-        dc down --volumes
+        dc down --volumes --remove-orphans
+        remove_orphan_volumes
         ;;
     clean)
         if [[ "${2:-}" != "--yes" && "${2:-}" != "-y" ]]; then
@@ -1068,7 +1088,8 @@ case "${1:-up}" in
         stop_x11_forward
         # No --rmi: the image is project-shared ($DEV_IMAGE_REPO) — siblings may
         # run on it. clean-images removes it project-wide.
-        dc down --volumes
+        dc down --volumes --remove-orphans
+        remove_orphan_volumes
         # Sweep legacy per-worktree image names from before the shared-image
         # scheme (compose default <container>-app + <container>:<hash> tags).
         # Known ambiguity inherent to the legacy naming: with sibling worktrees
