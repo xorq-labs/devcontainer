@@ -29,6 +29,11 @@ let
       license = lib.licenses.elastic20;
       # Turns any item into a git worktree session.
       runtimeDeps = [ git ];
+      # No `completion` subcommand at the pinned version. This is a fact about
+      # the BUILD, not about the repo: xorq-labs/forge#1 adds one, so a pin that
+      # moves to a build carrying it flips this to true (or drops the line —
+      # mkKennTool defaults to completions present, which six of seven are).
+      hasCompletion = false;
     };
     roborev = {
       description = "Continuous background code review database for coding agents";
@@ -64,8 +69,10 @@ let
       plat =
         src.platforms.${system}
           or (throw "kenn-io/${repo} v${src.version} publishes no binary for ${system}");
-      # kenn-forge has no `completion` subcommand upstream; the rest do.
-      hasCompletion = repo != "forge";
+      # Per-tool data, not `repo != "forge"`: the capability tracks the pinned
+      # build, and keying it on repo identity means a pin that gains completions
+      # silently keeps skipping them. Absent = present, the common case.
+      hasCompletion = info.hasCompletion or true;
     in
     stdenvNoCC.mkDerivation {
       pname = src.binary;
