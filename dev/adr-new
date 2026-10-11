@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Start an ADR: copy docs/adr/template.md to docs/adr/XXXX-<slug>.md.
+#
+# The number is not chosen here and cannot be. An ADR takes the number of the
+# pull request that adds it, which does not exist yet — so the file carries the
+# XXXX placeholder until dev/adr-rename replaces it. XXXX rather than 0000
+# because a placeholder must not look like a number: 0000 parses as one, sorts
+# as one, and a half-finished rename would leave something that reads as a real
+# ADR. See docs/adr/README.md.
+#
+# The slug is the ADR's identity and never changes. It is what makes
+# `ADR-<slug>` a citation that resolves before a number exists, so choose it as
+# carefully as a title: it is what other branches will write.
+#
+# Usage: dev/adr-new <slug>
+# Exit: 0 = created; 2 = bad invocation or the file already exists.
+set -euo pipefail
+
+slug="${1:-}"
+if [ -z "$slug" ] || [ "$slug" = -h ] || [ "$slug" = --help ]; then
+    echo "usage: dev/adr-new <slug>   (lowercase words joined by single hyphens)" >&2
+    [ -n "$slug" ] && exit 0
+    exit 2
+fi
+
+if [[ ! "$slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+    echo "slug must be lowercase words joined by single hyphens: '$slug'" >&2
+    exit 2
+fi
+
+repo="$(git rev-parse --show-toplevel)"
+template="$repo/docs/adr/template.md"
+dest="$repo/docs/adr/XXXX-$slug.md"
+
+[ -f "$template" ] || { echo "$template not found" >&2; exit 2; }
+[ -e "$dest" ] && { echo "$dest already exists" >&2; exit 2; }
+
+cp "$template" "$dest"
+echo "$dest"
+cat >&2 <<EOF
+Write it, open the pull request, then run:
+  dev/adr-rename $slug
+Cite it meanwhile as ADR-$slug — that resolves now and keeps resolving after
+it is numbered, which is why no number has to be reserved.
+EOF

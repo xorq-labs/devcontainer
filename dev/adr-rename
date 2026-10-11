@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Give a drafted ADR the number of the pull request that adds it: rename
+# docs/adr/XXXX-<slug>.md to NNNN-<slug>.md, fix its heading, and rewrite
+# `ADR-<slug>` references to `ADR-NNNN` across the repo.
+#
+# This is the `tool:` half of ADR-numbers-come-from-pull-requests' guard, in
+# the ADR-0005 sense: the pull request number lives outside the tree, so no
+# hermetic test can check that a file carries the right one. What a tool CAN do
+# is refuse to write a wrong one — which is why the number is read from the
+# forge here and never typed by a human.
+#
+# The reference sweep leaves fenced blocks and inline code spans alone, for the
+# same reason dev/check-adr does not read them as citations: a slug shown in
+# backticks in a document ABOUT this convention is an example of the form, not
+# a use of it. README.md's own table would otherwise be rewritten into
+# nonsense by the first ADR that lands.
+#
+# A partial sweep is harmless and needs no recovery: the named form never stops
+# resolving, so anything this misses stays correct, just long.
+#
+# Usage: dev/adr-rename [<slug>]      (the slug is needed only if more than one
+#                                      draft is in flight)
+# Exit: 0 = renamed; 2 = bad invocation, no draft, or no pull request yet.
+set -euo pipefail
+
+# Below this, numbers are the frozen legacy range — see dev/check-adr, which
+# holds the same floor and is the thing that fails the build over it.
+FLOOR=100
+
+want="${1:-}"
+if [ "$want" = -h ] || [ "$want" = --help ]; then
+    echo "usage: dev/adr-rename [<slug>]" >&2
+    exit 0
+fi
+
+repo="$(git rev-parse --show-toplevel)"
+cd "$repo"
+
+drafts=()
+for path in docs/adr/XXXX-*.md; do
+    [ -e "$path" ] || continue
+    slug="$(basename "$path")"
+    slug="${slug#XXXX-}"
+    slug="${slug%.md}"
+    [ -z "$want" ] || [ "$want" = "$slug" ] || continue
+    drafts+=("$path")
+done
+
+if [ ${#drafts[@]} -eq 0 ]; then
+    echo "no docs/adr/XXXX-${want:+$want}*.md to rename" >&2
+    exit 2
+elif [ ${#drafts[@]} -gt 1 ]; then
+    printf 'more than one draft is in flight; name one:\n' >&2
+    printf '  %s\n' "${drafts[@]}" >&2
+    exit 2
+fi
+
+draft="${drafts[0]}"
+slug="$(basename "$draft")"
+slug="${slug#XXXX-}"
+slug="${slug%.md}"
+
+if ! pr="$(gh pr view --json number --jq .number 2>&1)"; then
+    cat >&2 <<EOF
+could not read a pull request number for this branch:
+  $pr
+Open the pull request first — the number is what the ADR is named after, so it
+has to exist before the file can be. Until then the draft is citable as
+ADR-$slug.
+EOF
+    exit 2
+fi
+
+if [ "$pr" -lt "$FLOOR" ]; then
+    echo "pull request #$pr is below the legacy floor of $FLOOR; refusing to write a number that reads as a legacy ADR" >&2
+    exit 2
+fi
+
+number="$(printf '%04d' "$pr")"
+dest="docs/adr/$number-$slug.md"
+[ -e "$dest" ] && { echo "$dest already exists" >&2; exit 2; }
+
+git mv "$draft" "$dest"
+# The heading is the second encoding of the number, and dev/check-adr fails
+# when it disagrees with the filename — so the two move together, here, rather
+# than being left for the author to remember.
+sed -i "s/^# ADR-XXXX:/# ADR-$number:/" "$dest"
+
+# Sweep `ADR-<slug>` -> `ADR-NNNN` in tracked text, outside shown code. The
+# span state carries across lines: prose wraps, and a span that opens on one
+# line and closes on the next must still count as shown.
+swept=0
+while IFS= read -r file; do
+    [ -f "$file" ] || continue
+    grep -q "ADR-$slug" "$file" 2>/dev/null || continue
+    tmp="$(mktemp)"
+    awk -v slug="ADR-$slug" -v num="ADR-$number" -v md="$(case "$file" in *.md) echo 1 ;; *) echo 0 ;; esac)" '
+        md && /^[[:space:]]*```/ { fence = !fence; print; next }
+        md && fence { print; next }
+        {
+            if (!md) { gsub(slug, num); print; next }
+            out = ""
+            line = $0
+            while (length(line)) {
+                i = index(line, "`")
+                if (!span) {
+                    seg = (i == 0) ? line : substr(line, 1, i - 1)
+                    gsub(slug, num, seg)
+                    out = out seg
+                    if (i == 0) { line = "" }
+                    else { out = out "`"; line = substr(line, i + 1); span = 1 }
+                } else {
+                    seg = (i == 0) ? line : substr(line, 1, i)
+                    out = out seg
+                    if (i == 0) { line = "" }
+                    else { line = substr(line, i + 1); span = 0 }
+                }
+            }
+            print out
+        }
+    ' "$file" > "$tmp"
+    if ! cmp -s "$file" "$tmp"; then
+        cat "$tmp" > "$file"
+        swept=$((swept + 1))
+    fi
+    rm -f "$tmp"
+done < <(git ls-files)
+
+echo "$dest"
+printf 'renamed to ADR-%s; rewrote named references in %d file(s).\n' "$number" "$swept" >&2
+printf 'Set the status: merging an ADR accepts it, so a numbered one does not read Proposed.\n' >&2

@@ -1,6 +1,9 @@
 # ADR-0006: Structural auditing as prompted agents, not metric tooling
 
-- Status: Proposed
+- Status: Accepted (2026-08-02 — landed in #90, which shipped
+  `.claude/agents/structural-auditor.md` and the audit-closure convention in
+  CLAUDE.md. Amended by #122, which made committing the report optional
+  (section dated 2026-08-04); see below. The header read `Proposed` until 2026-08-15)
 - Date: 2026-08-02
 - Implemented by: PR #90 (`.claude/agents/structural-auditor.md`, the
   `pr-reviewer` "repeat offenders" section, the audit-closure convention in

@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# Guard for the ADR conventions recorded in docs/adr/README.md: filenames,
+# headings, statuses, uniqueness, and — with --base/--pr — that a newly added
+# ADR takes the number of the pull request adding it.
+#
+# The guard is in two halves because the facts are. Everything derivable from
+# docs/adr/ alone is hermetic and runs from tests/test-check-adr.sh, which
+# tests/run-all globs, so it reaches CI without a workflow naming it. The one
+# fact that lives OUTSIDE the tree — the pull request number — cannot be
+# checked that way at all, so it needs --base/--pr from a CI event, which is
+# what .github/workflows/adr.yml supplies. That split is the ADR-0005 typing:
+# `test:` for the first half, `tool:`/`ci:` for the second.
+#
+# Failing closed matters more here than breadth. A file whose status line is
+# written in a shape this script does not recognise is an ERROR, not a silent
+# pass — the fail-open parser that let a dispatch arm leave the command set
+# (#96) and a build input leave a trigger-path list (#86) is the shape to
+# avoid, and a guard that quietly skips what it cannot parse is that shape.
+#
+# Errors fail the run; warnings never do. The asymmetry is deliberate and is
+# documented per case below: a warning is for a fact that is legitimately not
+# yet true (an ADR on an unlanded branch, an allowlist entry whose cleanup is
+# owed to a later pull request) or for history that must not be edited.
+#
+# Usage:
+#   dev/check-adr [--repo DIR]                 # directory checks only
+#   dev/check-adr --base <ref> --pr <number>   # ...plus the new-ADR checks
+#
+# Exit: 0 = no errors (warnings may have been printed); 1 = at least one error;
+#       2 = bad invocation.
+set -euo pipefail
+
+# An ADR added from here on takes its pull request's number. Numbers below the
+# floor are the frozen legacy range; see docs/adr/README.md. The floor only
+# gates ADRs a pull request ADDS — files already in the tree ARE the legacy
+# range and are never re-judged by it, which is why no list of them exists to
+# go stale.
+FLOOR=100
+
+# Legacy-numbered ADRs written before the rule, allowed to land at their
+# reserved number. Keyed to filename AND the branch it comes from: keying to
+# the bare number would readmit any file at that number later. The list only
+# ever shrinks, and a spent entry reports itself (see check_allowlist) because
+# its deletion can never be atomic with the merge that spends it — this guard
+# reads merged code, so the pull request landing an allowlisted ADR needs its
+# entry still present to pass.
+LEGACY_IN_FLIGHT=(
+    "0004-durable-claude-memory-carve-outs.md|#81, opened 2026-08-01"
+)
+
+# Files in docs/adr/ that are not ADRs.
+META_FILES="README.md template.md"
+
+errors=0
+warnings=0
+
+err() {
+    printf '%s: %s\n' "$1" "$2" >&2
+    errors=$((errors + 1))
+}
+
+warn() {
+    printf '%s: warning: %s\n' "$1" "$2" >&2
+    warnings=$((warnings + 1))
+}
+
+usage() {
+    sed -n '/^# Usage:/,/^#       2 = bad/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+repo=""
+base=""
+pr=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --repo) repo="${2:?--repo needs a directory}"; shift 2 ;;
+        --base) base="${2:?--base needs a ref}"; shift 2 ;;
+        --pr) pr="${2:?--pr needs a number}"; shift 2 ;;
+        -h | --help) usage; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if { [ -n "$base" ] && [ -z "$pr" ]; } || { [ -z "$base" ] && [ -n "$pr" ]; }; then
+    echo "--base and --pr are used together: one names what to diff against, the other what the number must equal" >&2
+    exit 2
+fi
+
+if [ -z "$repo" ]; then
+    repo="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+fi
+adr_dir="$repo/docs/adr"
+
+if [ ! -d "$adr_dir" ]; then
+    echo "$adr_dir not found; pass --repo or run from a checkout" >&2
+    exit 2
+fi
+
+# Shown code is not a citation. A fenced block or an inline span in a document
+# ABOUT this convention (README.md's tables, this repo's own ADR) displays a
+# reference rather than making one, so stripping both is what lets those files
+# discuss `ADR-0143` without the guard chasing an ADR nobody claimed.
+#
+# The span state carries ACROSS lines, which a per-line `gsub(/`[^`]*`/, "")`
+# does not: prose wrapped at 78 columns puts a line break inside an inline span
+# routinely, and the naive version then saw the opening backtick, found no
+# close, and left the quoted text in — reporting a citation the author had
+# explicitly marked as shown. That is a false positive on correct input, which
+# is the failure that gets a guard deleted rather than fixed. Found by running
+# this guard against the very ADR that introduces it.
+strip_shown_code() {
+    awk '
+        /^[[:space:]]*```/ { fence = !fence; next }
+        fence { next }
+        {
+            out = ""
+            line = $0
+            while (length(line)) {
+                i = index(line, "`")
+                if (!span) {
+                    if (i == 0) { out = out line; line = "" }
+                    else { out = out substr(line, 1, i - 1); line = substr(line, i + 1); span = 1 }
+                } else {
+                    if (i == 0) { line = "" }
+                    else { line = substr(line, i + 1); span = 0 }
+                }
+            }
+            print out
+        }
+    ' "$1"
+}
+
+declare -A by_number=()
+declare -A by_slug=()
+declare -A number_file=()
+declare -A slug_file=()
+adr_files=()
+
+# --- Pass 1: filenames, headings, statuses, uniqueness -----------------------
+#
+# Both indexes have to be complete before any reference can be resolved, which
+# is why references are a second pass rather than folded in here.
+
+for path in "$adr_dir"/*.md; do
+    [ -e "$path" ] || continue
+    file="$(basename "$path")"
+    case " $META_FILES " in *" $file "*) continue ;; esac
+    adr_files+=("$path")
+
+    if [[ ! "$file" =~ ^([0-9]{4}|XXXX)-([a-z0-9]+(-[a-z0-9]+)*)\.md$ ]]; then
+        err "docs/adr/$file" "filename must be NNNN-<slug>.md, or XXXX-<slug>.md before the pull request exists, with the slug lowercase words joined by single hyphens"
+        continue
+    fi
+    num="${BASH_REMATCH[1]}"
+    slug="${BASH_REMATCH[2]}"
+
+    if [ -n "${by_number[$num]:-}" ] && [ "$num" != XXXX ]; then
+        err "docs/adr/$file" "number $num is already taken by ${number_file[$num]}"
+    fi
+    if [ -n "${by_slug[$slug]:-}" ]; then
+        err "docs/adr/$file" "slug '$slug' is already taken by ${slug_file[$slug]} — the slug is an ADR's identity, so two files cannot share one"
+    fi
+    [ "$num" = XXXX ] || { by_number[$num]=1; number_file[$num]="$file"; }
+    by_slug[$slug]=1
+    slug_file[$slug]="$file"
+
+    heading="$(grep -m1 '^# ADR-' "$path" || true)"
+    if [ -z "$heading" ]; then
+        err "docs/adr/$file" "missing an '# ADR-NNNN: <title>' heading"
+    elif [[ "$heading" =~ ^\#\ ADR-([0-9]{4}|XXXX): ]]; then
+        [ "${BASH_REMATCH[1]}" = "$num" ] ||
+            err "docs/adr/$file" "heading says ADR-${BASH_REMATCH[1]} but the filename says $num"
+    else
+        err "docs/adr/$file" "heading is not '# ADR-<NNNN|XXXX>: <title>': $heading"
+    fi
+
+    # Status is the one field in an ADR that is a claim about NOW, so it is the
+    # one field that can go stale — and did, in three files at once, while
+    # CLAUDE.md invariants named all three as in force. A landed ADR is an
+    # accepted one: merging is what accepts it. To land a decision that is
+    # genuinely still open, date it, so the staleness is on the page.
+    #
+    # A file still carrying XXXX has not been through a pull request, so bare
+    # Proposed is exactly right there and is the only place it is.
+    status="$(grep -m1 '^- Status:' "$path" || true)"
+    if [ -z "$status" ]; then
+        err "docs/adr/$file" "missing a '- Status: <status>' line (it must be a top-level list item, not bold or indented, or nothing can read it)"
+    else
+        value="${status#- Status:}"
+        value="${value# }"
+        case "$value" in
+            Accepted | Accepted\ * | Rejected | Rejected\ * | Superseded\ by\ ADR-*) ;;
+            Proposed\ \(decision\ due\ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) ;;
+            Proposed*)
+                if [ "$num" = XXXX ]; then :; else
+                    err "docs/adr/$file" "reads '$value', but a numbered ADR has been through a pull request and merging one accepts it. Use 'Accepted (<date> — <what makes it so>)', or 'Proposed (decision due YYYY-MM-DD)' to land a decision that is genuinely still open"
+                fi
+                ;;
+            *)
+                err "docs/adr/$file" "unrecognised status '$value'; see the table in docs/adr/README.md"
+                ;;
+        esac
+    fi
+done
+
+if [ ${#adr_files[@]} -eq 0 ]; then
+    err "docs/adr" "no ADRs found; the guard would pass vacuously, which is worse than failing"
+fi
+
+# --- Pass 2: references ------------------------------------------------------
+
+for path in "${adr_files[@]:-}"; do
+    [ -n "$path" ] || continue
+    file="$(basename "$path")"
+    prose="$(strip_shown_code "$path")"
+
+    while read -r ref; do
+        [ -n "$ref" ] || continue
+        digits="${ref#ADR-}"
+        if [ "${#digits}" -ne 4 ]; then
+            err "docs/adr/$file" "references ADR-$digits, but ADR numbers are written with four digits — did you mean ADR-$(printf '%04d' "$((10#$digits))")?"
+        elif [ -z "${by_number[$digits]:-}" ]; then
+            err "docs/adr/$file" "references ADR-$digits, which does not exist"
+        fi
+    done < <(printf '%s\n' "$prose" | grep -oE 'ADR-[0-9]+' | sort -u)
+
+    # A named reference that does not resolve is a WARNING, not an error: the
+    # ADR it names may legitimately be on a branch that has not landed, which
+    # is the whole reason the named form exists. A dangling NUMERIC reference
+    # stays an error — the forge allocated that number, so a missing target is
+    # a mistake rather than a schedule.
+    while read -r ref; do
+        [ -n "$ref" ] || continue
+        named="${ref#ADR-}"
+        [ -n "${by_slug[$named]:-}" ] ||
+            warn "docs/adr/$file" "references ADR-$named, which is not in this directory. Expected if it lands in a later pull request; otherwise the slug is wrong"
+    done < <(printf '%s\n' "$prose" | grep -oE 'ADR-[a-z][a-z0-9-]*' | sort -u)
+done
+
+# --- Pass 3: numeric citations elsewhere in the repo -------------------------
+#
+# Scoped differently from the ADR directory on purpose. Most of this repo's
+# ADR citations live OUTSIDE docs/adr — in CLAUDE.md's invariants, in dev/
+# scripts, in sixteen test suites — so not looking at all would miss where the
+# value is. But some of those files are history too: docs/audits/ reports
+# record what was true on the day they were written, exactly as an ADR does.
+# So a dangling citation out here is reported and never fatal.
+if refs="$(git -C "$repo" grep -hoE 'ADR-[0-9]{4}' -- . ':(exclude)docs/adr' 2>/dev/null)"; then
+    while read -r ref; do
+        [ -n "$ref" ] || continue
+        digits="${ref#ADR-}"
+        [ -n "${by_number[$digits]:-}" ] || {
+            where="$(git -C "$repo" grep -lE "ADR-$digits" -- . ':(exclude)docs/adr' 2>/dev/null | tr '\n' ' ')"
+            warn "docs/adr" "ADR-$digits is cited by ${where% } but no such ADR is in the tree"
+        }
+    done < <(printf '%s\n' "$refs" | sort -u)
+else
+    warn "docs/adr" "citations outside docs/adr were not checked: git grep found nothing to read, so there is no index to resolve them against"
+fi
+
+# --- Pass 4: the allowlist reports itself ------------------------------------
+
+added=""
+if [ -n "$base" ]; then
+    # Rename-BLIND on purpose: renumbering an ADR must read as adding one, so
+    # that a file arriving at a new number is checked against the pull request
+    # that moved it.
+    added="$(git -C "$repo" diff --name-only --diff-filter=A --no-renames \
+        "$base" -- docs/adr 2>/dev/null || true)"
+fi
+
+check_allowlist() {
+    local entry file why
+    for entry in "${LEGACY_IN_FLIGHT[@]}"; do
+        file="${entry%%|*}"
+        why="${entry#*|}"
+        [ -e "$adr_dir/$file" ] || continue
+        case " $added " in *" docs/adr/$file "*) continue ;; esac
+        warn "docs/adr/$file" "has landed, so its LEGACY_IN_FLIGHT entry in dev/check-adr ($why) has done its job and should be deleted. It now exempts a file that is already here, and if that ADR is ever deleted the entry would readmit its exact filename carrying anything"
+    done
+}
+check_allowlist
+
+is_allowlisted() {
+    local entry
+    for entry in "${LEGACY_IN_FLIGHT[@]}"; do
+        [ "${entry%%|*}" = "$1" ] && return 0
+    done
+    return 1
+}
+
+# --- Pass 5: the number of an ADR this pull request adds ---------------------
+
+if [ -n "$pr" ]; then
+    count=0
+    while read -r path; do
+        [ -n "$path" ] || continue
+        count=$((count + 1))
+        file="$(basename "$path")"
+        num="${file%%-*}"
+
+        if [ "$num" = XXXX ]; then
+            err "$path" "still carries the XXXX placeholder. An ADR takes the number of the pull request that adds it: run dev/adr-rename once the pull request is open"
+            continue
+        fi
+        is_allowlisted "$file" && continue
+        if [ "$((10#$num))" -lt "$FLOOR" ]; then
+            err "$path" "numbers below $(printf '%04d' "$FLOOR") are the frozen legacy range; a new ADR takes its pull request's number, $(printf '%04d' "$pr")"
+        elif [ "$((10#$num))" -ne "$((10#$pr))" ]; then
+            err "$path" "is numbered $num but pull request #$pr adds it; an ADR takes the number of the pull request that adds it. Run dev/adr-rename"
+        fi
+    done < <(printf '%s\n' "$added")
+
+    if [ "$count" -gt 1 ]; then
+        err "docs/adr" "$count ADRs are added by pull request #$pr, and there is only one number to go round. Open one pull request per ADR; cite the other by slug, which resolves before it is numbered"
+    fi
+fi
+
+if [ "$warnings" -gt 0 ]; then
+    printf '%d warning(s), which do not fail the run.\n' "$warnings" >&2
+fi
+if [ "$errors" -gt 0 ]; then
+    printf '%d error(s).\n' "$errors" >&2
+    exit 1
+fi
+exit 0

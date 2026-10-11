@@ -1,0 +1,45 @@
+name: ADR
+
+# Deliberately unfiltered by path. A workflow that fires only on some file
+# changes reports no status at all on the pull requests that miss it, which
+# makes it unusable as a required check — the branch-protection entry sits at
+# "expected" forever. dev/check-adr is a sub-second no-op when nothing about
+# docs/adr changed, so running it everywhere costs less than the workaround.
+#
+# The hermetic half of this guard is NOT here: it lives in
+# tests/test-check-adr.sh, which tests/run-all globs, and runs in the Test
+# workflow with every other suite. This job exists for the one fact that
+# cannot be checked hermetically — that a newly added ADR carries the number of
+# the pull request adding it, which only the event knows.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  adr:
+    name: ADR conventions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The new-ADR check diffs against the base, which a shallow clone
+          # does not contain.
+          fetch-depth: 0
+
+      # Two steps, named apart so the log says which ran: only the first has a
+      # pull request to compare a number against. Event fields arrive as
+      # environment variables rather than being interpolated into the shell.
+      - name: Check ADR conventions and the ADR this pull request adds
+        if: github.event_name == 'pull_request'
+        run: dev/check-adr --base "$BASE_SHA" --pr "$PR_NUMBER"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+
+      - name: Check ADR conventions across the directory
+        if: github.event_name != 'pull_request'
+        run: dev/check-adr

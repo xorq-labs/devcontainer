@@ -7,8 +7,7 @@
   measurement); the comment sweep is #89, and the retrofit lands as invariants
   are touched
 - Related: **devcontainer ADR-0003** (introduced `.claude/agents/`, one consumer
-  of the conventions this ADR formalizes; ADR-0004 is reserved by the in-flight
-  host memory bind, #81). Prompted by #83 and #86, two bugs
+  of the conventions this ADR formalizes). Prompted by #83 and #86, two bugs
   that shipped despite the repo's unusually dense guard coverage.
 
 ## Context

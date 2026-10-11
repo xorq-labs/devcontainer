@@ -1,6 +1,10 @@
 # ADR-0003: Track `.claude/agents/` in git; per-subdir state symlinks
 
-- Status: Proposed
+- Status: Accepted (2026-08-01 — landed in #74; the layout it records is a
+  CLAUDE.md invariant guarded by `tests/test-worktree-claude-layout.sh`, and
+  its `.gitignore` re-inclusion by `dev/check-gitignore-agents` and
+  `tests/test-gitignore-agents-reinclusion.sh` after #91. The header read
+  `Proposed` until 2026-08-15)
 - Date: 2026-08-01
 - Implemented by: this PR (devcontainer)
 - Related: **devcontainer ADR-0001 / ADR-0002** — the container's Claude state

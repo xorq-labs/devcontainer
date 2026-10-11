@@ -1,6 +1,9 @@
 # ADR-0002: Setup-token delivery by environment injection
 
-- Status: Proposed
+- Status: Accepted (2026-08-01 — landed in #55; the resolver order it records
+  is a CLAUDE.md invariant guarded by `tests/test-claude-token.sh`, and the
+  strip-list coupling by `tests/test-token-env-snippet.sh`. Amended the same
+  day; see below. The header read `Proposed` until 2026-08-15)
 - Date: 2026-07-28
 - Implemented by: this PR (devcontainer)
 - Related: **claude-profile ADR-0003** — long-lived setup-token profiles (the

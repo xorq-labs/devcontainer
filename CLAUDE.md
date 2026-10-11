@@ -75,10 +75,16 @@ trade-offs, recommendation) and pushes it for review rather than blocking on
 an interactive question. Current records: ADR-0001 (private credential
 seeding), ADR-0002 (setup-token env delivery), ADR-0003 (tracking
 `.claude/agents/` in git; per-subdir state symlinks), ADR-0005 (guard
-taxonomy: type the guard, prove it fails, derive over restate; ADR-0004 is
-reserved by #81), ADR-0006 (structural auditing as prompted agents, not metric
-tooling; amended 2026-08-04 so committing an audit report is optional), and
+taxonomy: type the guard, prove it fails, derive over restate), ADR-0006
+(structural auditing as prompted agents, not metric tooling; amended
+2026-08-04 so committing an audit report is optional),
+ADR-numbers-come-from-pull-requests (an ADR takes the number of the pull
+request that adds it; slugs cite one that has none yet — cited by slug here
+because it is unnumbered until its own pull request opens), and
 nix/base/README.md "Design decisions" for the base-image record.
+`docs/adr/README.md` is the operative convention; start an ADR with
+`dev/adr-new <slug>` and number it with `dev/adr-rename` once the pull request
+exists.
 
 ## Invariants
 
@@ -419,6 +425,29 @@ taxonomy and reads as `test:`.
   naming nothing actionable. The container's `~/.gitconfig` is ephemeral, so
   the helper re-applies every entry; repeats are free (`--replace-all`)
   (test: tests/test-host-bridge-gh.sh).
+- An ADR's number IS the number of the pull request that adds it (at or above
+  0100; below that is the frozen legacy range, and the one ADR still in flight
+  at a legacy number is exempted by `LEGACY_IN_FLIGHT` in `dev/check-adr`,
+  which reports its own entry as spent once that ADR lands, because the
+  deletion can never be atomic with the merge that spends it). The number does
+  not exist until the pull request does, so a draft is `XXXX-<slug>.md` and the
+  slug — not the number — is the ADR's identity: `ADR-<slug>` resolves before
+  and after numbering, which is what makes reserving a number unnecessary. It
+  had been necessary, and the reservation for 0004 was duly copied into two
+  files that are not a register (CLAUDE.md and ADR-0005's `Related:` line).
+  Merging an ADR accepts it, so a numbered ADR may not read a bare `Proposed`
+  — three did while CLAUDE.md named them as in force
+  (`test: tests/test-check-adr.sh` for everything derivable from `docs/adr/`;
+  `ci: .github/workflows/adr.yml` for the number itself, which lives on the
+  forge and no hermetic test can see; `tool: dev/adr-rename`, which reads that
+  number rather than letting anyone type it. `unguarded`: cross-repo
+  citations — `claude-profile ADR-0001` names a different document than this
+  repo's ADR-0001, and the guard resolves every bare `ADR-NNNN` against
+  `docs/adr/`. The convention is to write those in backticks or as a link, both
+  of which the guard reads as shown rather than cited; teaching it which words
+  are repo names would be a hand-kept list of the same judgement, and the
+  failure is loud either way — an unquoted cross-repo number either errors or
+  resolves to a local ADR a reader can see is the wrong one).
 - Setup-token resolution (ADR-0002): `set-token` override > `/run/secrets`
   Compose secret > host store; unusable (unreadable/empty) tiers fall through
   (`tests/test-claude-token.sh`).
@@ -494,6 +523,7 @@ taxonomy and reads as `test:`.
 - A PR that resolves an issue puts `Closes #N` in its **body** (not just the title). Citing the number in prose does not close anything: #54 was titled "…(#53)" and #53 stayed open for two weeks after it shipped, while #35 was independently re-solved by #71 because nobody knew it was open. An issue list that never drains stops being read, and a fixed-but-open issue is worse than no issue — it sends the next reader after work that is already done.
 - Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003). Because the live file is untracked, drift from the template is caught at commit time by `dev/check-gitignore-agents`, a functional `git check-ignore` probe (see the invariant; #91).
 - Adding a `devcontainer` subcommand: add the dispatch arm in `dev/devcontainer`, add a row to `lib/command-table.tsv`. That is the whole workflow — the usage text, the bash/zsh/fish word lists, their descriptions, and the per-command argument wiring are all generated from the row. Never hand-edit a command list in `dev/devcontainer-completions` or the Commands block of `show_usage`.
+- Writing an ADR: `dev/adr-new <slug>` drafts it as `docs/adr/XXXX-<slug>.md`; open the pull request, then `dev/adr-rename` gives it that pull request's number, fixes the heading and rewrites `ADR-<slug>` citations. One ADR per pull request — there is only one number to go round — and cite a sibling decision by slug rather than waiting for or reserving a number. Set the status to `Accepted` when it lands: merging is what accepts it, and `dev/check-adr` fails a numbered ADR that still reads `Proposed`. Write a cross-repo citation in backticks or as a link, or it will be read as a local one.
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
 - Linter versions live in two paired sources of truth: `.pre-commit-config.yaml` (host commit-time hooks, and CI — `.github/workflows/lint.yml` is a single `pre-commit run --all-files` job with no pins of its own) and `projects/devcontainer/install-system.sh` (in-container bare binaries, for editor integrations and ad-hoc runs). Bump ruff, yamllint, and hadolint in both together; `tests/test-lint-config-sync.sh` guards against drift. hadolint additionally carries two per-arch checksums in `install-system.sh` that no test can verify — bump it with `devcontainer bump-hadolint` rather than by hand, and use `devcontainer bump-hadolint --verify` to confirm the committed checksums really are the release's.
