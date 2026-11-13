@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Tests for `setup-worktree --refresh`: copies are skip-if-present, so a
+# worktree keeps a stale copy of anything the main checkout later changes;
+# --refresh re-copies the ones that differ, backing the old file up under the
+# worktree's git admin dir. Runs against a disposable git repo — no docker.
+set -euo pipefail
+
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+
+DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+SETUP="$DEV_BASE/dev/setup-worktree"
+CLEANUP="$DEV_BASE/dev/cleanup-worktree"
+
+TMPDIR_ROOT="$(mktemp -d)"
+_cleanup_dirs+=("$TMPDIR_ROOT")
+
+# ---------- setup: main checkout with an overlay copy list ----------
+# The overlay lives in main's .devcontainer/, which resolve_project_dir prefers.
+MAIN_TREE="$(new_repo "$TMPDIR_ROOT/fakerepo")"
+printf 'tracked\n' > "$MAIN_TREE/tracked.env"
+git -C "$MAIN_TREE" add tracked.env
+git -C "$MAIN_TREE" commit -qm "track a file the copy list also names"
+mkdir -p "$MAIN_TREE/.devcontainer" "$MAIN_TREE/.envrcs"
+printf '%s\n' '.envrcs/.envrc.user' '.envrcs/.env.*' '.envrcs/link' 'tracked.env' \
+    > "$MAIN_TREE/.devcontainer/worktree-copies.txt"
+printf '.gitignore\n.claude/\n.devcontainer/\n.envrcs/\n' > "$MAIN_TREE/.gitignore"
+printf 'source_env one\n' > "$MAIN_TREE/.envrcs/.envrc.user"
+printf 'SERVER=old.example\n' > "$MAIN_TREE/.envrcs/.env.local"
+printf 'TOKEN=placeholder-secret-v1\n' > "$MAIN_TREE/.envrcs/.env.secrets"
+ln -s target-a "$MAIN_TREE/.envrcs/link"
+
+WT="$TMPDIR_ROOT/wt"
+git -C "$MAIN_TREE" worktree add -q "$WT" -b wt main
+(cd "$WT" && "$SETUP") >/dev/null
+assert_files_eq "initial setup copies .envrc.user" \
+    "$MAIN_TREE/.envrcs/.envrc.user" "$WT/.envrcs/.envrc.user"
+
+# Main moves on after the worktree was made.
+printf 'source_env one\nsource_env two\n' > "$MAIN_TREE/.envrcs/.envrc.user"
+printf 'TOKEN=placeholder-secret-v2\n' > "$MAIN_TREE/.envrcs/.env.secrets"
+ln -sfn target-b "$MAIN_TREE/.envrcs/link"
+printf 'tracked, edited in main\n' > "$MAIN_TREE/tracked.env"
+printf '.gitignore\n.claude/\n.devcontainer/\n.envrcs/\n*.log\n' > "$MAIN_TREE/.gitignore"
+
+# ---------- test: without --refresh nothing existing is touched ----------
+echo "--- plain run: existing copies left stale ---"
+(cd "$WT" && "$SETUP") >/dev/null
+assert_eq "stale .envrc.user kept" "source_env one" "$(cat "$WT/.envrcs/.envrc.user")"
+assert_eq "stale secret kept" "TOKEN=placeholder-secret-v1" "$(cat "$WT/.envrcs/.env.secrets")"
+assert_eq "stale symlink target kept" "target-a" "$(readlink "$WT/.envrcs/link")"
+assert_false "no backup dir without --refresh" \
+    test -e "$(git -C "$WT" rev-parse --absolute-git-dir)/setup-worktree-backup"
+
+# ---------- test: --refresh replaces what differs, backs it up ----------
+echo "--- --refresh: differing copies replaced ---"
+out="$(cd "$WT" && "$SETUP" --refresh 2>&1)"
+assert_files_eq ".envrc.user refreshed" \
+    "$MAIN_TREE/.envrcs/.envrc.user" "$WT/.envrcs/.envrc.user"
+assert_files_eq "secret refreshed" \
+    "$MAIN_TREE/.envrcs/.env.secrets" "$WT/.envrcs/.env.secrets"
+assert_true "symlink copy stays a symlink" test -L "$WT/.envrcs/link"
+assert_eq "symlink copy retargeted" "target-b" "$(readlink "$WT/.envrcs/link")"
+assert_files_eq ".gitignore refreshed" "$MAIN_TREE/.gitignore" "$WT/.gitignore"
+assert_eq "tracked path never overwritten" "tracked" "$(cat "$WT/tracked.env")"
+assert_contains "names the refreshed file" "refreshed .envrcs/.envrc.user" "$out"
+assert_not_contains "unchanged .env.local not reported" ".env.local" "$out"
+assert_not_contains "never prints old secret content" "placeholder-secret-v1" "$out"
+assert_not_contains "never prints new secret content" "placeholder-secret-v2" "$out"
+
+backup_root="$(git -C "$WT" rev-parse --absolute-git-dir)/setup-worktree-backup"
+# nullglob: an unmatched glob would otherwise count as one backup set.
+shopt -s nullglob
+backups=("$backup_root"/*)
+assert_eq "one backup set per run" "1" "${#backups[@]}"
+assert_eq "old .envrc.user backed up" "source_env one" \
+    "$(cat "${backups[0]}/.envrcs/.envrc.user")"
+assert_eq "old secret backed up" "TOKEN=placeholder-secret-v1" \
+    "$(cat "${backups[0]}/.envrcs/.env.secrets")"
+assert_false "unchanged file not backed up" test -e "${backups[0]}/.envrcs/.env.local"
+assert_true "worktree status stays clean (backups outside the work tree)" \
+    test -z "$(git -C "$WT" status --porcelain --untracked-files=all)"
+
+echo "--- --refresh: idempotent ---"
+out="$(cd "$WT" && "$SETUP" --refresh 2>&1)"
+assert_not_contains "second refresh reports nothing" "refreshed" "$out"
+backups=("$backup_root"/*)
+assert_eq "second refresh makes no new backup set" "1" "${#backups[@]}"
+
+# ---------- test: argument handling ----------
+echo "--- arguments ---"
+assert_eq "unknown argument exits 2" "2" \
+    "$(cd "$WT" && { "$SETUP" --bogus >/dev/null 2>&1; echo $?; })"
+assert_contains "--help prints usage" "Usage: setup-worktree" \
+    "$(cd "$WT" && "$SETUP" --help)"
+
+# ---------- test: cleanup-worktree round trip ----------
+echo "--- cleanup-worktree after --refresh ---"
+assert_true "cleanup exits 0" \
+    bash -c '(cd "$1" && "$2" "$3") >/dev/null 2>&1' _ "$MAIN_TREE" "$CLEANUP" "$WT"
+assert_false "worktree removed" test -d "$WT"
+assert_false "backups removed with the admin dir" test -e "$backup_root"
+assert_eq "main's copies untouched by cleanup" "TOKEN=placeholder-secret-v2" \
+    "$(cat "$MAIN_TREE/.envrcs/.env.secrets")"
+
+finish

@@ -627,6 +627,13 @@ taxonomy and reads as `test:`.
   all three layouts; `unguarded`: the legacy bare-path branch, which has no
   producer left in the tree, so no round-trip can reach it and only a
   hand-built fixture would).
+- `setup-worktree` copies are skip-if-present; only `--refresh` overwrites
+  one, and then only an untracked path whose content (or, for a symlink, link
+  target) differs from main's. The old file goes to
+  `<git-dir>/setup-worktree-backup/<timestamp>/`, outside the work tree, so
+  the manifest and `cleanup-worktree` need no new action — `git worktree
+  remove` deletes the admin dir. Output names paths only, never contents or
+  diffs: copy lists carry secrets (`test: tests/test-setup-refresh.sh`).
 - Neither `dev/hooks/pre-commit` nor `dev_main_tree()` in `lib/git.sh` may pipe
   worktree listings into a reader that exits early (`| head -1`): the writer
   dies of SIGPIPE and `pipefail` fails the hook AFTER a correct assignment, so
