@@ -18,8 +18,12 @@
 #   3. a matching mount point   -> `chown -R` is SKIPPED (the cold-start win)
 #      while the O(depth) ancestor chowns still run unconditionally
 #   4. ancestor walking stops at the home prefix and never leaves it
-#   5. `chown -R` is post-order, the invariant the guard rests on: an interrupted
-#      run leaves the mount point unchowned, so it can't be read as completed
+#   5. the mount point is chowned LAST, the invariant the guard rests on: an
+#      interrupted run leaves it unchowned, so it can't be read as completed.
+#      dev_chown_tree orders that itself (each child `chown -R`, then the top
+#      bare), so it is asserted on the stub's call log, not on a real chown's
+#      traversal — which is what this item used to probe, and what broke when
+#      ubuntu-latest moved to uutils coreutils (pre-order) under CI
 #   6. bind/volume dispatch: a bind gets its daemon-created ancestors repaired
 #      but is never DISPATCHED into the recursive branch, a volume still gets
 #      both, an unknown kind gets nothing
@@ -111,6 +115,26 @@
 # the branch behind PR #124.
 #   (mutation runs 2026-08-04; items 8-12 on 2026-08-11, fresh copy each,
 #    re-measured after the Dockerfile-text parser was deleted)
+#
+# Item 5 was rewritten when dev_chown_tree took the top-last order over from
+# chown's traversal (2026-11-13; fresh copy each, baseline 63 passed):
+#  13. SEMANTIC — dev_chown_tree's final top chown commented out — 5 red: the
+#      four item-5 top/count assertions and "fresh volume -> and on the mount
+#      point itself".
+#  14. SEMANTIC — the top chown moved ahead of the loop (pre-order, uutils'
+#      shape) — 1 red, "the top directory is chowned LAST, and not
+#      recursively". Only that one: the count and membership checks are
+#      order-blind by design, so this mutation's coverage is a single line.
+#  15. SEMANTIC — the `.[!.]*` glob dropped — 2 red (".hidden" and the count).
+#  16. SEMANTIC — the existence test commented out, so an unmatched glob is
+#      chowned literally — 1 red, the empty-directory check. Before that check
+#      existed this mutant's broken-syntax variant ran GREEN: the main item-5
+#      fixture matches all three globs and cannot see an unmatched one.
+#  17. SEMANTIC — `|| [ -L … ]` dropped — 2 red ("dangling" and the count).
+#  18. SEMANTIC — the dispatcher's call restored to a bare `chown -R <top>` —
+#      7 red, every `-R … <volume>/<child>` needle.
+#  19. FORM-ONLY — the existence test respelled as `if [ ! -e … ] && [ ! -h … ];
+#      then continue; fi` — green, 63 passed, no drop.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -151,7 +175,9 @@ echo "=== mount-point chown guard tests ==="
 # ---- 1. the guard decision ----
 home="$tmp/home/vscode"
 mount="$home/.cache/uv"
-mkdir -p "$mount"
+# A child, so the recursion is visible: dev_chown_tree recurses per CHILD and
+# chowns the mount point itself bare, so an empty mount point logs no `-R` at all.
+mkdir -p "$mount/archive"
 # The group the suite's dirs actually get — usually $(id -gn), but a setgid
 # parent can override it, so read it back rather than assume.
 MYGRP="$(stat -c %G "$mount")"
@@ -169,8 +195,10 @@ assert_false "a FILE at the mount path -> nothing needed (dirs only)" \
 
 # ---- 2. fresh volume: the recursion still runs ----
 run "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$home" "$mount"
-assert_contains "fresh volume -> chown -R on the mount point" \
-    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mount" "$(log)"
+assert_contains "fresh volume -> chown -R on the mount point's contents" \
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mount/archive" "$(log)"
+assert_true "fresh volume -> and on the mount point itself" \
+    grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $mount" "$CHOWN_LOG"
 
 # ---- 3. already-chowned volume: the recursion is SKIPPED ----
 # The whole point of the guard: setup() re-runs on every cold start, and this is
@@ -210,38 +238,48 @@ assert_eq "empty target entries are skipped" "" "$(log)"
 
 # Multiple targets in one call: each is judged on its own mount point.
 other="$home/.cache/other"
-mkdir -p "$other"
+mkdir -p "$other/archive"
 run "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$home" "$mount" "$other"
 assert_contains "multiple targets: first still recursed" \
-    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mount" "$(log)"
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mount/archive" "$(log)"
 assert_contains "multiple targets: second still recursed" \
-    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $other" "$(log)"
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $other/archive" "$(log)"
 
-# ---- 5. `chown -R` is post-order (the invariant the guard rests on) ----
-# If chown -R chowned the top directory FIRST, an interrupted run would leave a
+# ---- 5. the mount point is chowned LAST (the invariant the guard rests on) ----
+# If the top directory were chowned FIRST, an interrupted run would leave a
 # user-owned mount point over a still-root-owned tree and the guard would skip
-# the repair forever. Post-order means the mount point is chowned LAST, so an
-# interrupted run is retried on the next cold start. Asserted against the real
-# chown (not the stub) via -v traversal order on a tree the suite owns; the
-# chown is a no-op ("retained"), only the order matters.
+# the repair forever. dev_chown_tree therefore recurses into each child and
+# chowns the top on its own, last. That order is the lib's, not chown's: this
+# item used to assert a real `chown -Rv`'s traversal, which GNU walks post-order
+# and uutils (Ubuntu 26.04's default coreutils) walks pre-order, so the suite
+# went red the day ubuntu-latest moved while the images, both GNU, were fine.
 order_root="$tmp/order/top"
-mkdir -p "$order_root/sub"
-touch "$order_root/sub/file"
-real_chown=""
-for c in /usr/bin/chown /bin/chown; do
-    [ -x "$c" ] && { real_chown="$c"; break; }
+mkdir -p "$order_root/sub" "$order_root/.hidden" "$order_root/..dots"
+touch "$order_root/sub/file" "$order_root/plain"
+ln -s "$tmp/order/nowhere" "$order_root/dangling"
+: >"$CHOWN_LOG"
+dev_chown_tree "$MISMATCH_OWNER:$MISMATCH_OWNER" "$order_root"
+mapfile -t order_lines <"$CHOWN_LOG"
+assert_eq "the top directory is chowned LAST, and not recursively" \
+    "$MISMATCH_OWNER:$MISMATCH_OWNER $order_root" "${order_lines[-1]}"
+assert_eq "it is chowned exactly once" \
+    "1" "$(grep -cxF "$MISMATCH_OWNER:$MISMATCH_OWNER $order_root" "$CHOWN_LOG")"
+# Every child, each by its own recursive call — dotfiles and a dangling symlink
+# included, since a glob that missed them would leave them root-owned under a
+# mount point the guard then reads as done.
+for child in sub plain .hidden ..dots dangling; do
+    assert_true "child '$child' is chowned recursively before the top" \
+        grep -qxF -- "-R $MISMATCH_OWNER:$MISMATCH_OWNER $order_root/$child" "$CHOWN_LOG"
 done
-order_lines=()
-[ -n "$real_chown" ] && mapfile -t order_lines < <("$real_chown" -Rv "$ME" "$order_root")
-if [ "${#order_lines[@]}" -eq 0 ]; then
-    _fail "chown -R traversal order observable" \
-        "no verbose output from a real chown (looked in /usr/bin, /bin)"
-else
-    assert_contains "chown -R visits the top directory LAST (post-order)" \
-        "'$order_root'" "${order_lines[-1]}"
-    assert_contains "chown -R visits a child BEFORE the top directory" \
-        "'$order_root/sub/file'" "${order_lines[0]}"
-fi
+assert_eq "nothing else is chowned (no . or ..)" "6" "${#order_lines[@]}"
+# The fixture above matches all three globs, so it cannot see one that matches
+# NOTHING: sh then passes the pattern through literally. An empty directory has
+# no match for any of them.
+mkdir -p "$tmp/order/empty"
+: >"$CHOWN_LOG"
+dev_chown_tree "$MISMATCH_OWNER:$MISMATCH_OWNER" "$tmp/order/empty"
+assert_eq "an empty directory gets its own chown and nothing else (no literal glob)" \
+    "$MISMATCH_OWNER:$MISMATCH_OWNER $tmp/order/empty" "$(log)"
 
 # ---- 6. bind vs volume dispatch: a bind is never recursed into ----
 # The daemon creates a mount target's missing parents as root for binds exactly
@@ -259,7 +297,7 @@ run_mp() {
 
 mp_home="$tmp/mp/vscode"
 mp_target="$mp_home/.claude/projects/-devcontainer-x"
-mkdir -p "$mp_target"
+mkdir -p "$mp_target/session"
 
 run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "bind:$mp_target"
 assert_not_contains "a bind target is never recursed into" "-R " "$(log)"
@@ -275,9 +313,9 @@ assert_false "a bind target itself is not chowned" \
 
 run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "volume:$mp_target"
 assert_contains "a volume target still gets the recursive chown" \
-    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mp_target" "$(log)"
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mp_target/session" "$(log)"
 # Line-anchored for the same reason as the direct-call assertion at the end of
-# item 7: the recursive line `-R <owner> <mp_target>` contains this needle as a
+# item 7: the recursive line `-R <owner> <mp_target>/...` contains this needle as a
 # substring, so assert_contains here would pass with the ancestor walk removed.
 assert_true "a volume target's ancestors are still chowned" \
     grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/.claude/projects" "$CHOWN_LOG"
@@ -353,10 +391,10 @@ assert_false "the outer bind mount point is still not chowned" \
 # Same for a volume nested inside a bind (a venv volume under the worktree):
 # the volume is recursed into, its bind parent still is not.
 venv="$tree/.venv"
-mkdir -p "$venv"
+mkdir -p "$venv/lib"
 run_mp "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "bind:$tree" "volume:$venv"
 assert_contains "a volume nested in a bind is still recursed into" \
-    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $venv" "$(log)"
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $venv/lib" "$(log)"
 assert_false "a volume's ancestor walk also skips the bind mount point" \
     grep -qxF "$MISMATCH_OWNER:$MISMATCH_OWNER $tree" "$CHOWN_LOG"
 
@@ -375,7 +413,7 @@ assert_false "a volume's ancestor walk also skips the bind mount point" \
 # observable proxy, and it is sufficient as a red-to-green target: both
 # candidate #115 fixes flip it (a pruned `find` emits no `-R` line at all).
 assert_contains "a volume containing a bind still gets the unpruned chown -R (#115)" \
-    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/.claude" "$(
+    "-R $MISMATCH_OWNER:$MISMATCH_OWNER $mp_home/.claude/projects" "$(
         : >"$CHOWN_LOG"
         dev_chown_mount_points "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" \
             "volume:$mp_home/.claude" "bind:$mp_target"
@@ -387,7 +425,7 @@ assert_contains "a volume containing a bind still gets the unpruned chown -R (#1
 # set from a previous dev_chown_mount_points call.
 run "$MISMATCH_OWNER" "$MISMATCH_OWNER" "$mp_home" "$venv"
 # grep -qxF, NOT assert_contains: "$tree" is a PREFIX of "$venv", so a substring
-# check is satisfied by the recursive line `-R <owner> <tree>/.venv` and passes
+# check is satisfied by the recursive line `-R <owner> <tree>/.venv/lib` and passes
 # even when the exclusion set leaks — the very leak this asserts against.
 # (Mutation: delete the `_vp_never_chown=""` reset and the substring form stays
 # green at 41/0. The line-anchored form goes red. Same trap the ancestor-walk
