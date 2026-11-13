@@ -19,7 +19,10 @@
 #     e. back up first, then `cp -P` straight onto the destination -> red (an
 #        unreadable source leaves the work tree with no copy).
 #     f. the final `exit 1` turned into `: exit 1` -> red; its twin, `-ge 0`
-#        (every refresh refuses), aborts the suite at the first --refresh.
+#        (every run refuses), aborts the suite at the initial plain setup run,
+#        before any assertion.
+#   Unpinned (deleting each stays green): the two `rm -f "$tmp"` lines in
+#   refresh_copy, and the closing "could not be refreshed" summary line.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -116,6 +119,8 @@ assert_eq "second refresh makes no new backup set" "1" "${#backups[@]}"
 echo "--- --refresh: unreadable source keeps the existing copy ---"
 printf 'TOKEN=placeholder-secret-v3\n' > "$MAIN_TREE/.envrcs/.env.secrets"
 chmod 000 "$MAIN_TREE/.envrcs/.env.secrets"
+# As root chmod 000 stops nothing, so these assertions are skipped with only
+# this line to say so; CI runs as a non-root user.
 if [ -r "$MAIN_TREE/.envrcs/.env.secrets" ]; then
     echo "  SKIP: chmod 000 does not stop reads here (root?)"
 else

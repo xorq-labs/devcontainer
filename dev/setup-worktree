@@ -18,7 +18,9 @@
 # Two paths are handled outside the overlay lists:
 #   .gitignore — always a copy: git opens it with O_NOFOLLOW, so a symlink
 #                would ELOOP (falls back to .gitignore.template when the main
-#                checkout has no live, per-checkout .gitignore).
+#                checkout has no live, per-checkout .gitignore). A symlink a
+#                developer put there by hand is not replaced, --refresh
+#                included; git warns that it cannot read it.
 #   .claude    — a real directory (git materializes it for tracked content
 #                like .claude/agents/); only the shared-state subdirs
 #                (container-audit/, container-sessions/) are symlinked so
@@ -35,8 +37,8 @@
 # tree, so cleanup-worktree's pre-flight never sees it and `git worktree
 # remove` deletes it with the rest of the admin dir. Paths tracked in the
 # worktree are never overwritten. A copy that cannot be refreshed (an
-# unreadable source) keeps its old file and makes the run exit 1. Only names are printed, never contents or
-# diffs: the copy lists hold secrets.
+# unreadable source) keeps its old file and makes the run exit 1. Only names
+# are printed, never contents or diffs: the copy lists hold secrets.
 set -euo pipefail
 
 usage() {
@@ -118,9 +120,13 @@ _backup_root=""
 refresh_failed=0
 # --refresh only: replace an existing copy at $2 (relative to the worktree)
 # with $1 when they differ. Skips directories, paths the worktree tracks, and
-# a worktree path that already resolves to main's file (a symlink into main).
+# a worktree path that already resolves to main's file (a symlink into main)
+# when main's copy is a regular file; when main's copy is itself a symlink,
+# such a link is replaced by a copy of main's link.
 # The new copy is written beside the old one first, so a source that cannot
-# be read leaves the old copy in place rather than only in the backup.
+# be read leaves the old copy in place rather than only in the backup. A run
+# killed between the two renames leaves the temp file behind, and only a later
+# refresh that finds that copy different removes it.
 refresh_copy() {
     local src="$1" rel="$2" dst="$here/$2"
     local tmp="$dst.setup-worktree-refresh"
