@@ -34,7 +34,8 @@
 # (<git-dir>/setup-worktree-backup/<timestamp>/<path>) — outside the work
 # tree, so cleanup-worktree's pre-flight never sees it and `git worktree
 # remove` deletes it with the rest of the admin dir. Paths tracked in the
-# worktree are never overwritten. Only names are printed, never contents or
+# worktree are never overwritten. A copy that cannot be refreshed (an
+# unreadable source) keeps its old file and makes the run exit 1. Only names are printed, never contents or
 # diffs: the copy lists hold secrets.
 set -euo pipefail
 
@@ -109,21 +110,38 @@ same_copy() {
     fi
 }
 
+# A real directory, not a symlink to one: `cp -P` copies a symlink to a
+# directory as a link, so that is a copy entry like any other.
+is_real_dir() { [ ! -L "$1" ] && [ -d "$1" ]; }
+
 _backup_root=""
+refresh_failed=0
 # --refresh only: replace an existing copy at $2 (relative to the worktree)
-# with $1 when they differ. Skips directories and paths the worktree tracks.
+# with $1 when they differ. Skips directories, paths the worktree tracks, and
+# a worktree path that already resolves to main's file (a symlink into main).
+# The new copy is written beside the old one first, so a source that cannot
+# be read leaves the old copy in place rather than only in the backup.
 refresh_copy() {
     local src="$1" rel="$2" dst="$here/$2"
+    local tmp="$dst.setup-worktree-refresh"
     [ "$refresh" -eq 1 ] || return 0
-    [ -d "$src" ] || [ -d "$dst" ] && return 0
+    is_real_dir "$src" || is_real_dir "$dst" && return 0
     git -C "$here" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 && return 0
+    [ ! -L "$src" ] && [ "$src" -ef "$dst" ] && return 0
     same_copy "$src" "$dst" && return 0
+    rm -f "$tmp"
+    if ! cp -P "$src" "$tmp"; then
+        rm -f "$tmp"
+        echo "setup-worktree: could not refresh $rel; kept the existing copy" >&2
+        refresh_failed=$((refresh_failed + 1))
+        return 0
+    fi
     if [ -z "$_backup_root" ]; then
         _backup_root="$(git -C "$here" rev-parse --absolute-git-dir)/setup-worktree-backup/$(date +%Y%m%dT%H%M%S)"
     fi
     mkdir -p "$_backup_root/$(dirname "$rel")"
     mv "$dst" "$_backup_root/$rel"
-    cp -P "$src" "$dst"
+    mv "$tmp" "$dst"
     echo "refreshed $rel (previous copy: $_backup_root/$rel)"
     changes=$((changes + 1))
 }
@@ -233,4 +251,8 @@ done < <(read_list "$main/.envrcs/.worktree-symlinks")
 if [ "$changes" -gt 0 ]; then
     echo "Manifest written to .envrcs/.worktree-manifest"
     echo "To remove: cleanup-worktree"
+fi
+if [ "$refresh_failed" -gt 0 ]; then
+    echo "setup-worktree: $refresh_failed cop(ies) could not be refreshed (see above)" >&2
+    exit 1
 fi
