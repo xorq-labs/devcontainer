@@ -173,8 +173,9 @@ when no seed tarball was baked.
 
 ## CI: build and publish
 
-`.github/workflows/nix-base.yml` builds natively on amd64 + arm64 runners
-(`ubuntu-latest`, `ubuntu-24.04-arm` — free for public repos): `nix build` →
+`.github/workflows/nix-base.yml` builds natively on amd64 + arm64 runners of
+one Ubuntu release (the `build` job's matrix names it; the arm runners are
+free for public repos): `nix build` →
 `docker load` → smoke test → `check-env-drift.sh` → build the
 `Dockerfile.nix-default` tail with the defaults overlay → push per-arch
 `sha-<short>-{amd64,arm64}` tags → assemble a `sha-<short>` multi-arch

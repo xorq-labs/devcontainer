@@ -14,7 +14,7 @@ name: Nix Base
 #     claude-<version> (the dominant change driver). A branch dispatch
 #     therefore publishes inspectable sha tags without touching latest.
 #
-# NOTE: ubuntu-24.04-arm runners are free for PUBLIC repos only. If this repo
+# NOTE: the ubuntu-*-arm runners are free for PUBLIC repos only. If this repo
 # ever goes private, the arm leg needs a paid larger-runner plan (or the
 # matrix drops to amd64 and arm64 builds move elsewhere).
 #
@@ -89,9 +89,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          # Both legs name the SAME release: there is no `ubuntu-latest-arm`,
+          # so `ubuntu-latest` on one leg drifts away from the other the day
+          # it moves (it went to 26.04 in Nov 2026 while arm stayed 24.04),
+          # and an arch difference becomes indistinguishable from an OS one.
+          # Move them together.
+          - runner: ubuntu-26.04
             arch: amd64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
             arch: arm64
     steps:
       - uses: actions/checkout@v4
