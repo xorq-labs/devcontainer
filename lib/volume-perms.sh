@@ -48,8 +48,9 @@
 #   mistaken for a completed one. dev_chown_tree makes that order explicit — each
 #   child recursively, then the top on its own — rather than leaving it to
 #   `chown -R`'s traversal, which is an implementation detail: GNU's is
-#   post-order, uutils' (the default coreutils from Ubuntu 25.10) chowns the top
-#   FIRST.
+#   post-order, uutils' (Ubuntu 26.04's default chown) chowns the top FIRST.
+#   The cost is one chown process per top-level entry (~1 ms each), paid only
+#   when the guard is open — a fresh volume, whose top level is small.
 #
 #   What the guard deliberately does NOT repair: root-owned files written into
 #   an already-chowned volume later (e.g. by a `dc exec -u root`), and files a
