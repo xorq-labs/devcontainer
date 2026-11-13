@@ -21,8 +21,8 @@
 # walk never chowns a bind mount point — see _vp_never_chown.
 #
 # What that does NOT cover, and this is deliberate and recorded (#115): the
-# recursive branch below is rooted at a VOLUME and `chown -R` has no mount
-# awareness, so it still descends through a bind nested UNDER that volume —
+# recursive branch below is rooted at a VOLUME's children and `chown -R` has no
+# mount awareness, so it still descends through a bind nested UNDER that volume —
 # exactly the claude-home / transcript-bind topology above. That predates the
 # ancestor-walk work and is latent only because the guard's precondition (a
 # volume root not already user-owned) is not normally met. Do not read
@@ -42,17 +42,20 @@
 #   itself is only root-owned on a fresh volume, so a mount point already owned
 #   by the target user means a previous run finished the recursion.
 #
-#   "Finished" is load-bearing and depends on traversal order: `chown -R` is
-#   post-order (children before parents, the top directory LAST), so a run
-#   interrupted partway leaves the mount point still root-owned and the next
-#   cold start redoes it. A partially-chowned tree is therefore never mistaken
-#   for a completed one.
+#   "Finished" is load-bearing and depends on order: the mount point must be
+#   chowned LAST, so a run interrupted partway leaves it still root-owned and
+#   the next cold start redoes it. A partially-chowned tree is therefore never
+#   mistaken for a completed one. dev_chown_tree makes that order explicit — each
+#   child recursively, then the top on its own — rather than leaving it to
+#   `chown -R`'s traversal, which is an implementation detail: GNU's is
+#   post-order, uutils' (the default coreutils from Ubuntu 25.10) chowns the top
+#   FIRST.
 #
 #   What the guard deliberately does NOT repair: root-owned files written into
 #   an already-chowned volume later (e.g. by a `dc exec -u root`), and files a
 #   COMPLETED walk failed to chown (chown -R continues past per-file errors —
-#   immutable flags, I/O errors — still chowns the top last, and the errors are
-#   suppressed below; the guard then reads the volume as done). In both cases
+#   immutable flags, I/O errors — dev_chown_tree still chowns the top last, and
+#   the errors are suppressed; the guard then reads the volume as done). In both cases
 #   the mount point is user-owned, so the recursion is skipped. Forcing a full
 #   pass is a separate, explicit operation — not something every cold start
 #   should pay for. (A read-only filesystem is safe either way: the top-dir
@@ -178,6 +181,18 @@ dev_chown_ancestors() {
     done
 }
 
+# dev_chown_tree <owner>:<group> <dir> — chown <dir>'s contents recursively,
+# then <dir> itself, in that order (see THE GUARD). The three globs cover every
+# child name, dotfiles included; one that matches nothing stays literal and is
+# skipped by the existence test (-L too, so a dangling symlink is still chowned).
+dev_chown_tree() {
+    for _vpc_c in "$2"/* "$2"/.[!.]* "$2"/..?*; do
+        [ -e "$_vpc_c" ] || [ -L "$_vpc_c" ] || continue
+        chown -R "$1" "$_vpc_c" 2>/dev/null || true
+    done
+    chown "$1" "$2" 2>/dev/null || true
+}
+
 # dev_chown_volume_targets <owner> <group> <home-prefix> <mount-point>... —
 # chown each mount point (recursively, guarded) and its <home-prefix>-scoped
 # ancestors to <owner>:<group>.
@@ -195,7 +210,7 @@ dev_chown_volume_targets() {
         [ -n "$_vpt_d" ] || continue
 
         if dev_volume_chown_needed "$_vpt_d" "$_vpt_user" "$_vpt_group"; then
-            chown -R "$_vpt_user:$_vpt_group" "$_vpt_d" 2>/dev/null || true
+            dev_chown_tree "$_vpt_user:$_vpt_group" "$_vpt_d"
         fi
 
         dev_chown_ancestors "$_vpt_user" "$_vpt_group" "$_vpt_home" "$_vpt_d"
