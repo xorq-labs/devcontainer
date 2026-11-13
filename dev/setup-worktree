@@ -18,9 +18,9 @@
 # Two paths are handled outside the overlay lists:
 #   .gitignore — always a copy: git opens it with O_NOFOLLOW, so a symlink
 #                would ELOOP (falls back to .gitignore.template when the main
-#                checkout has no live, per-checkout .gitignore). A symlink a
-#                developer put there by hand is not replaced, --refresh
-#                included; git warns that it cannot read it.
+#                checkout has no live, per-checkout .gitignore). A symlink to
+#                main's file that a developer put there by hand is not
+#                replaced, --refresh included; git warns it cannot read it.
 #   .claude    — a real directory (git materializes it for tracked content
 #                like .claude/agents/); only the shared-state subdirs
 #                (container-audit/, container-sessions/) are symlinked so
