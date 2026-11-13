@@ -14,9 +14,19 @@
 # Size-dependent, which is why it hid: git's stdio buffer flushes at 4 KB, so
 # output under one buffer is written once at exit and never notices the closed
 # pipe. Measured on the real repo — 3014 bytes (24 worktrees) SIGPIPEs 0/5 while
-# 4478 bytes (36) does it 5/5. The fixture therefore adds worktrees until the
-# porcelain output passes 6 KB rather than hardcoding a count, since bytes per
-# entry follow path length.
+# 4478 bytes (36) does it 5/5.
+#
+# Between 4 KB and the 64 KB pipe capacity it is a RACE, not a threshold: git's
+# later writes fit in the pipe, so it dies only if `head` has already read its
+# line and exited by then — a matter of how fast that `head` starts. GNU head
+# usually wins, uutils head (Ubuntu 26.04's default coreutils) loses: at 6.3 KB,
+# 24/40 vs 0/40 failures, measured 2026-11-13, and section 1's anchor went red
+# in CI the day ubuntu-latest moved to 26.04. Past the pipe capacity git blocks
+# on a full pipe and the closed read end is certain, whatever reads it: 40/40
+# for both from 71 KB up. The fixture therefore adds worktrees until the
+# porcelain output passes 140 KB — twice the capacity — rather than hardcoding
+# a count, since bytes per entry follow path length; long paths keep the count
+# (and the suite's runtime) near what the old 6 KB fixture needed.
 #
 # dev_main_tree() in lib/git.sh had the same `| head -1` and takes the same fix.
 # It shipped with the rationale that piping a builtin `printf` is one write and
@@ -91,6 +101,16 @@
 #   keeps its 141: it pipes GIT, a real process that resets SIGPIPE to default,
 #   so there the signal is portable and worth naming.
 #   (mutation runs 2026-08-21)
+#
+# The fixture moved from 6 KB to 140 KB on 2026-11-13 (the race in the header);
+# re-measured in an ubuntu:26.04 container, uutils head, as a non-root user:
+#   8. Unmodified origin/main there reproduces CI's red exactly: section 1's
+#      anchor fails (status 0), alongside test-volume-chown-guard.sh's two
+#      traversal-order checks. This branch: 21 passed, 0 failed, on 26.04 and
+#      on 24.04.
+#   9. Mutation 2 repeated at the new size, on 26.04 — the same 10 red, 11
+#      passed. At 6 KB under uutils the anchor said the fixture reproduced
+#      nothing, so this is the run the old fixture could no longer give.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -120,20 +140,27 @@ STUB
 }
 
 # Fixture: a repo carrying the real hook, with enough worktrees that the
-# porcelain output clears git's 4 KB flush boundary with margin.
+# porcelain output clears twice the 64 KB pipe capacity (see the header).
+# Worktrees sit under a ~2.5 KB path so each entry carries that much: ten
+# 250-byte components, well inside PATH_MAX even under a long $TMPDIR.
 repo="$(new_repo "$tmp/repo")"
 mkdir -p "$repo/dev/hooks"
 cp "$hook" "$repo/dev/hooks/pre-commit"
 git -C "$repo" add -A >/dev/null
 git -C "$repo" -c user.email=t@t -c user.name=t commit -qm hooks
+deep="$tmp"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    deep="$deep/$(printf '%0250d' 0)"
+done
+mkdir -p "$deep"
 n=0
-while [ "$(git -C "$repo" worktree list --porcelain | wc -c)" -le 6144 ]; do
+while [ "$(git -C "$repo" worktree list --porcelain | wc -c)" -le 143360 ]; do
     n=$((n + 1))
-    git -C "$repo" worktree add -q -b "branch$n" "$tmp/worktree-number-$n" >/dev/null 2>&1
+    git -C "$repo" worktree add -q -b "branch$n" "$deep/worktree-number-$n" >/dev/null 2>&1
 done
 bytes="$(git -C "$repo" worktree list --porcelain | wc -c)"
-assert_true "fixture clears git's 4 KB flush boundary ($bytes bytes, $n worktrees)" \
-    [ "$bytes" -gt 4096 ]
+assert_true "fixture clears twice the 64 KB pipe capacity ($bytes bytes, $n worktrees)" \
+    [ "$bytes" -gt 131072 ]
 
 # --- 1. the fixture really does reproduce the failure it guards against ---
 # If a future git stops signalling here, THIS goes red rather than the suite
@@ -192,7 +219,7 @@ assert_contains "passes --hook-dir" "--hook-dir=" "$argv"
 
 # --- 3. from a linked worktree, MAIN's .tools/bin wins over PATH ---
 # This is what the MAIN= line is FOR: a worktree ships no .tools/ of its own.
-wt="$tmp/worktree-number-1"
+wt="$deep/worktree-number-1"
 mk_stub "$repo/.tools/bin/pre-commit" MAINTOOLS
 : >"$tmp/argv.log"
 assert_eq "the hook exits 0 from a linked worktree" "0" "$(run_hook "$wt")"
