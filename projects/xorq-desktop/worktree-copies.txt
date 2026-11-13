@@ -6,3 +6,7 @@
 .envrcs/.envrc.user
 .envrcs/.env.*
 project.env
+# The main checkout's own ignore rules. .envrcs/.envrc.gitignore rebuilds
+# .gitignore from .gitignore.template plus this file, and sets aside a copied
+# .gitignore holding rules the rebuild would drop as .gitignore.orig.
+.gitignore.local
