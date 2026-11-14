@@ -118,24 +118,27 @@ is_real_dir() { [ ! -L "$1" ] && [ -d "$1" ]; }
 
 _backup_root=""
 refresh_failed=0
+refresh_suffix=".setup-worktree-refresh"
+# A temp file refresh_copy left behind (a run killed between its two renames).
+# Swept for every copy entry on every run, before anything is copied: a stale
+# temp that is a symlink would otherwise make `cp -P` write through it.
+drop_refresh_tmp() {
+    local tmp="$here/$1$refresh_suffix"
+    if [ -L "$tmp" ] || [ -f "$tmp" ]; then rm -f "$tmp"; fi
+}
 # --refresh only: replace an existing copy at $2 (relative to the worktree)
 # with $1 when they differ. Skips directories, paths the worktree tracks, and
-# a worktree path that already resolves to main's file (a symlink into main)
-# when main's copy is a regular file; when main's copy is itself a symlink,
-# such a link is replaced by a copy of main's link.
+# a worktree path that already resolves to main's file (a symlink into main).
 # The new copy is written beside the old one first, so a source that cannot
-# be read leaves the old copy in place rather than only in the backup. A run
-# killed between the two renames leaves the temp file behind, and only a later
-# refresh that finds that copy different removes it.
+# be read leaves the old copy in place rather than only in the backup.
 refresh_copy() {
     local src="$1" rel="$2" dst="$here/$2"
-    local tmp="$dst.setup-worktree-refresh"
+    local tmp="$dst$refresh_suffix"
     [ "$refresh" -eq 1 ] || return 0
     is_real_dir "$src" || is_real_dir "$dst" && return 0
     git -C "$here" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 && return 0
-    [ ! -L "$src" ] && [ "$src" -ef "$dst" ] && return 0
+    [ "$src" -ef "$dst" ] && return 0
     same_copy "$src" "$dst" && return 0
-    rm -f "$tmp"
     if ! cp -P "$src" "$tmp"; then
         rm -f "$tmp"
         echo "setup-worktree: could not refresh $rel; kept the existing copy" >&2
@@ -161,6 +164,7 @@ while IFS= read -r pattern; do
     while IFS= read -r -d '' f; do
         is_present "$f" || continue
         rel="${f#"$main/"}"
+        drop_refresh_tmp "$rel"
         if ! is_present "$here/$rel"; then
             mkdir -p "$here/$(dirname "$rel")"
             cp -Pv "$f" "$here/$rel"
@@ -184,6 +188,7 @@ elif [ -e "$main/.gitignore.template" ]; then
     _gitignore_src="$main/.gitignore.template"
 fi
 if [ -n "$_gitignore_src" ]; then
+    drop_refresh_tmp ".gitignore"
     if ! is_present "$here/.gitignore"; then
         cp -v "$_gitignore_src" "$here/.gitignore"
         changes=$((changes + 1))

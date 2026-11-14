@@ -5,10 +5,13 @@
 # worktree's git admin dir. Runs against a disposable git repo — no docker.
 #
 # Verified (ADR-0005 §2), fresh copy of the tree per mutation, 2026-11-13
-# (37 assertions):
+# (47 assertions):
 #   FORM-ONLY (must stay green, same assertion count):
 #     a. refresh_copy: the directory early return rewritten as
-#        `if is_real_dir ... || ...; then return 0; fi` -> green, 37.
+#        `if is_real_dir ... || ...; then return 0; fi` -> green, 37 (at the
+#        time; the suite has grown since).
+#     g. drop_refresh_tmp: the `if` rewritten as a `|| return 0` guard then
+#        `rm -f` -> green, 47.
 #   SEMANTIC (must go red), each written in a form the author did not write:
 #     b. refresh_copy: comment out the `same_copy ... && return 0` line -> red
 #        (unchanged .env.local reported and backed up; second refresh reports).
@@ -21,8 +24,15 @@
 #     f. the final `exit 1` turned into `: exit 1` -> red; its twin, `-ge 0`
 #        (every run refuses), aborts the suite at the initial plain setup run,
 #        before any assertion.
-#   Unpinned (deleting each stays green): the two `rm -f "$tmp"` lines in
-#   refresh_copy, and the closing "could not be refreshed" summary line.
+#     h. `[ ! -L "$src" ] &&` put back in front of the `-ef` skip -> red (a link
+#        into main's symlink copy is replaced).
+#     i. either drop_refresh_tmp call commented out -> red (the copy loop's:
+#        cp writes through a stale symlink temp; the .gitignore one: a temp
+#        whose copy was gone survives and dirties `git status`).
+#     j. the failure branch's `rm -f "$tmp"` neutered -> red (a partial temp
+#        file survives); the closing summary `echo` neutered -> red.
+#     k. the unreadable-source `[ -r ]` check forced true with CI=1 -> red;
+#        the same without CI -> green with a SKIP line.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -42,7 +52,7 @@ git -C "$MAIN_TREE" add tracked.env
 git -C "$MAIN_TREE" commit -qm "track a file the copy list also names"
 mkdir -p "$MAIN_TREE/.devcontainer" "$MAIN_TREE/.envrcs"
 printf '%s\n' '.envrcs/.envrc.user' '.envrcs/.env.*' '.envrcs/link' '.envrcs/dlink' \
-    '.envrcs/.envrc.mine' 'tracked.env' \
+    '.envrcs/.envrc.mine' '.envrcs/link-mine' 'tracked.env' \
     > "$MAIN_TREE/.devcontainer/worktree-copies.txt"
 printf '.gitignore\n.claude/\n.devcontainer/\n.envrcs/\n' > "$MAIN_TREE/.gitignore"
 printf 'source_env one\n' > "$MAIN_TREE/.envrcs/.envrc.user"
@@ -52,6 +62,8 @@ ln -s target-a "$MAIN_TREE/.envrcs/link"
 mkdir "$MAIN_TREE/.envrcs/dir-a" "$MAIN_TREE/.envrcs/dir-b"
 ln -s dir-a "$MAIN_TREE/.envrcs/dlink"
 printf 'mine\n' > "$MAIN_TREE/.envrcs/.envrc.mine"
+printf 'linked\n' > "$MAIN_TREE/.envrcs/target-m"
+ln -s target-m "$MAIN_TREE/.envrcs/link-mine"
 
 WT="$TMPDIR_ROOT/wt"
 git -C "$MAIN_TREE" worktree add -q "$WT" -b wt main
@@ -66,6 +78,8 @@ ln -sfn target-b "$MAIN_TREE/.envrcs/link"
 ln -sfn dir-b "$MAIN_TREE/.envrcs/dlink"
 # The developer swapped this copy for a live link to main's file.
 ln -sfn "$MAIN_TREE/.envrcs/.envrc.mine" "$WT/.envrcs/.envrc.mine"
+# ...and this one, whose main copy is itself a symlink.
+ln -sfn "$MAIN_TREE/.envrcs/link-mine" "$WT/.envrcs/link-mine"
 printf 'tracked, edited in main\n' > "$MAIN_TREE/tracked.env"
 printf '.gitignore\n.claude/\n.devcontainer/\n.envrcs/\n*.log\n' > "$MAIN_TREE/.gitignore"
 
@@ -90,6 +104,8 @@ assert_eq "symlink copy retargeted" "target-b" "$(readlink "$WT/.envrcs/link")"
 assert_eq "symlink-to-directory copy retargeted" "dir-b" "$(readlink "$WT/.envrcs/dlink")"
 assert_true "link into main's own file left a link" test -L "$WT/.envrcs/.envrc.mine"
 assert_not_contains "link into main's own file not reported" ".envrc.mine" "$out"
+assert_eq "link into main's symlink copy left alone" "$MAIN_TREE/.envrcs/link-mine" \
+    "$(readlink "$WT/.envrcs/link-mine")"
 assert_files_eq ".gitignore refreshed" "$MAIN_TREE/.gitignore" "$WT/.gitignore"
 assert_eq "tracked path never overwritten" "tracked" "$(cat "$WT/tracked.env")"
 assert_contains "names the refreshed file" "refreshed .envrcs/.envrc.user" "$out"
@@ -119,10 +135,14 @@ assert_eq "second refresh makes no new backup set" "1" "${#backups[@]}"
 echo "--- --refresh: unreadable source keeps the existing copy ---"
 printf 'TOKEN=placeholder-secret-v3\n' > "$MAIN_TREE/.envrcs/.env.secrets"
 chmod 000 "$MAIN_TREE/.envrcs/.env.secrets"
-# As root chmod 000 stops nothing, so these assertions are skipped with only
-# this line to say so; CI runs as a non-root user.
+# As root chmod 000 stops nothing, so these assertions are skipped; under CI
+# that is a failure, so a runner change cannot drop them silently.
 if [ -r "$MAIN_TREE/.envrcs/.env.secrets" ]; then
-    echo "  SKIP: chmod 000 does not stop reads here (root?)"
+    if [ -n "${CI:-}" ]; then
+        _fail "unreadable-source case cannot run: chmod 000 does not stop reads (root?)"
+    else
+        echo "  SKIP: chmod 000 does not stop reads here (root?)"
+    fi
 else
     rc=0
     out="$(cd "$WT" && "$SETUP" --refresh 2>&1)" || rc=$?
@@ -139,6 +159,47 @@ else
         "$(cat "$WT/.envrcs/.worktree-manifest")"
 fi
 chmod 600 "$MAIN_TREE/.envrcs/.env.secrets"
+
+echo "--- --refresh: a copy that fails partway leaves no temp file ---"
+# A cp that writes some of the temp file and then fails (EIO, ENOSPC); other
+# cp calls go to the real one.
+REAL_CP="$(command -v cp)"
+mkdir -p "$TMPDIR_ROOT/failcp"
+cat > "$TMPDIR_ROOT/failcp/cp" <<STUB
+#!/usr/bin/env bash
+case "\${*: -1}" in
+    *.setup-worktree-refresh) printf partial > "\${*: -1}"; exit 1 ;;
+esac
+exec "$REAL_CP" "\$@"
+STUB
+chmod +x "$TMPDIR_ROOT/failcp/cp"
+printf 'source_env one\nsource_env two\nsource_env three\n' > "$MAIN_TREE/.envrcs/.envrc.user"
+rc=0
+out="$(cd "$WT" && PATH="$TMPDIR_ROOT/failcp:$PATH" "$SETUP" --refresh 2>&1)" || rc=$?
+assert_eq "partial copy exits 1" "1" "$rc"
+assert_false "partial temp file removed" \
+    test -e "$WT/.envrcs/.envrc.user.setup-worktree-refresh"
+assert_eq "copy kept after a partial copy" "source_env one
+source_env two" "$(cat "$WT/.envrcs/.envrc.user")"
+assert_contains "summary counts the copies not refreshed" "could not be refreshed" "$out"
+
+# ---------- test: temp files a killed refresh left behind ----------
+echo "--- leftover temp files are swept ---"
+# Killed after the old copy moved to the backup, before the new one landed.
+mv "$WT/.gitignore" "$WT/.gitignore.setup-worktree-refresh"
+(cd "$WT" && "$SETUP") >/dev/null
+assert_false "plain run sweeps a temp whose copy was gone" \
+    test -e "$WT/.gitignore.setup-worktree-refresh"
+assert_true "worktree status clean after the sweep" \
+    test -z "$(git -C "$WT" status --porcelain --untracked-files=all)"
+# Killed earlier, leaving a temp that is a symlink: cp -P would write through it.
+printf 'sentinel\n' > "$TMPDIR_ROOT/sentinel"
+ln -s "$TMPDIR_ROOT/sentinel" "$WT/.envrcs/.envrc.user.setup-worktree-refresh"
+(cd "$WT" && "$SETUP" --refresh) >/dev/null
+assert_eq "stale symlink temp not written through" "sentinel" "$(cat "$TMPDIR_ROOT/sentinel")"
+assert_files_eq "copy refreshed past the stale temp" \
+    "$MAIN_TREE/.envrcs/.envrc.user" "$WT/.envrcs/.envrc.user"
+assert_false "refreshed copy is not the stale link" test -L "$WT/.envrcs/.envrc.user"
 
 # ---------- test: argument handling ----------
 echo "--- arguments ---"
