@@ -4,4 +4,7 @@
 source_env .envrc.user.uv
 # source_env .envrc.user.kenn   # opt-in: kenn-io toolkit + shared worktree state
 
+dotenv_if_exists .env.local
+# source_env .envrc.kata        # opt-in: kata talks to the team server (after .env.local)
+
 PATH_add $direnv_root/../devcontainer/dev

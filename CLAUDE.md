@@ -81,7 +81,8 @@ ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool; all
 seven graduated as of 2026-08-21, each with the four parts — derivation,
 `update.py --source` bump mode, drift guard, CLAUDE.md line; amended 2026-08-20
 so a pin may include a generated file, not only hashes; Accepted, and
-un-graduating a tool stays reversible per tool), and
+un-graduating a tool stays reversible per tool), ADR-0008 (kata on the team
+server as the agent-side ledger; GitHub stays the record of disposal), and
 nix/base/README.md "Design decisions" for the
 base-image record.
 
@@ -290,6 +291,13 @@ taxonomy and reads as `test:`.
   the fragment against a stubbed direnv over four real on-disk layouts and
   derives the sibling name from the template rather than restating it, so the
   spelling of neither file is load-bearing).
+- `.envrcs/.envrc.kata` exports the team token (`KATA_AUTH_TOKEN`) only
+  together with the team server (`KATA_SERVER`), and otherwise unsets any
+  inherited token, which kata would send to whatever daemon it picks; the
+  template loads `.env.local`, where the server lives, before it (ADR-0008;
+  `test: tests/test-envrc-kata.sh`, which sources both against a stubbed
+  direnv; `unguarded:` agreement with the xorq-envrcs copy it is vendored
+  from, since checking it needs the other repo — the header names the commit).
 - Source-build tools (ADR-0007 — all seven, as of 2026-08-21) are a SEPARATE,
   smaller pin space from the release
   toolkit above: `nix/kenn/source-builds.json`
