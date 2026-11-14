@@ -3,15 +3,21 @@
 #
 # The base is published with `skopeo copy --dest-compress-format gzip`, not
 # `docker push`, because what `docker push` uploads depends on the runner's
-# Docker. Docker 28 gzipped the layers `docker load` had stored uncompressed;
-# Docker 29, whose default is the containerd image store, pushes them as
-# stored. The move to ubuntu-26.04 (#163) therefore republished an unchanged
-# base with 42 uncompressed layers (~2.1 GB per arch instead of ~760 MB) under
-# a new digest, and the pin job proposed it as a bump. Nothing failed: the
-# image config, and so the content, was byte-identical.
+# Docker. After the move to ubuntu-26.04 (#163) an unchanged base was
+# republished under a new digest, and the pin job proposed it as a bump (#164).
+# Captured from ghcr: the old per-arch manifests list 42 layers typed
+# `rootfs.diff.tar.gzip`, the new ones 42 typed `rootfs.diff.tar` (~2.1 GB
+# per arch instead of ~760 MB), and the image config digests are identical, so
+# the content was byte-identical and only the push changed. The mechanism is
+# inferred, not observed on the runner: "The containerd image store is the
+# default storage backend for Docker Engine 29.0 and later on fresh
+# installations" (https://docs.docker.com/engine/storage/containerd/), and
+# that store pushes the layers `docker load` stored uncompressed as they are.
 #
 # Runs twice per CI leg: on the local copy's manifest before any push (so a
-# PR exercises it), and on the registry's manifest after the push.
+# PR exercises it), and on the registry's manifest after the push. Its
+# refusals are pinned by tests/test-check-layer-compression.sh, since CI's
+# real manifests only ever reach the pass arm.
 #
 # Usage: check-layer-compression.sh <manifest.json | ->
 set -euo pipefail

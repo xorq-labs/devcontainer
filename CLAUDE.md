@@ -181,7 +181,9 @@ taxonomy and reads as `test:`.
   push` choose. Docker 29's containerd store pushed an unchanged base
   uncompressed under a new digest, and the pin job proposed it as a bump
   (`ci:` nix-base.yml#build runs `nix/base/check-layer-compression.sh` on the
-  local copy, PRs included, and on the registry's manifest after the push).
+  local copy, PRs included, and on the registry's manifest after the push;
+  `test: tests/test-check-layer-compression.sh` pins the script's refusals,
+  which CI's all-gzip manifests never reach).
 - `nix/base/compose.nix-base.yml` is excluded from `nix-base.yml`'s trigger
   paths even though `nix/base/**` would match it: the pin is an output of a
   publish, not an input to one, so merging a pin bump must not set off another

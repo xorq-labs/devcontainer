@@ -166,7 +166,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Pushes the already-gzipped copy as-is (skopeo reads the login above
-      # from ~/.docker/config.json), then checks what the registry holds.
+      # from ~/.docker/config.json), then checks what the registry holds. That
+      # check asks only that the layers are gzip, not that the registry's
+      # manifest equals the local copy PRs exercised: a push-side recompression
+      # that still writes gzip would pass it and surface only as a pin bump.
+      # Accepted (decision post-push-checks-gzip-not-identity).
       - name: Push per-arch image
         if: github.event_name != 'pull_request'
         run: |
@@ -266,8 +270,9 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # A republish of unchanged content is digest-stable (the build is
-      # reproducible), so the common case is changed=false and this job is a
+      # A republish of unchanged content is digest-stable only because both
+      # halves are fixed (the build is reproducible, and the push gzips with a
+      # pinned skopeo), so the common case is changed=false and this job is a
       # no-op. When it does change, force-pushing one long-lived branch means
       # repeated publishes update a single open PR instead of opening one each.
       - name: Open or update the pin-bump PR
