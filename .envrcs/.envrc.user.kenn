@@ -6,12 +6,12 @@
 # .envrc.user to override; otherwise the first candidate below that actually
 # holds the flake wins.
 #
-# The SIBLING candidate is not optional politeness — it is the layout
-# .envrc.user.template itself assumes one line further down
-# (`PATH_add $direnv_root/../devcontainer/dev`). Without it a checkout at
-# ~/work/proj beside ~/work/devcontainer got its dev/ scripts on PATH and was
-# then told the kenn flake did not exist, because only the absolute fallback
-# was tried. tests/test-bump-kenn.sh pins the two files to the same layout.
+# The SIBLING candidate is not optional politeness — it is the layout the
+# README's no-nix route ("Adapting to another project") puts on PATH
+# (`PATH_add ../devcontainer/dev`). Without it a checkout at ~/work/proj
+# beside ~/work/devcontainer got its dev/ scripts on PATH and was then told
+# the kenn flake did not exist, because only the absolute fallback was tried.
+# tests/test-bump-kenn.sh pins the two files to the same layout.
 if [ -z "${DEVCONTAINER_HOME:-}" ]; then
     for _kenn_candidate in \
         "${direnv_root}" \

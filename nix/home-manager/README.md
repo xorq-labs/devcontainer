@@ -54,8 +54,8 @@ home.packages = [ devcontainer.packages.x86_64-linux.default ];
 ## Design decisions
 
 - **Docker (and direnv) come from the host, not Nix.** The wrapper *prepends*
-  a curated Nix closure (git, gh, coreutils, socat, flock, curl, sed/grep/awk,
-  openssh, python3) but leaves your ambient PATH intact behind it, so the host's
+  a curated Nix closure (git, gh, coreutils, cmp, socat, flock, curl,
+  sed/grep/awk, openssh, python3) but leaves your ambient PATH intact behind it, so the host's
   `docker` / `docker compose` — which must match the running daemon — win. Pin
   them with Nix via `extraRuntimeInputs` if you prefer.
 - **Self-location is preserved.** Every entry script resolves its own directory

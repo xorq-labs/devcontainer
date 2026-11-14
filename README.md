@@ -179,15 +179,17 @@ The container workspace is always `/workspaces/src` — threaded through compose
 
 ## Adapting to another project
 
-Clone this repo as a sibling of your project and symlink its `dev/` directory into your workspace:
+Put the host-side commands (`devcontainer`, `new-worktree`, `setup-worktree`, `cleanup-worktree`) on your PATH. With Nix, install this repo's package: see [`nix/home-manager/README.md`](nix/home-manager/README.md).
+
+Without Nix, clone this repo as a sibling of your project and add its `dev/` to PATH in your project's `.envrc`:
 
 ```bash
-# from the parent directory containing both repos
-ln -s ../devcontainer/dev myproject/dev
-echo dev >> myproject/.gitignore
+git clone git@github.com:xorq-labs/devcontainer.git ../devcontainer
+# in your project's .envrc:
+PATH_add ../devcontainer/dev
 ```
 
-Then add `PATH_add dev` to your `.envrc` (or `export PATH="$PWD/dev:$PATH"` in your shell). The `devcontainer` script resolves its own location through the symlink to find the Dockerfile, compose config, and libraries, so a single clone serves all projects. `socat` is optional on the host but required for SSH and GPG agent forwarding into the container.
+`PATH_add` prepends, so inside that project the line also wins over an installed package, and runs whatever the sibling checkout holds: its current branch, uncommitted edits included. If the sibling is missing, the commands fall through to the rest of PATH without a warning. The `devcontainer` script resolves its own location to find the Dockerfile, compose config, and libraries, so a single clone serves all projects. `socat` is optional on the host but required for SSH and GPG agent forwarding into the container.
 
 From your project directory, create a project overlay with `devcontainer init --local` (creates `.devcontainer/` in the workspace) or `devcontainer init [project-name]` (creates `projects/<name>/` in the devcontainer repo for shipping defaults). Pass `--nix` if your project *drives* Nix itself (its own flake, `nix develop`/`nix build`) — this seeds a writable, vscode-owned `/nix` volume and keeps you on the classic `Dockerfile`. Then edit the overlay:
 
