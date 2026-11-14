@@ -20,7 +20,7 @@ close leaves its GitHub twin open, the fixed-but-open failure CLAUDE.md
 records (#53).
 
 Since then the team has stood up one shared kata daemon (xorq-kata-infra,
-reachable only over the tailnet), xorq-envrcs ships a fragment that points a
+on the tailnet), xorq-envrcs ships a fragment that points a
 checkout at it, and this repo's issues already in a local daemon have been
 migrated to it.
 
