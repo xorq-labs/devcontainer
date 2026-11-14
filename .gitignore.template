@@ -17,6 +17,10 @@ __pycache__/
 .envrcs/.env.*
 !.envrcs/.env.*.template
 
+# kata workspace binding: untracked per checkout (ADR-0008)
+.kata.toml
+.kata.local.toml
+
 # Claude Code state is per-checkout/shared runtime data, but .claude/agents/
 # is tracked content (ADR-0003). `.claude/*` (not bare `.claude`: a pattern
 # matching the directory itself blocks every re-inclusion inside it) ignores

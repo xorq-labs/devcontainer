@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Guard: .envrcs/.envrc.kata hands kata the team token only together with the
-# team server, and .envrc.user.template loads .env.local before it.
+# team server, .envrc.user.template loads .env.local before it, and
+# .gitignore.template keeps the per-user kata files (.env.local, .kata.toml)
+# out of git.
 #
 # The fragment is vendored from xorq-envrcs, whose own suite does not cover it.
 # Its one safety property is "both or neither": KATA_AUTH_TOKEN overrides every
@@ -15,6 +17,12 @@
 #     `_kata_missing` to `_missing`: stays green, same assertion count.
 #   semantic  — comment out the `unset KATA_AUTH_TOKEN` in the else branch:
 #     goes red ("an inherited KATA_AUTH_TOKEN is dropped ..." x3).
+# Gitignore section (run 2026-11-14, structural review r1):
+#   form-only — move the .kata.toml lines above the .envrcs/.env.* block:
+#     stays green, same assertion count.
+#   semantic  — delete the `.kata.toml` and `.kata.local.toml` lines: goes red
+#     (".kata.toml is ignored", ".kata.local.toml is ignored"); deleting
+#     `.envrcs/.env.*` or its `!` re-include each turns one assertion red.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -79,5 +87,19 @@ if [ -n "$dotenv_at" ] && [ -n "$kata_at" ] && [ "$dotenv_at" -lt "$kata_at" ]; 
 else
     _fail ".env.local is loaded before .envrc.kata" "order: $(tr '\n' ',' <<<"$order")"
 fi
+
+echo ""
+echo "--- .gitignore.template: per-user kata files stay out of git ---"
+# ADR-0008 keeps .env.local and .kata.toml per checkout; the template is what
+# a new checkout's live .gitignore starts from, so probe it with git itself.
+tmp="$(mktemp -d)"
+_cleanup_dirs+=("$tmp")
+repo="$(new_repo "$tmp/repo")"
+cp "$DEV_BASE/.gitignore.template" "$repo/.gitignore"
+for path in .envrcs/.env.local .kata.toml .kata.local.toml; do
+    assert_true "$path is ignored" git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index "$path"
+done
+assert_false ".envrcs/.env.local.template is not ignored" \
+    git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index .envrcs/.env.local.template
 
 finish

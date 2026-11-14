@@ -39,8 +39,8 @@ migrated to it.
    person's token and tells itself apart with `KATA_TEAMMATE`; the name is
    self-asserted (xorq-kata-infra's README, "Three credentials, not one").
 3. **Project scope: one kata project, `devcontainer`, for the repo and every
-   worktree.** `.kata.toml` stays untracked, as in the sibling repos: each
-   checkout carries its own, and getting it into a new worktree is the
+   worktree.** `.kata.toml` stays untracked and ignored (`.gitignore.template`),
+   as in the sibling repos: each checkout carries its own, and getting it into a new worktree is the
    per-user `.envrcs/.worktree-symlinks` list's job.
 4. **GitHub remains the record of disposal.** A PR still closes its issue with
    `Closes #N`; ADR-0006's three dispositions (an issue, a PR, an `unguarded:`
@@ -60,7 +60,16 @@ migrated to it.
   ships `kata` (it comes only from `.envrc.user.kenn` building the flake with
   the overlay's nix), and reaching a tailnet address from the compose network
   depends on the host's Tailscale mode. `kata federation identity --json`
-  inside a container is the check; `kata health` sends no token and passes
-  regardless.
+  inside a container is the check. `kata health` is not a token-blind
+  shortcut: kata v0.18.0 sends `KATA_AUTH_TOKEN` with it too, and the daemon
+  validates an explicit bearer on `/api/v1/health` (`requireBearer` in kata's
+  `internal/daemon/auth.go`), so a bad token fails it as `token_invalid`.
+- An existing checkout's live `.gitignore` is untracked (CLAUDE.md, "Gitignore
+  model") and does not pick up this PR's template lines. Add them before
+  creating `.envrcs/.env.local`:
+  `printf '%s\n' '.envrcs/.env.*' '!.envrcs/.env.*.template' .kata.toml
+  .kata.local.toml >> .gitignore`; `git check-ignore .envrcs/.env.local` then
+  prints the path. Nothing checks this: `dev/check-gitignore-agents` probes
+  only `.claude/agents/`.
 - Turning on GitHub sync for this repo is server configuration in
   xorq-kata-infra, and a separate decision.
