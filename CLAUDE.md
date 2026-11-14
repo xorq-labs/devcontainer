@@ -175,6 +175,13 @@ taxonomy and reads as `test:`.
   `tests/test-bump-nix-base.sh`. Nothing owned this step before and it duly
   went undone: the pin sat on #41's digest through every later publish, leaving
   #70's fix live on ghcr and unreachable (#83).
+- That quiet no-op also needs the PUSH to be reproducible, not just the build:
+  the published digest covers the compressed layers, so `nix-base.yml` gzips
+  them with the skopeo pinned by `nix/base/flake.lock` and never lets `docker
+  push` choose. Docker 29's containerd store pushed an unchanged base
+  uncompressed under a new digest, and the pin job proposed it as a bump
+  (`ci:` nix-base.yml#build runs `nix/base/check-layer-compression.sh` on the
+  local copy, PRs included, and on the registry's manifest after the push).
 - `nix/base/compose.nix-base.yml` is excluded from `nix-base.yml`'s trigger
   paths even though `nix/base/**` would match it: the pin is an output of a
   publish, not an input to one, so merging a pin bump must not set off another

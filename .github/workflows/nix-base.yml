@@ -25,8 +25,10 @@ name: Nix Base
 #
 # Paths beyond nix/base/** are the tail-build inputs (Dockerfile.nix-default
 # COPYs them): a change there must prove the default consumer image still
-# builds. A push-triggered republish of an unchanged base is a no-op — the
-# build is reproducible, so digests (and the pin) don't move.
+# builds. A push-triggered republish of an unchanged base is a no-op only
+# because BOTH halves are fixed: the nix build is reproducible, and the layers
+# are compressed by the flake-pinned skopeo rather than the runner's Docker.
+# The second half once wasn't, and a runner move changed the digest (#163).
 
 on:
   push:
@@ -139,6 +141,22 @@ jobs:
       - name: Transcript bind parent ships writable
         run: dev/check-image-mount-parents nix-base-tail:ci
 
+      # The pushed digest covers the COMPRESSED layers, so compression is set
+      # here with a skopeo pinned by the base flake's nixpkgs, never left to
+      # `docker push`: Docker 29's containerd image store pushes loaded layers
+      # uncompressed, which republished an unchanged base at ~2.7x the size
+      # under a new digest (see check-layer-compression.sh). Runs on PRs too,
+      # so the copy and the check are exercised before a publish depends on
+      # them. --insecure-policy: nix's skopeo ships no /etc/containers/policy.json,
+      # and the only source here is our own build output.
+      - name: Compress layers for the registry
+        run: |
+          ./result > "$RUNNER_TEMP/base.tar"
+          nix run --inputs-from ./nix/base nixpkgs#skopeo -- --insecure-policy \
+            copy --format v2s2 --dest-compress --dest-compress-format gzip \
+            "docker-archive:$RUNNER_TEMP/base.tar" "dir:$RUNNER_TEMP/base"
+          nix/base/check-layer-compression.sh "$RUNNER_TEMP/base/manifest.json"
+
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
@@ -147,12 +165,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Pushes the already-gzipped copy as-is (skopeo reads the login above
+      # from ~/.docker/config.json), then checks what the registry holds.
       - name: Push per-arch image
         if: github.event_name != 'pull_request'
         run: |
-          short="${GITHUB_SHA::7}"
-          docker tag devcontainer-nix-base:latest "$IMAGE:sha-${short}-${{ matrix.arch }}"
-          docker push "$IMAGE:sha-${short}-${{ matrix.arch }}"
+          ref="$IMAGE:sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
+          nix run --inputs-from ./nix/base nixpkgs#skopeo -- --insecure-policy \
+            copy --format v2s2 "dir:$RUNNER_TEMP/base" "docker://$ref"
+          docker buildx imagetools inspect --raw "$ref" | nix/base/check-layer-compression.sh -
 
   manifest:
     name: Assemble multi-arch manifest
