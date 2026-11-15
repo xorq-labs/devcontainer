@@ -4,7 +4,8 @@
 # .gitignore.template keeps the per-user kata files (.env.local, .kata.toml)
 # out of git.
 #
-# The fragment is vendored from xorq-envrcs, whose own suite does not cover it.
+# The fragment is vendored from xorq-envrcs, which had no tests at 37873f9;
+# its later tests/test-fragments.sh (#13 there) does not cover this fragment.
 # Its one safety property is "both or neither": KATA_AUTH_TOKEN overrides every
 # daemon's token, so a token exported without KATA_SERVER would go to whatever
 # local daemon kata picks — including one inherited from the outer shell, which
@@ -96,7 +97,7 @@ tmp="$(mktemp -d)"
 _cleanup_dirs+=("$tmp")
 repo="$(new_repo "$tmp/repo")"
 cp "$DEV_BASE/.gitignore.template" "$repo/.gitignore"
-for path in .envrcs/.env.local .kata.toml .kata.local.toml; do
+for path in .envrcs/.env .envrcs/.env.local .kata.toml .kata.local.toml; do
     assert_true "$path is ignored" git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index "$path"
 done
 assert_false ".envrcs/.env.local.template is not ignored" \

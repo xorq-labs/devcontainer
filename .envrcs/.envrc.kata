@@ -1,6 +1,8 @@
 # Vendored verbatim, below this header, from xorq-labs/xorq-envrcs
 # .envrcs/.envrc.kata at 37873f9 (#11); ".envrcs/README.md" below means that
 # repo's. Change it there first. tests/test-envrc-kata.sh pins its behaviour.
+# Known inaccuracy, kept verbatim: "never to a name" below — kata's
+# CheckTargetURL also allows localhost and loopback literals.
 #
 # kata calls from this checkout go to a team server, from KATA_TEAM_SERVER
 # (.env.local, say) and KATA_TEAM_TOKEN (the secrets layer), names kata

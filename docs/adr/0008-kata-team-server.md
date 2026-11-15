@@ -33,8 +33,9 @@ migrated to it.
    xorq-envrcs, not its layout: this repo's `.envrc.user.kenn` builds the
    toolkit from the working tree (it owns the flake), and its `.gitignore`
    model is propagated by `dev/setup-worktree` and checked by
-   `dev/check-gitignore-agents`, which xorq-envrcs' rebuild-from-template
-   fragment would compete with.
+   `dev/check-gitignore-agents`, which xorq-envrcs' rebuild of `.gitignore`
+   from its template would compete with (at 37873f9, its root `.envrc`:
+   `_from_template .gitignore 644`).
 2. **Credential: one identity token per person.** An agent writes on its
    person's token and tells itself apart with `KATA_TEAMMATE`; the name is
    self-asserted (xorq-kata-infra's README, "Three credentials, not one").
@@ -53,8 +54,10 @@ migrated to it.
 ## Consequences
 
 - The vendored fragment is a cross-repo copy. Its behaviour is guarded here
-  (`tests/test-envrc-kata.sh`); agreement with upstream is not, since checking
-  it needs the other repo.
+  (`tests/test-envrc-kata.sh`); agreement with upstream is not: a check needs
+  the network (a `ci:` shape) and none is written. The header names the
+  commit, and keeps one known inaccuracy verbatim ("never to a name": kata
+  also sends the token to `localhost`).
 - Container use is not yet verified. direnv runs in this project's container
   and the secrets file reaches it through the bind mount, but neither image
   ships `kata` (it comes only from `.envrc.user.kenn` building the flake with

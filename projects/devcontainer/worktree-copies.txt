@@ -5,6 +5,8 @@
 .envrcs/.envrc.user
 .envrcs/.envrc.secrets
 # Dotenv fragments a .envrc.user may `dotenv_if_exists` — silently empty in a
-# worktree if not copied alongside it. Does not re-match .envrc.*.
+# worktree if not copied alongside it. Does not re-match .envrc.*. Also matches
+# the tracked .env.local.template: harmless, since cleanup-worktree restores a
+# tracked copy with `git checkout --` and --refresh skips tracked paths.
 .envrcs/.env.*
 project.env

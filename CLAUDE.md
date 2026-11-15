@@ -297,7 +297,11 @@ taxonomy and reads as `test:`.
   template loads `.env.local`, where the server lives, before it (ADR-0008;
   `test: tests/test-envrc-kata.sh`, which sources both against a stubbed
   direnv; `unguarded:` agreement with the xorq-envrcs copy it is vendored
-  from, since checking it needs the other repo — the header names the commit).
+  from — a check needs the network (a `ci:` shape) and none is written; the
+  header names the commit; `unguarded:` the token's half of the load order —
+  root `.envrc` sources `.envrc.secrets` before `.envrc.user`, and the suite
+  never reads root `.envrc`; swapped, the fragment logs that `KATA_TEAM_TOKEN` is unset,
+  so it fails loudly).
 - Source-build tools (ADR-0007 — all seven, as of 2026-08-21) are a SEPARATE,
   smaller pin space from the release
   toolkit above: `nix/kenn/source-builds.json`
