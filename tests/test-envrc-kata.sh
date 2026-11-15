@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Guard: .envrcs/.envrc.kata hands kata the team token only together with the
-# team server, .envrc.user.template loads .env.local before it, and
+# team server, .envrc.user.template loads .env.local before it,
 # .gitignore.template keeps the per-user kata files (.env.local, .kata.toml)
-# out of git.
+# out of git, and .envrc.secrets.template takes the token from a gitignored
+# sops bundle rather than a plaintext export. Decryption itself (sops, an age
+# key, direnv) is not covered: none of the three is on the CI runner.
 #
 # The fragment is vendored from xorq-envrcs, which had no tests at 37873f9;
 # its later tests/test-fragments.sh (#13 there) does not cover this fragment.
@@ -24,6 +26,12 @@
 #   semantic  — delete the `.kata.toml` and `.kata.local.toml` lines: goes red
 #     (".kata.toml is ignored", ".kata.local.toml is ignored"); deleting
 #     `.envrcs/.env.*` or its `!` re-include each turns one assertion red.
+# Secrets/sops sections (run 2026-11-15): form-only — split a comment line in
+#   .envrc.secrets.template and add a blank line: green, same count. Semantic,
+#   each red on its own assertion: a plaintext `export KATA_TEAM_TOKEN=` line;
+#   the `source_env .envrc.sops` line removed; the `use` line commented out;
+#   the bundle renamed outside .env.*; in .envrc.sops, `watch_file` commented
+#   out of use_sops_if_exists, or its `[ -f ]` guard dropped.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -102,5 +110,41 @@ for path in .envrcs/.env .envrcs/.env.local .kata.toml .kata.local.toml; do
 done
 assert_false ".envrcs/.env.local.template is not ignored" \
     git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index .envrcs/.env.local.template
+
+echo ""
+echo "--- .envrc.secrets.template: the token comes from a sops bundle ---"
+# Sourced with direnv's source_env/use stubbed to record calls: the template
+# itself must set no KATA_* value (a plain export there is plaintext on disk),
+# and must source .envrc.sops before loading the bundle it names.
+calls="$(env -i PATH="$PATH" bash -c '
+    source_env() { echo "source_env $1"; }
+    use() { echo "use $*"; }
+    . "$1"
+    env | grep "^KATA_" || true
+' _ "$DEV_BASE/.envrcs/.envrc.secrets.template")"
+bundle="$(sed -n 's/^use sops_if_exists //p' <<<"$calls")"
+assert_eq "it sources .envrc.sops first" "source_env .envrc.sops" "$(head -n1 <<<"$calls")"
+assert_nonempty "it loads a bundle with use sops_if_exists" "$bundle"
+assert_not_contains "it sets no KATA_* value itself" "KATA_" "$(grep -v '^use \|^source_env ' <<<"$calls" || true)"
+assert_true "the bundle (.envrcs/$bundle) is gitignored by the template" \
+    git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index ".envrcs/$bundle"
+
+echo ""
+echo "--- .envrc.sops: an absent bundle is a silent no-op, and watched ---"
+out="$(env -i PATH="$PATH" bash -c '
+    _log=
+    log_error() { _log="${_log:+$_log; }$*"; }
+    watch_file() { echo "watch $1"; }
+    sops() { echo "sops called"; }
+    . "$1"
+    rc=0; use_sops_if_exists "$2" || rc=$?
+    echo "rc=$rc"
+    env | grep "^KATA_" || true
+    printf "LOG:%s\n" "$_log"
+' _ "$DEV_BASE/.envrcs/.envrc.sops" "$tmp/no-such.sops-encrypted")"
+assert_contains "the missing bundle is watched, so creating it reloads" "watch $tmp/no-such.sops-encrypted" "$out"
+assert_contains "use_sops_if_exists returns 0" "rc=0" "$out"
+assert_not_contains "sops is not run" "sops called" "$out"
+assert_eq "no error is logged" "LOG:" "$(tail -n1 <<<"$out")"
 
 finish

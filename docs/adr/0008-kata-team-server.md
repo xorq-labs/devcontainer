@@ -2,9 +2,10 @@
 
 - Status: Proposed
 - Date: 2026-11-14
-- Implemented by: this PR (`.envrcs/.envrc.kata`, vendored from
-  xorq-labs/xorq-envrcs at 37873f9; `.envrcs/.env.local.template`; the opt-in
-  line in `.envrcs/.envrc.user.template`; `tests/test-envrc-kata.sh`).
+- Implemented by: this PR (`.envrcs/.envrc.kata` and `.envrcs/.envrc.sops`,
+  vendored from xorq-labs/xorq-envrcs at 37873f9; `.envrcs/.env.local.template`;
+  `.envrcs/.envrc.secrets.template`; the opt-in line in
+  `.envrcs/.envrc.user.template`; `tests/test-envrc-kata.sh`).
 - Related: ADR-0006 (where audit dispositions are recorded); ADR-0007 (the
   `nix/kenn` flake that supplies the `kata` binary); xorq-labs/xorq-kata-infra
   (the server, and how identity tokens are issued).
@@ -29,8 +30,11 @@ migrated to it.
 1. **Daemon: the team server.** A checkout opts in with `source_env
    .envrc.kata` in its `.envrc.user`; the server address is
    `KATA_TEAM_SERVER` in `.envrcs/.env.local`, the token `KATA_TEAM_TOKEN` in
-   `.envrcs/.envrc.secrets`. Only the kata fragment is adopted from
-   xorq-envrcs, not its layout: this repo's `.envrc.user.kenn` builds the
+   a per-user sops-encrypted bundle, `.envrcs/.env.kata.sops-encrypted`, that
+   `.envrcs/.envrc.secrets` loads with `use sops_if_exists` — never a
+   plaintext export there. Two fragments are adopted from xorq-envrcs,
+   `.envrc.kata` and `.envrc.sops` (which defines `use sops`), but not its
+   layout: this repo's `.envrc.user.kenn` builds the
    toolkit from the working tree (it owns the flake), and its `.gitignore`
    model is propagated by `dev/setup-worktree` and checked by
    `dev/check-gitignore-agents`, which xorq-envrcs' rebuild of `.gitignore`
@@ -53,13 +57,18 @@ migrated to it.
 
 ## Consequences
 
-- The vendored fragment is a cross-repo copy. Its behaviour is guarded here
-  (`tests/test-envrc-kata.sh`); agreement with upstream is not: a check needs
-  the network (a `ci:` shape) and none is written. The header names the
-  commit, and keeps one known inaccuracy verbatim ("never to a name": kata
-  also sends the token to `localhost`).
+- The vendored fragments are cross-repo copies. Their behaviour is guarded
+  here (`tests/test-envrc-kata.sh`; for `.envrc.sops`, only the absent-bundle
+  path, since decrypting needs sops, an age key and direnv); agreement with
+  upstream is not: a check needs the network (a `ci:` shape) and none is
+  written. Each header names the commit; `.envrc.kata`'s keeps one known
+  inaccuracy verbatim ("never to a name": kata also sends the token to
+  `localhost`).
 - Container use is not yet verified. direnv runs in this project's container
-  and the secrets file reaches it through the bind mount, but neither image
+  and the secrets file and bundle reach it through the bind mount; sops is in
+  both images, and `docker-compose.yml` mounts the host's
+  `~/.config/sops/age` read-only, so a key kept there decrypts the bundle
+  in the container too. But neither image
   ships `kata` (it comes only from `.envrc.user.kenn` building the flake with
   the overlay's nix), and reaching a tailnet address from the compose network
   depends on the host's Tailscale mode. `kata federation identity --json`
