@@ -177,14 +177,19 @@ when no seed tarball was baked.
 one Ubuntu release (the `build` job's matrix names it; the arm runners are
 free for public repos): `nix build` →
 `docker load` → smoke test → `check-env-drift.sh` → build the
-`Dockerfile.nix-default` tail with the defaults overlay → push per-arch
-`sha-<short>-{amd64,arm64}` tags → assemble a `sha-<short>` multi-arch
-manifest. On `main` the manifest is also tagged `latest` and
-`claude-<version>`. PRs build and verify without pushing.
+`Dockerfile.nix-default` tail with the defaults overlay → gzip the layers with
+skopeo → push per-arch `sha-<short>-{amd64,arm64}` tags → assemble a
+`sha-<short>` multi-arch manifest. On `main` the manifest is also tagged
+`latest` and `claude-<version>`. PRs build, verify and compress without
+pushing.
 
 The build is reproducible: independent CI runs from different commits produce
 byte-identical layer and manifest digests, so the pinned digest is stable
-across republishes of the same content.
+across republishes of the same content. That takes the push as well as the
+build: the digest covers the compressed layers, so they are gzipped by the
+skopeo pinned in this flake's nixpkgs, not by `docker push`, whose output
+changed with the runner's Docker (`check-layer-compression.sh` has the
+history and guards the result).
 
 Publishing alone delivers nothing: consumers build on the `BASE_IMAGE` digest
 pinned in `compose.nix-base.yml`, so a base that is published but not pinned
