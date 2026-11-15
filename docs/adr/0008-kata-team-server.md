@@ -72,7 +72,7 @@ migrated to it.
   creating `.envrcs/.env.local`:
   `printf '%s\n' '.envrcs/.env.*' '!.envrcs/.env.*.template' .kata.toml
   .kata.local.toml >> .gitignore`; `git check-ignore .envrcs/.env.local` then
-  prints the path. Nothing checks this: `dev/check-gitignore-agents` probes
-  only `.claude/agents/`.
+  prints the path. `dev/check-gitignore-agents` warns on every commit until
+  it is done, and prints this command for whatever is missing.
 - Turning on GitHub sync for this repo is server configuration in
   xorq-kata-infra, and a separate decision.

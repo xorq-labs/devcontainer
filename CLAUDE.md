@@ -568,6 +568,14 @@ taxonomy and reads as `test:`.
   a `.gitignore` entirely (unguarded: ephemeral and harness-managed; nothing
   authors agent files there, and the commit-time hook still fires if one
   does).
+- Every other `.gitignore.template` rule reaches an existing checkout's live
+  file only by hand, so the same script then WARNS (exit unchanged) about each
+  template rule the live file decides differently, printing the lines to
+  append — and with them the template's later `!` rules, which an appended
+  glob would otherwise defeat. The hook sets `verbose: true` because a warning
+  on exit 0 is otherwise hidden (tool: dev/check-gitignore-agents; test:
+  tests/test-gitignore-agents-reinclusion.sh, which derives one case per
+  template rule by deleting it from a live copy).
 - The host bridge owns git identity and git credentials as a pair: `setup_git`
   copies name/email, and `setup_gh` must wire the credential helper
   (`gh auth setup-git`) — bridge only the `hosts.yml` and `gh auth status`
@@ -692,7 +700,7 @@ taxonomy and reads as `test:`.
 - Python targets 3.12, formatted by ruff with 120 char line length (see `ruff.toml`).
 - Commit messages follow conventional commits: `fix:`, `feat:`, `ci:`, etc.
 - A PR that resolves an issue puts `Closes #N` in its **body** (not just the title). Citing the number in prose does not close anything: #54 was titled "…(#53)" and #53 stayed open for two weeks after it shipped, while #35 was independently re-solved by #71 because nobody knew it was open. An issue list that never drains stops being read, and a fixed-but-open issue is worse than no issue — it sends the next reader after work that is already done.
-- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003). Because the live file is untracked, drift from the template is caught at commit time by `dev/check-gitignore-agents`, a functional `git check-ignore` probe (see the invariant; #91).
+- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003). Because the live file is untracked, drift from the template is caught at commit time by `dev/check-gitignore-agents`, a functional `git check-ignore` probe: blocking for ADR-0003's re-inclusion, a warning with the lines to append for every other template rule (see the invariants; #91).
 - Adding a `devcontainer` subcommand: add the dispatch arm in `dev/devcontainer`, add a row to `lib/command-table.tsv`. That is the whole workflow — the usage text, the bash/zsh/fish word lists, their descriptions, and the per-command argument wiring are all generated from the row. Never hand-edit a command list in `dev/devcontainer-completions` or the Commands block of `show_usage`.
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.

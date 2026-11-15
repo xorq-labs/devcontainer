@@ -14,8 +14,19 @@
 # commit, every checkout) and dev/setup-worktree (a warning at the moment the
 # main checkout's live file propagates into a new worktree).
 #
-# Exit: 0 = re-inclusion works (or nothing ignores the probe at all);
-#       1 = broken; anything else = git itself failed.
+# Template drift, after that probe passes: the same untracked-ness means a rule
+# added to .gitignore.template reaches an existing checkout only by hand
+# (PR 167's .envrcs/.env.* and .kata.toml). Each template rule becomes one
+# probe path (`*` -> probe, `?` -> p; a trailing `/` stays, and check-ignore
+# reads it as a directory), and every probe the live rules decide differently
+# from the template's is reported with the lines to append. A warning only:
+# drift never changes the exit code (a failing git still does), and the check
+# is skipped where the checkout has no .gitignore.template. A rule whose probe
+# the template itself does not decide that way (a `[...]` class, say) compares
+# equal on both sides and so is never reported.
+#
+# Exit: 0 = re-inclusion works (or nothing ignores the probe at all), drift or
+#       not; 1 = broken; anything else = git itself failed.
 set -euo pipefail
 
 # Resolve to the repo root before probing. check-ignore matches a RELATIVE path
@@ -57,3 +68,80 @@ elif [ "$rc" -ne 1 ]; then
     echo "git check-ignore failed (rc=$rc): $out" >&2
     exit "$rc"
 fi
+
+template="$dir/.gitignore.template"
+[ -f "$template" ] || exit 0
+
+# probe_for <rule> -> a path the rule matches (negation and anchor stripped)
+probe_for() {
+    local p="${1#!}"
+    p="${p#/}"
+    p="${p//\*/probe}"
+    printf '%s\n' "${p//\?/p}"
+}
+
+rules=() probes=()
+while IFS= read -r rule || [ -n "$rule" ]; do
+    case "$rule" in ''|'#'*) continue ;; esac
+    rules+=("$rule")
+    probes+=("$(probe_for "$rule")")
+done <"$template"
+[ "${#rules[@]}" -gt 0 ] || exit 0
+
+# ignored_set <git -C args...> -> the probes those rules ignore, one per line.
+# check-ignore exits 1 when it ignores none, which is an answer, not a failure.
+ignored_set() {
+    local got rc=0
+    got="$(printf '%s\n' "${probes[@]}" | git "$@" check-ignore --no-index --stdin 2>&1)" || rc=$?
+    if [ "$rc" -gt 1 ]; then
+        echo "git check-ignore failed (rc=$rc): $got" >&2
+        exit "$rc"
+    fi
+    printf '%s\n' "$got"
+}
+
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+git init -q "$scratch"
+cp "$template" "$scratch/.gitignore"
+want="$(ignored_set -C "$scratch" -c core.excludesFile=/dev/null)"
+have="$(ignored_set -C "$dir")"
+
+# A missing rule appended at the end lands after every '!' rule, which then no
+# longer re-includes what it ignores (.envrcs/.env.* would swallow the tracked
+# templates). So the append list also carries each later '!' rule, in order.
+missing=() extra=() append=()
+for i in "${!rules[@]}"; do
+    probe="${probes[$i]}"
+    w=0 h=0
+    grep -qxF -- "$probe" <<<"$want" && w=1
+    grep -qxF -- "$probe" <<<"$have" && h=1
+    if [ "$w" -eq 1 ] && [ "$h" -eq 0 ]; then
+        missing+=("${rules[$i]}")
+        append+=("${rules[$i]}")
+    elif [ "$w" -eq 0 ] && [ "$h" -eq 1 ]; then
+        extra+=("${rules[$i]} (probe $probe)")
+    elif [ "${#append[@]}" -gt 0 ] && [ "${rules[$i]:0:1}" = '!' ]; then
+        append+=("${rules[$i]}")
+    fi
+done
+
+if [ "${#missing[@]}" -gt 0 ] || [ "${#extra[@]}" -gt 0 ]; then
+    {
+        echo "WARNING: the live .gitignore in $dir disagrees with .gitignore.template."
+        if [ "${#missing[@]}" -gt 0 ]; then
+            echo "  Not ignored live, ignored by the template:"
+            printf '      %s\n' "${missing[@]}"
+            echo "  Append them, with the template's later '!' rules so those still apply:"
+            q=""
+            for r in "${append[@]}"; do q+=" '${r//\'/\'\\\'\'}'"; done
+            echo "    printf '%s\\n'$q >> '$dir/.gitignore'"
+        fi
+        if [ "${#extra[@]}" -gt 0 ]; then
+            echo "  Ignored live, left alone or re-included by the template:"
+            printf '    %s\n' "${extra[@]}"
+        fi
+        echo "  If this is a worktree, fix the main checkout too: setup-worktree copies its live file."
+    } >&2
+fi
+exit 0

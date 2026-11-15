@@ -17,6 +17,15 @@
 # .gitignore, dev/check-gitignore-agents exits 1 and
 # `pre-commit run gitignore-agents-reinclusion` fails; restoring the template
 # stanza turns both green (mutation run 2026-08-02).
+#
+# Template drift (ADR-0005 §2, run 2026-11-15, PR 167): form-only — rename
+# ignored_set and swap the want/have lines: green, 23/23. Semantic — comment
+# out `missing+=`: red ("deleting any one template rule is reported"); comment
+# out the later-'!' `append+=`: red ("a missing rule followed by a template
+# '!' rule is fixed by the command"); comment out `extra+=`, or turn the
+# no-template skip into an unconditional exit 0: red; delete that skip: red
+# (5 failures). Commenting out the trailing-`/` child survived — check-ignore
+# reads `dir/` as a directory — so that clause was deleted.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -80,11 +89,85 @@ assert_false "...while a real agent definition is genuinely not ignored" \
 assert_false "a directory outside any repo is not reported green" \
     bash -c "'$check' /tmp 2>/dev/null"
 
+# Template drift: a warning (exit 0) naming every template rule the live file
+# decides differently. Expectations are derived from the real template: each
+# rule in turn is deleted from an otherwise identical live file.
+echo ""
+echo "--- check-gitignore-agents: template drift warning ---"
+drift_repo="$(new_repo "$tmp/drift")"
+cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore.template"
+template_rules=()
+while IFS= read -r rule; do template_rules+=("$rule"); done \
+    < <(grep -vE '^(#|$)' "$DEV_BASE/.gitignore.template")
+assert_true "the template has rules to derive probes from" test "${#template_rules[@]}" -gt 0
+
+# warn <dir> -> the probe's stderr; its exit code must be 0 whatever it says.
+# Run with no global git config and an empty XDG dir: a host's global ignore
+# (core.excludesFile, or ~/.config/git/ignore) would otherwise satisfy a rule
+# the live file lacks, and the suite would pass here and fail in CI.
+mkdir -p "$tmp/xdg"
+warn() {
+    local err rc=0
+    err="$(GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$tmp/xdg" \
+        "$check" "$1" 2>&1 >/dev/null)" || rc=$?
+    printf '%s\n' "$err"
+    return "$rc"
+}
+
+cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore"
+assert_eq "a live file equal to the template draws no warning" "" "$(warn "$drift_repo")"
+
+unreported=()
+for rule in "${template_rules[@]}"; do
+    grep -vxF -- "$rule" "$DEV_BASE/.gitignore.template" > "$drift_repo/.gitignore"
+    # Deleting ADR-0003's negation is the hard gate's case: exit 1, its own text.
+    if [ "$rule" = '!.claude/agents/' ]; then
+        warn "$drift_repo" >/dev/null && unreported+=("$rule (hard gate passed)")
+        continue
+    fi
+    out="$(warn "$drift_repo")" || { unreported+=("$rule (exit non-zero)"); continue; }
+    grep -qF -- "$rule" <<<"$out" || unreported+=("$rule")
+done
+if [ "${#unreported[@]}" -eq 0 ]; then
+    _pass "deleting any one of the ${#template_rules[@]} template rules is reported, exit 0"
+else
+    _fail "deleting any one template rule is reported, exit 0" "unreported: ${unreported[*]}"
+fi
+
+# The printed remediation is a command, and running it clears the drift.
+grep -vxF '.kata.toml' "$DEV_BASE/.gitignore.template" > "$drift_repo/.gitignore"
+fix="$(warn "$drift_repo" | grep -F "printf '%s\n'" | sed 's/^ *//' || true)"
+assert_nonempty "a missing rule comes with an append command" "$fix"
+bash -c "$fix"
+assert_eq "running the printed command clears the warning" "" "$(warn "$drift_repo")"
+
+# The PR 167 migration: a live file from before .envrcs/.env.* lacks the rule
+# AND its '!' re-include. The printed command must restore both, in order, or
+# the appended glob swallows the tracked templates.
+grep -vxF -e '.envrcs/.env.*' -e '!.envrcs/.env.*.template' "$DEV_BASE/.gitignore.template" \
+    > "$drift_repo/.gitignore"
+fix="$(warn "$drift_repo" | grep -F "printf '%s\n'" | sed 's/^ *//' || true)"
+bash -c "$fix"
+assert_eq "a missing rule followed by a template '!' rule is fixed by the command" \
+    "" "$(warn "$drift_repo")"
+
+# A personal extra that ignores what the template re-includes is drift too.
+{ cat "$DEV_BASE/.gitignore.template"; echo '.envrcs/.env.*.template'; } > "$drift_repo/.gitignore"
+assert_contains "an extra rule defeating a template negation is reported" \
+    '!.envrcs/.env.*.template' "$(warn "$drift_repo")"
+
+# No template, nothing to compare: a consumer repo gets no drift output.
+rm "$drift_repo/.gitignore.template"
+: > "$drift_repo/.gitignore"
+assert_eq "a checkout without .gitignore.template draws no warning" "" "$(warn "$drift_repo")"
+
 # Wiring: a probe only guards if its consumers run it.
 assert_true "the pre-commit local hook runs the probe" \
     grep -q 'entry: dev/check-gitignore-agents' "$DEV_BASE/.pre-commit-config.yaml"
 assert_true "the hook runs even when no files match" \
     bash -c "grep -A5 'id: gitignore-agents-reinclusion' '$DEV_BASE/.pre-commit-config.yaml' | grep -q 'always_run: true'"
+assert_true "pre-commit shows the hook's output, where the drift warning goes" \
+    bash -c "grep -A7 'id: gitignore-agents-reinclusion' '$DEV_BASE/.pre-commit-config.yaml' | grep -q 'verbose: true'"
 assert_true "setup-worktree warns through the same probe" \
     grep -q 'check-gitignore-agents' "$DEV_BASE/dev/setup-worktree"
 # ...but only where ADR-0003's convention is in force. setup-worktree runs on
