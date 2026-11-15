@@ -14,10 +14,11 @@
 # installations" (https://docs.docker.com/engine/storage/containerd/), and
 # that store pushes the layers `docker load` stored uncompressed as they are.
 #
-# Runs twice per CI leg: on the local copy's manifest before any push (so a
-# PR exercises it), and on the registry's manifest after the push. Its
-# refusals are pinned by tests/test-check-layer-compression.sh, since CI's
-# real manifests only ever reach the pass arm.
+# Runs on the local copy's manifest before any push, so a PR exercises it;
+# after the push, nix-base.yml requires the registry's manifest digest to
+# equal that copy's, so this verdict carries over. Its refusals are pinned
+# by tests/test-check-layer-compression.sh, since CI's real manifests only
+# ever reach the pass arm.
 #
 # Usage: check-layer-compression.sh <manifest.json | ->
 set -euo pipefail

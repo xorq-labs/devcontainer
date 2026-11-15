@@ -166,18 +166,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Pushes the already-gzipped copy as-is (skopeo reads the login above
-      # from ~/.docker/config.json), then checks what the registry holds. That
-      # check asks only that the layers are gzip, not that the registry's
-      # manifest equals the local copy PRs exercised: a push-side recompression
-      # that still writes gzip would pass it and surface only as a pin bump.
-      # Accepted (decision post-push-checks-gzip-not-identity).
+      # from ~/.docker/config.json), then requires the registry's manifest
+      # digest to equal the local copy's: the one the compression check above
+      # passed, so a push that re-encoded anything, gzip or not, fails here
+      # instead of surfacing as a pin bump.
       - name: Push per-arch image
         if: github.event_name != 'pull_request'
         run: |
           ref="$IMAGE:sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
-          nix run --inputs-from ./nix/base nixpkgs#skopeo -- --insecure-policy \
-            copy --format v2s2 "dir:$RUNNER_TEMP/base" "docker://$ref"
-          docker buildx imagetools inspect --raw "$ref" | nix/base/check-layer-compression.sh -
+          skopeo() { nix run --inputs-from ./nix/base nixpkgs#skopeo -- --insecure-policy "$@"; }
+          skopeo copy --format v2s2 "dir:$RUNNER_TEMP/base" "docker://$ref"
+          local_digest="$(skopeo manifest-digest "$RUNNER_TEMP/base/manifest.json")"
+          pushed_digest="$(skopeo inspect --format '{{.Digest}}' "docker://$ref")"
+          if [ "$pushed_digest" != "$local_digest" ]; then
+            echo "error: registry holds $pushed_digest, local copy is $local_digest" >&2
+            exit 1
+          fi
+          echo "ok: registry manifest is the local copy ($local_digest)"
 
   manifest:
     name: Assemble multi-arch manifest
