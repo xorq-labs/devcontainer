@@ -1,6 +1,6 @@
 # ADR-0008: kata on the team server, as the agent-side ledger
 
-- Status: Proposed
+- Status: Accepted (2026-11-15, by the user on PR 167)
 - Date: 2026-11-14
 - Implemented by: this PR (`.envrcs/.envrc.kata` and `.envrcs/.envrc.sops`,
   vendored from xorq-labs/xorq-envrcs at 37873f9; `.envrcs/.env.local.template`;
