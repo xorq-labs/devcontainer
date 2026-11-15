@@ -22,7 +22,9 @@
 # ignored_set and swap the want/have lines: green, 23/23. Semantic — comment
 # out `missing+=`: red ("deleting any one template rule is reported"); comment
 # out the later-'!' `append+=`: red ("a missing rule followed by a template
-# '!' rule is fixed by the command"); comment out `extra+=`, or turn the
+# '!' rule is fixed by the command"); comment out `extra+=` (red then; since
+# e25392b the negation fixture routes through `missing`, and `extra+=` is pinned
+# by the `[ab]c` fixture below instead), or turn the
 # no-template skip into an unconditional exit 0: red; delete that skip: red
 # (5 failures). Commenting out the trailing-`/` child survived — check-ignore
 # reads `dir/` as a directory — so that clause was deleted.
@@ -44,6 +46,15 @@
 # The `*`/`?` substitutions and `--no-index` survived their removal for every
 # input (a literal glob matches itself; scratch repos track nothing) and were
 # deleted.
+#
+# Independent re-run (2026-11-15) found four survivors, now pinned, 42
+# assertions, each red alone: `extra+=` made a no-op -> 41/1 "a live rule
+# ignoring what the template leaves alone"; `-u GIT_CONFIG_COUNT` dropped ->
+# 41/1; GIT_CONFIG_NOSYSTEM=1 dropped -> 41/1; the `|| [ -n "$rule" ]` last-
+# line read dropped -> 41/1. Still unpinned, judged cosmetic or equivalent:
+# the dangling-symlink half of the absent-live test, `cp -P` (a documented
+# limit), the two inner list-empty checks, the later-'!' append's conjuncts,
+# and `init --template=` (equivalent while global and system config are off).
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -221,10 +232,35 @@ printf '%s\n' "$shapes_template" > "$drift_repo/.gitignore.template"
 for rule in '/anchored-rule' "it's-a-rule"; do
     grep -vxF -- "$rule" <<<"$shapes_template" > "$drift_repo/.gitignore"
     fix="$(warn "$drift_repo" | grep -F "printf '%s\n'" | sed 's/^ *//' || true)"
-    assert_contains "a missing rule shaped $rule is in the append command" "$rule" "$(warn "$drift_repo" || true)"
+    assert_nonempty "a missing rule shaped $rule gets an append command" "$fix"
     bash -c "$fix" 2>/dev/null || true
     assert_eq "...and the printed command clears $rule" "" "$(warn "$drift_repo" || true)"
 done
+
+# A live rule ignoring what the template leaves alone is reported on its own
+# line: a template `[ab]c` does not match the literal path `[ab]c`, which a
+# live `\[ab\]c` does.
+printf '%s\n' "$(cat "$DEV_BASE/.gitignore.template")" '[ab]c' > "$drift_repo/.gitignore.template"
+{ cat "$drift_repo/.gitignore.template"; printf '%s\n' '\[ab\]c'; } > "$drift_repo/.gitignore"
+assert_contains "a live rule ignoring what the template leaves alone is reported" \
+    "Ignored by the live file" "$(warn "$drift_repo" || true)"
+
+# A template whose last rule has no newline still has that rule.
+printf '%s\n%s' "$(cat "$DEV_BASE/.gitignore.template")" 'last-rule-no-newline' > "$drift_repo/.gitignore.template"
+cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore"
+assert_contains "a last rule with no trailing newline is read" "last-rule-no-newline" "$(warn "$drift_repo" || true)"
+
+# The same isolation holds for config from GIT_CONFIG_COUNT/KEY_n/VALUE_n and
+# from the system config, not only the global one.
+cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore.template"
+grep -vxF '.kata.toml' "$DEV_BASE/.gitignore.template" > "$drift_repo/.gitignore"
+out="$(GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$tmp/xdg" GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=core.excludesFile GIT_CONFIG_VALUE_0="$tmp/global-excludes" \
+    "$check" "$drift_repo" 2>&1 >/dev/null || true)"
+assert_contains "a GIT_CONFIG_COUNT excludesFile does not mask a missing rule" ".kata.toml" "$out"
+out="$(GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$tmp/xdg" GIT_CONFIG_SYSTEM="$tmp/global-config" \
+    "$check" "$drift_repo" 2>&1 >/dev/null || true)"
+assert_contains "a system excludesFile does not mask a missing rule" ".kata.toml" "$out"
 
 # A template of comments only has nothing to compare: no output, exit 0 (an
 # empty probe list would otherwise hand check-ignore a blank path).

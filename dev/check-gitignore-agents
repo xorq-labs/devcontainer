@@ -21,20 +21,21 @@
 # probe path (the rule itself, unanchored; a trailing `/` stays, and
 # check-ignore reads it as a directory), and every probe the live .gitignore FILE decides
 # differently from the template is reported with the lines to append. Each
-# side is one file in its own scratch repo with no global config, so a global
-# ignore cannot hide a rule the file lacks. A warning only: drift never changes
+# side is one file in its own scratch repo with no global or system config,
+# so neither can hide a rule the file lacks. A warning only: drift never changes
 # the exit code (a failing git still does); with no live file it prints one
 # line naming the cp instead, and it is skipped where the checkout has no
-# .gitignore.template. A rule whose probe
-# the template itself does not decide that way (a `[...]` class, say) compares
-# equal on both sides and so is never reported.
+# .gitignore.template. A rule whose own text it does not match compares equal
+# on both sides and so is never reported: a `[...]` class, an escaped character
+# (`\#x`, `\!x`, `a\*b`, `\ `) and unescaped trailing spaces.
 #
 # Accepted limits (PR 167, decided 2026-11-15): a CRLF template's rules keep
 # their \r here, so deleting one goes unreported; a symlinked live .gitignore
 # (which git does not read) is reported as missing every rule, and the printed
 # `>>` writes through the link; a bare `/` rule, or GIT_*_PATHSPECS=1 in the
 # environment, makes check-ignore fail and the hook exit 128, blocking commits
-# (fail-closed); a checkout path holding a `'` breaks the printed command's
+# (fail-closed), as does a rule starting with pathspec magic (`:!x`, `:(glob)x`);
+# a `:/x` rule is never reported; a checkout path holding a `'` breaks the printed command's
 # quoting; a mktemp or cp failure exits 1, which reads like a broken ADR-0003
 # probe.
 #
@@ -93,9 +94,10 @@ template="$dir/.gitignore.template"
 [ -f "$template" ] || exit 0
 
 # probe_for <rule> -> a path the rule matches: the rule itself, negation and
-# anchor stripped. A glob needs no substitution — `*`, `**` and `?` each match
-# their own literal character — and a leading `/` must go, or git rejects the
-# path as outside the repository.
+# anchor stripped. An unescaped `*`, `**` or `?` matches its own literal
+# character, so a glob needs no substitution (the shapes that do not match
+# their own text are listed in the header); a leading `/` must go, or git
+# rejects the path as outside the repository.
 probe_for() {
     local p="${1#!}"
     printf '%s\n' "${p#/}"
