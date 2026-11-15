@@ -179,7 +179,10 @@ taxonomy and reads as `test:`.
 - That quiet no-op also needs the PUSH to be reproducible, not just the build:
   the published digest covers the compressed layers, so `nix-base.yml` gzips
   them with the skopeo pinned by `nix/base/flake.lock` and never lets `docker
-  push` choose. Docker 29's containerd store pushed an unchanged base
+  push` choose, nor skopeo's own blob reuse: without
+  `--dest-force-compress-format` it swapped the uncompressed layers already on
+  ghcr back in on the first publish after the switch. Docker 29's containerd
+  store pushed an unchanged base
   uncompressed under a new digest, and the pin job proposed it as a bump
   (`ci:` nix-base.yml#build runs `nix/base/check-layer-compression.sh` on the
   local copy, PRs included, and after the push requires the registry's
