@@ -568,8 +568,8 @@ taxonomy and reads as `test:`.
   a `.gitignore` entirely (unguarded: ephemeral and harness-managed; nothing
   authors agent files there, and the commit-time hook still fires if one
   does).
-- Every other `.gitignore.template` rule reaches an existing checkout's live
-  file only by hand, so the same script then WARNS (exit unchanged) about each
+- Every other `.gitignore.template` rule reaches an existing main checkout's
+  live file only by hand (worktrees copy main's), so the same script then WARNS (exit unchanged) about each
   template rule the live file decides differently, printing the lines to
   append — and with them the template's later `!` rules, which an appended
   glob would otherwise defeat. The hook sets `verbose: true` because a warning

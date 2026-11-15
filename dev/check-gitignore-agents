@@ -15,8 +15,9 @@
 # main checkout's live file propagates into a new worktree).
 #
 # Template drift, after that probe passes: the same untracked-ness means a rule
-# added to .gitignore.template reaches an existing checkout only by hand
-# (PR 167's .envrcs/.env.* and .kata.toml). Each template rule becomes one
+# added to .gitignore.template reaches an existing main checkout only by hand
+# (PR 167's .envrcs/.env.* and .kata.toml); a worktree takes main's copy, via
+# setup-worktree or its --refresh. Each template rule becomes one
 # probe path (`*` -> probe, `?` -> p; a trailing `/` stays, and check-ignore
 # reads it as a directory), and every probe the live rules decide differently
 # from the template's is reported with the lines to append. A warning only:
