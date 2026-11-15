@@ -170,12 +170,20 @@ jobs:
       # digest to equal the local copy's: the one the compression check above
       # passed, so a push that re-encoded anything, gzip or not, fails here
       # instead of surfacing as a pin bump.
+      # The copy must FORCE gzip, not just start from it. Without
+      # --dest-force-compress-format, skopeo may reuse any variant of a layer
+      # the repo already holds: the compress step above records each gzip
+      # blob's uncompressed digest in skopeo's blob-info cache, the Docker 29
+      # publish left those uncompressed blobs on ghcr, and the first publish
+      # after the switch pushed them back under a rewritten manifest. Forcing
+      # gzip limits reuse to gzip blobs and leaves ours byte-identical.
       - name: Push per-arch image
         if: github.event_name != 'pull_request'
         run: |
           ref="$IMAGE:sha-${GITHUB_SHA::7}-${{ matrix.arch }}"
           skopeo() { nix run --inputs-from ./nix/base nixpkgs#skopeo -- --insecure-policy "$@"; }
-          skopeo copy --format v2s2 "dir:$RUNNER_TEMP/base" "docker://$ref"
+          skopeo copy --format v2s2 --dest-compress-format gzip --dest-force-compress-format \
+            "dir:$RUNNER_TEMP/base" "docker://$ref"
           local_digest="$(skopeo manifest-digest "$RUNNER_TEMP/base/manifest.json")"
           pushed_digest="$(skopeo inspect --format '{{.Digest}}' "docker://$ref")"
           if [ "$pushed_digest" != "$local_digest" ]; then
