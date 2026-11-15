@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# Guard: .envrcs/.envrc.kata hands kata the team token only together with the
+# team server, .envrc.user.template loads .env.local before it,
+# .gitignore.template keeps the per-user kata files (.env.local, .kata.toml)
+# out of git, and .envrc.secrets.template takes the token from a gitignored
+# sops bundle rather than a plaintext export. Decryption itself (sops, an age
+# key, direnv) is not covered: none of the three is on the CI runner.
+#
+# The fragment is vendored from xorq-envrcs, which had no tests at 37873f9;
+# its later tests/test-fragments.sh (#13 there) does not cover this fragment.
+# Its one safety property is "both or neither": KATA_AUTH_TOKEN overrides every
+# daemon's token, so a token exported without KATA_SERVER would go to whatever
+# local daemon kata picks — including one inherited from the outer shell, which
+# the fragment must unset. Driven functionally: the fragment is SOURCED with
+# direnv's log_error stubbed, under env -i, and the resulting environment is
+# what is asserted, not the fragment's text.
+#
+# ADR-0005 §2 mutation pair (run 2026-11-14):
+#   form-only — swap the two `[ -n ... ]` tests in the `if` and rename
+#     `_kata_missing` to `_missing`: stays green, same assertion count.
+#   semantic  — comment out the `unset KATA_AUTH_TOKEN` in the else branch:
+#     goes red ("an inherited KATA_AUTH_TOKEN is dropped ..." x3).
+# Gitignore section (run 2026-11-14, structural review r1):
+#   form-only — move the .kata.toml lines above the .envrcs/.env.* block:
+#     stays green, same assertion count.
+#   semantic  — delete the `.kata.toml` and `.kata.local.toml` lines: goes red
+#     (".kata.toml is ignored", ".kata.local.toml is ignored"); deleting
+#     `.envrcs/.env.*` or its `!` re-include each turns one assertion red.
+# Secrets/sops sections (run 2026-11-15): form-only — split a comment line in
+#   .envrc.secrets.template and add a blank line: green, same count. Semantic,
+#   each red on its own assertion: a plaintext `export KATA_TEAM_TOKEN=` line;
+#   the `source_env .envrc.sops` line removed; the `use` line commented out;
+#   the bundle renamed outside .env.*; in .envrc.sops, `watch_file` commented
+#   out of use_sops_if_exists, or its `[ -f ]` guard dropped.
+set -euo pipefail
+
+. "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
+
+DEV_BASE="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+fragment="$DEV_BASE/.envrcs/.envrc.kata"
+template="$DEV_BASE/.envrcs/.envrc.user.template"
+
+[ -f "$fragment" ] || { echo "  FAIL: fragment not found at $fragment"; exit 1; }
+
+# run_fragment VAR=value... -> the KATA_* vars it leaves set, then LOG:<errors>
+run_fragment() {
+    env -i PATH="$PATH" "$@" bash -c '
+        _log=
+        log_error() { _log="${_log:+$_log; }$*"; }
+        . "$1"
+        env | grep "^KATA_" | sort
+        printf "LOG:%s\n" "$_log"
+    ' _ "$fragment"
+}
+
+echo "--- .envrc.kata: both set ---"
+out="$(run_fragment KATA_TEAM_SERVER=http://100.64.0.1:7777 KATA_TEAM_TOKEN=tok \
+    KATA_ALLOW_INSECURE=1)"
+assert_contains "KATA_SERVER comes from KATA_TEAM_SERVER" "KATA_SERVER=http://100.64.0.1:7777" "$out"
+assert_contains "KATA_AUTH_TOKEN comes from KATA_TEAM_TOKEN" "KATA_AUTH_TOKEN=tok" "$out"
+assert_contains "private-network trust is enabled" "KATA_TRUST_PRIVATE_NETWORK=1" "$out"
+assert_not_contains "KATA_ALLOW_INSECURE is removed" "KATA_ALLOW_INSECURE" "$out"
+assert_eq "no error is logged" "LOG:" "$(tail -n1 <<<"$out")"
+
+for case in "KATA_TEAM_SERVER|KATA_TEAM_TOKEN=tok" \
+            "KATA_TEAM_TOKEN|KATA_TEAM_SERVER=http://100.64.0.1:7777" \
+            "KATA_TEAM_SERVER and KATA_TEAM_TOKEN|"; do
+    missing="${case%%|*}" given="${case#*|}"
+    echo ""
+    echo "--- .envrc.kata: $missing missing ---"
+    # An empty value counts as missing; an inherited token must not survive.
+    # shellcheck disable=SC2086 # $given is one VAR=value word or none
+    out="$(run_fragment KATA_TEAM_SERVER= $given KATA_AUTH_TOKEN=inherited)"
+    assert_not_contains "an inherited KATA_AUTH_TOKEN is dropped ($missing missing)" "KATA_AUTH_TOKEN" "$out"
+    assert_not_contains "no KATA_SERVER is set ($missing missing)" "KATA_SERVER=" "$out"
+    assert_eq "the error names what is missing" "LOG:kata here is not set up for the team server: $missing unset or empty" "$(tail -n1 <<<"$out")"
+done
+
+echo ""
+echo "--- .envrc.user.template: .env.local loads before .envrc.kata ---"
+# The fragment reads KATA_TEAM_SERVER, which .env.local holds; opted in, the
+# template must load that file first. Order observed by sourcing the template
+# with the kata line uncommented and the direnv stdlib stubbed to record calls.
+order="$(sed 's|^# *\(source_env \.envrc\.kata\)|\1|' "$template" | env -i PATH="$PATH" bash -c '
+    source_env() { echo "source_env $1"; }
+    dotenv_if_exists() { echo "dotenv_if_exists $1"; }
+    PATH_add() { :; }
+    . /dev/stdin
+')"
+dotenv_at="$(grep -n '^dotenv_if_exists \.env\.local$' <<<"$order" | cut -d: -f1 || true)"
+kata_at="$(grep -n '^source_env \.envrc\.kata$' <<<"$order" | cut -d: -f1 || true)"
+assert_nonempty "the template loads .env.local" "$dotenv_at"
+assert_nonempty "the template offers .envrc.kata" "$kata_at"
+if [ -n "$dotenv_at" ] && [ -n "$kata_at" ] && [ "$dotenv_at" -lt "$kata_at" ]; then
+    _pass ".env.local is loaded before .envrc.kata"
+else
+    _fail ".env.local is loaded before .envrc.kata" "order: $(tr '\n' ',' <<<"$order")"
+fi
+
+echo ""
+echo "--- .gitignore.template: per-user kata files stay out of git ---"
+# ADR-0008 keeps .env.local and .kata.toml per checkout; the template is what
+# a new checkout's live .gitignore starts from, so probe it with git itself.
+tmp="$(mktemp -d)"
+_cleanup_dirs+=("$tmp")
+repo="$(new_repo "$tmp/repo")"
+cp "$DEV_BASE/.gitignore.template" "$repo/.gitignore"
+for path in .envrcs/.env .envrcs/.env.local .kata.toml .kata.local.toml; do
+    assert_true "$path is ignored" git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index "$path"
+done
+assert_false ".envrcs/.env.local.template is not ignored" \
+    git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index .envrcs/.env.local.template
+
+echo ""
+echo "--- .envrc.secrets.template: the token comes from a sops bundle ---"
+# Sourced with direnv's source_env/use stubbed to record calls: the template
+# itself must set no KATA_* value (a plain export there is plaintext on disk),
+# and must source .envrc.sops before loading the bundle it names.
+calls="$(env -i PATH="$PATH" bash -c '
+    source_env() { echo "source_env $1"; }
+    use() { echo "use $*"; }
+    . "$1"
+    env | grep "^KATA_" || true
+' _ "$DEV_BASE/.envrcs/.envrc.secrets.template")"
+bundle="$(sed -n 's/^use sops_if_exists //p' <<<"$calls")"
+assert_eq "it sources .envrc.sops first" "source_env .envrc.sops" "$(head -n1 <<<"$calls")"
+assert_nonempty "it loads a bundle with use sops_if_exists" "$bundle"
+assert_not_contains "it sets no KATA_* value itself" "KATA_" "$(grep -v '^use \|^source_env ' <<<"$calls" || true)"
+assert_true "the bundle (.envrcs/$bundle) is gitignored by the template" \
+    git -C "$repo" -c core.excludesFile=/dev/null check-ignore -q --no-index ".envrcs/$bundle"
+
+echo ""
+echo "--- .envrc.sops: an absent bundle is a silent no-op, and watched ---"
+out="$(env -i PATH="$PATH" bash -c '
+    _log=
+    log_error() { _log="${_log:+$_log; }$*"; }
+    watch_file() { echo "watch $1"; }
+    sops() { echo "sops called"; }
+    . "$1"
+    rc=0; use_sops_if_exists "$2" || rc=$?
+    echo "rc=$rc"
+    env | grep "^KATA_" || true
+    printf "LOG:%s\n" "$_log"
+' _ "$DEV_BASE/.envrcs/.envrc.sops" "$tmp/no-such.sops-encrypted")"
+assert_contains "the missing bundle is watched, so creating it reloads" "watch $tmp/no-such.sops-encrypted" "$out"
+assert_contains "use_sops_if_exists returns 0" "rc=0" "$out"
+assert_not_contains "sops is not run" "sops called" "$out"
+assert_eq "no error is logged" "LOG:" "$(tail -n1 <<<"$out")"
+
+finish

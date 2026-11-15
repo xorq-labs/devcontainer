@@ -55,3 +55,5 @@ repos:
         language: script
         always_run: true
         pass_filenames: false
+        # Prints the template-drift warning, which exits 0 and would be hidden.
+        verbose: true

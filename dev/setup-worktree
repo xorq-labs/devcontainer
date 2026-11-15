@@ -18,14 +18,55 @@
 # Two paths are handled outside the overlay lists:
 #   .gitignore — always a copy: git opens it with O_NOFOLLOW, so a symlink
 #                would ELOOP (falls back to .gitignore.template when the main
-#                checkout has no live, per-checkout .gitignore).
+#                checkout has no live, per-checkout .gitignore). A symlink to
+#                main's file that a developer put there by hand is not
+#                replaced, --refresh included; git warns it cannot read it.
 #   .claude    — a real directory (git materializes it for tracked content
 #                like .claude/agents/); only the shared-state subdirs
 #                (container-audit/, container-sessions/) are symlinked so
 #                audit logs and session captures aggregate in the main
 #                checkout (ADR-0003). A pre-ADR-0003 whole-directory symlink
 #                is left as-is (legacy layout).
+#
+# Copies are skip-if-present: a worktree keeps whatever it was given at
+# creation, so a later edit to the main checkout's copy (a per-developer
+# .envrc.user, a rotated encrypted secret) never reaches it. --refresh
+# re-copies every copy entry whose worktree file differs from main's, after
+# saving the old file under the worktree's git admin dir
+# (<git-dir>/setup-worktree-backup/<timestamp>/<path>) — outside the work
+# tree, so cleanup-worktree's pre-flight never sees it and `git worktree
+# remove` deletes it with the rest of the admin dir. Paths tracked in the
+# worktree are never overwritten. A copy that cannot be refreshed (an
+# unreadable source) keeps its old file and makes the run exit 1. Only names
+# are printed, never contents or diffs: the copy lists hold secrets.
 set -euo pipefail
+
+usage() {
+    cat <<'USAGE'
+Usage: setup-worktree [--refresh]
+
+Propagate overlay copies/symlinks from the main checkout into the current
+worktree. Existing copies are left alone unless --refresh is given, which
+re-copies those that differ from the main checkout's, backing up the old
+file under the worktree's git admin dir.
+USAGE
+}
+
+refresh=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --refresh) refresh=1 ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "setup-worktree: unknown argument: $_arg" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
 
 _base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$_base/lib/git.sh"
@@ -60,6 +101,60 @@ heal_stale_symlink() {
     return 1
 }
 
+# Same content as main's copy would produce: `cp -P` keeps a symlink as a
+# symlink, so compare link targets for those and bytes for regular files.
+same_copy() {
+    local src="$1" dst="$2"
+    if [ -L "$src" ] || [ -L "$dst" ]; then
+        [ -L "$src" ] && [ -L "$dst" ] && [ "$(readlink "$src")" = "$(readlink "$dst")" ]
+    else
+        cmp -s "$src" "$dst"
+    fi
+}
+
+# A real directory, not a symlink to one: `cp -P` copies a symlink to a
+# directory as a link, so that is a copy entry like any other.
+is_real_dir() { [ ! -L "$1" ] && [ -d "$1" ]; }
+
+_backup_root=""
+refresh_failed=0
+refresh_suffix=".setup-worktree-refresh"
+# A temp file refresh_copy left behind (a run killed between its two renames).
+# Swept for every copy entry on every run, before anything is copied: a stale
+# temp that is a symlink would otherwise make `cp -P` write through it.
+drop_refresh_tmp() {
+    local tmp="$here/$1$refresh_suffix"
+    if [ -L "$tmp" ] || [ -f "$tmp" ]; then rm -f "$tmp"; fi
+}
+# --refresh only: replace an existing copy at $2 (relative to the worktree)
+# with $1 when they differ. Skips directories, paths the worktree tracks, and
+# a worktree path that already resolves to main's file (a symlink into main).
+# The new copy is written beside the old one first, so a source that cannot
+# be read leaves the old copy in place rather than only in the backup.
+refresh_copy() {
+    local src="$1" rel="$2" dst="$here/$2"
+    local tmp="$dst$refresh_suffix"
+    [ "$refresh" -eq 1 ] || return 0
+    is_real_dir "$src" || is_real_dir "$dst" && return 0
+    git -C "$here" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 && return 0
+    [ "$src" -ef "$dst" ] && return 0
+    same_copy "$src" "$dst" && return 0
+    if ! cp -P "$src" "$tmp"; then
+        rm -f "$tmp"
+        echo "setup-worktree: could not refresh $rel; kept the existing copy" >&2
+        refresh_failed=$((refresh_failed + 1))
+        return 0
+    fi
+    if [ -z "$_backup_root" ]; then
+        _backup_root="$(git -C "$here" rev-parse --absolute-git-dir)/setup-worktree-backup/$(date +%Y%m%dT%H%M%S)"
+    fi
+    mkdir -p "$_backup_root/$(dirname "$rel")"
+    mv "$dst" "$_backup_root/$rel"
+    mv "$tmp" "$dst"
+    echo "refreshed $rel (previous copy: $_backup_root/$rel)"
+    changes=$((changes + 1))
+}
+
 # Copy paths listed in worktree-copies.txt (globs expanded against $main).
 # NUL-delimited subshell with nullglob handles filenames with spaces safely.
 # Shell substitutions (`$(...)`, backticks, `~`, `$VAR`) in patterns are not
@@ -69,10 +164,13 @@ while IFS= read -r pattern; do
     while IFS= read -r -d '' f; do
         is_present "$f" || continue
         rel="${f#"$main/"}"
+        drop_refresh_tmp "$rel"
         if ! is_present "$here/$rel"; then
             mkdir -p "$here/$(dirname "$rel")"
             cp -Pv "$f" "$here/$rel"
             changes=$((changes + 1))
+        else
+            refresh_copy "$f" "$rel"
         fi
         printf 'copy\t%s\n' "$rel" >> "$manifest"
     done < <(shopt -s nullglob; IFS=; for f in "$main"/$pattern; do printf '%s\0' "$f"; done)
@@ -90,9 +188,12 @@ elif [ -e "$main/.gitignore.template" ]; then
     _gitignore_src="$main/.gitignore.template"
 fi
 if [ -n "$_gitignore_src" ]; then
+    drop_refresh_tmp ".gitignore"
     if ! is_present "$here/.gitignore"; then
         cp -v "$_gitignore_src" "$here/.gitignore"
         changes=$((changes + 1))
+    else
+        refresh_copy "$_gitignore_src" ".gitignore"
     fi
     printf 'copy\t%s\n' ".gitignore" >> "$manifest"
 fi
@@ -161,4 +262,8 @@ done < <(read_list "$main/.envrcs/.worktree-symlinks")
 if [ "$changes" -gt 0 ]; then
     echo "Manifest written to .envrcs/.worktree-manifest"
     echo "To remove: cleanup-worktree"
+fi
+if [ "$refresh_failed" -gt 0 ]; then
+    echo "setup-worktree: $refresh_failed cop(ies) could not be refreshed (see above)" >&2
+    exit 1
 fi
