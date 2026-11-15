@@ -13,6 +13,14 @@ __pycache__/
 .envrcs/.resolved-env
 .envrcs/.worktree-manifest
 .envrcs/.worktree-symlinks
+# per-user dotenv (KATA_TEAM_SERVER, ...); the templates stay tracked
+.envrcs/.env
+.envrcs/.env.*
+!.envrcs/.env.*.template
+
+# kata workspace binding: untracked per checkout (ADR-0008)
+.kata.toml
+.kata.local.toml
 
 # Claude Code state is per-checkout/shared runtime data, but .claude/agents/
 # is tracked content (ADR-0003). `.claude/*` (not bare `.claude`: a pattern

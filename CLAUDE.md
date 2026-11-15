@@ -81,7 +81,8 @@ ADR-0007 (kenn-io toolkit: maintained source builds graduate tool by tool; all
 seven graduated as of 2026-08-21, each with the four parts — derivation,
 `update.py --source` bump mode, drift guard, CLAUDE.md line; amended 2026-08-20
 so a pin may include a generated file, not only hashes; Accepted, and
-un-graduating a tool stays reversible per tool), and
+un-graduating a tool stays reversible per tool), ADR-0008 (kata on the team
+server as the agent-side ledger; GitHub stays the record of disposal), and
 nix/base/README.md "Design decisions" for the
 base-image record.
 
@@ -290,6 +291,20 @@ taxonomy and reads as `test:`.
   the fragment against a stubbed direnv over four real on-disk layouts and
   derives the sibling name from the template rather than restating it, so the
   spelling of neither file is load-bearing).
+- `.envrcs/.envrc.kata` exports the team token (`KATA_AUTH_TOKEN`) only
+  together with the team server (`KATA_SERVER`), and otherwise unsets any
+  inherited token, which kata would send to whatever daemon it picks; the
+  template loads `.env.local`, where the server lives, before it; the token
+  comes from a gitignored sops bundle that `.envrc.secrets.template` loads via
+  the vendored `.envrc.sops`, never a plaintext export (ADR-0008;
+  `test: tests/test-envrc-kata.sh`, which sources the fragments and templates
+  against a stubbed direnv; decryption itself is `unguarded:` — sops, an age
+  key and direnv are not on the CI runner; `unguarded:` agreement with the
+  xorq-envrcs copies they are vendored from — a check needs the network (a
+  `ci:` shape) and none is written; each header names the commit; `unguarded:` the token's half of the load order —
+  root `.envrc` sources `.envrc.secrets` before `.envrc.user`, and the suite
+  never reads root `.envrc`; swapped, the fragment logs that `KATA_TEAM_TOKEN` is unset,
+  so it fails loudly).
 - Source-build tools (ADR-0007 — all seven, as of 2026-08-21) are a SEPARATE,
   smaller pin space from the release
   toolkit above: `nix/kenn/source-builds.json`
@@ -556,6 +571,16 @@ taxonomy and reads as `test:`.
   a `.gitignore` entirely (unguarded: ephemeral and harness-managed; nothing
   authors agent files there, and the commit-time hook still fires if one
   does).
+- Every other `.gitignore.template` rule reaches an existing main checkout's
+  live file only by hand (worktrees copy main's), so the same script then
+  WARNS (exit unchanged) about each template rule the live FILE decides
+  differently — each side alone in a scratch repo, so no global ignore can
+  hide a missing rule — printing the lines to append, with the template's
+  later `!` rules, which an appended glob would otherwise defeat; an absent
+  live file gets one line naming the `cp`. The hook sets `verbose: true` because a warning
+  on exit 0 is otherwise hidden (tool: dev/check-gitignore-agents; test:
+  tests/test-gitignore-agents-reinclusion.sh, which derives one case per
+  template rule by deleting it from a live copy).
 - The host bridge owns git identity and git credentials as a pair: `setup_git`
   copies name/email, and `setup_gh` must wire the credential helper
   (`gh auth setup-git`) — bridge only the `hosts.yml` and `gh auth status`
@@ -680,7 +705,7 @@ taxonomy and reads as `test:`.
 - Python targets 3.12, formatted by ruff with 120 char line length (see `ruff.toml`).
 - Commit messages follow conventional commits: `fix:`, `feat:`, `ci:`, etc.
 - A PR that resolves an issue puts `Closes #N` in its **body** (not just the title). Citing the number in prose does not close anything: #54 was titled "…(#53)" and #53 stayed open for two weeks after it shipped, while #35 was independently re-solved by #71 because nobody knew it was open. An issue list that never drains stops being read, and a fixed-but-open issue is worse than no issue — it sends the next reader after work that is already done.
-- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003). Because the live file is untracked, drift from the template is caught at commit time by `dev/check-gitignore-agents`, a functional `git check-ignore` probe (see the invariant; #91).
+- Gitignore model: `.gitignore` is untracked (it ignores itself; per-checkout), and `.gitignore.template` is the tracked source of durable patterns. `dev/setup-worktree` copies the main checkout's live `.gitignore` into each worktree (git opens it `O_NOFOLLOW`, so it must be a copy, not a symlink), falling back to `.gitignore.template` when the live file is missing. Durable ignore patterns go in the template; the live file may carry personal extras. Claude Code state is ignored via `.claude/*` plus `!.claude/agents/` — never a bare `.claude` entry, which would ignore the directory itself and block re-inclusion of the tracked agent definitions (ADR-0003). Because the live file is untracked, drift from the template is caught at commit time by `dev/check-gitignore-agents`, a functional `git check-ignore` probe: blocking for ADR-0003's re-inclusion, a warning with the lines to append for every other template rule (see the invariants; #91).
 - Adding a `devcontainer` subcommand: add the dispatch arm in `dev/devcontainer`, add a row to `lib/command-table.tsv`. That is the whole workflow — the usage text, the bash/zsh/fish word lists, their descriptions, and the per-command argument wiring are all generated from the row. Never hand-edit a command list in `dev/devcontainer-completions` or the Commands block of `show_usage`.
 - When targeting a specific dependency group, use `uv sync --group dev`, not `--dev` (legacy alias removed in uv 0.7.x+).
 - When creating a new project overlay, strip inherited packages and config for tools the target project doesn't use — don't leave dead weight from the source overlay.
