@@ -161,6 +161,24 @@ rm "$drift_repo/.gitignore.template"
 : > "$drift_repo/.gitignore"
 assert_eq "a checkout without .gitignore.template draws no warning" "" "$(warn "$drift_repo")"
 
+# As a pre-commit hook in a linked worktree, the probe runs with git's own
+# GIT_DIR (and GIT_INDEX_FILE) exported. The drift check's scratch `git init`
+# then re-initialised THAT repo, writing core.bare=true into the shared config,
+# so the main checkout stopped being a work tree. Reproduced here against a
+# disposable main checkout and worktree, never a real one. The drift assertion
+# is a control: it held even with the bug (`-C "$scratch"` still made the
+# scratch dir the work tree), so only the config assertion pins the fix.
+hook_main="$(new_repo "$tmp/hookmain")"
+git -C "$hook_main" worktree add -q "$tmp/hookwt" -b hookwt
+cp "$DEV_BASE/.gitignore.template" "$tmp/hookwt/.gitignore.template"
+grep -vxF '.kata.toml' "$DEV_BASE/.gitignore.template" > "$tmp/hookwt/.gitignore"
+hook_out="$(cd "$tmp/hookwt" && GIT_DIR="$(git rev-parse --absolute-git-dir)" \
+    GIT_INDEX_FILE="$(git rev-parse --absolute-git-dir)/index" \
+    GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$tmp/xdg" "$check" 2>&1 >/dev/null || true)"
+assert_eq "under an exported GIT_DIR, the main checkout's config is not made bare" \
+    "false" "$(git -C "$hook_main" config --get core.bare || echo unset)"
+assert_contains "under an exported GIT_DIR, drift is still reported" ".kata.toml" "$hook_out"
+
 # Wiring: a probe only guards if its consumers run it.
 assert_true "the pre-commit local hook runs the probe" \
     grep -q 'entry: dev/check-gitignore-agents' "$DEV_BASE/.pre-commit-config.yaml"

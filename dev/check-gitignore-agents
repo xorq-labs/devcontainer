@@ -30,6 +30,13 @@
 #       not; 1 = broken; anything else = git itself failed.
 set -euo pipefail
 
+# The repo is the one at DIR, never one inherited from the environment. A
+# pre-commit hook in a linked worktree runs with GIT_DIR exported, and the
+# scratch `git init` below then re-initialises THAT repo instead of creating
+# one, writing core.bare=true into the shared config: the main checkout stops
+# being a work tree.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
 # Resolve to the repo root before probing. check-ignore matches a RELATIVE path
 # against the rules in force at that path, so probing from a subdirectory asks
 # about `<subdir>/.claude/agents/...` — which a root-anchored `.claude/*` does
