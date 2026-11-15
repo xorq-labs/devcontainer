@@ -39,34 +39,70 @@
 # worktree are never overwritten. A copy that cannot be refreshed (an
 # unreadable source) keeps its old file and makes the run exit 1. Only names
 # are printed, never contents or diffs: the copy lists hold secrets.
+#
+# Upstream can start tracking a path a worktree already holds as a copy or a
+# symlink. Taking that commit then fails one of two ways: git refuses the merge
+# over an untracked path that is not ignored, and silently replaces one that
+# is, local edits included. --pre-merge <ref> runs before the merge (or pull,
+# rebase, checkout) of <ref> and clears every untracked path <ref> tracks:
+# a symlink into the main checkout, or a file identical to <ref>'s, is removed,
+# since nothing is lost; anything else is moved to the same backup dir
+# --refresh uses. It does not merge. No git hook runs before git's
+# untracked-overwrite check, so it has to be a step the user runs first.
+# A path the worktree tracks is never recorded in the manifest, by --pre-merge
+# or a plain run: cleanup-worktree restores a tracked `copy` entry with `git
+# checkout --`, which would discard an edit to a file upstream now owns.
 set -euo pipefail
 
 usage() {
     cat <<'USAGE'
 Usage: setup-worktree [--refresh]
+       setup-worktree --pre-merge <ref>
 
 Propagate overlay copies/symlinks from the main checkout into the current
 worktree. Existing copies are left alone unless --refresh is given, which
 re-copies those that differ from the main checkout's, backing up the old
 file under the worktree's git admin dir.
+
+--pre-merge <ref> prepares the worktree to take <ref> (merge, pull, rebase,
+checkout): every untracked path <ref> tracks is removed when nothing is lost
+(a symlink into the main checkout, a file identical to <ref>'s) and backed up
+otherwise. Run it, then merge:
+
+  git fetch && setup-worktree --pre-merge origin/main && git merge origin/main
 USAGE
 }
 
 refresh=0
-for _arg in "$@"; do
-    case "$_arg" in
+pre_merge=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --refresh) refresh=1 ;;
+        --pre-merge)
+            if [ "$#" -lt 2 ]; then
+                echo "setup-worktree: --pre-merge needs a ref" >&2
+                usage >&2
+                exit 2
+            fi
+            pre_merge="$2"
+            shift
+            ;;
         -h | --help)
             usage
             exit 0
             ;;
         *)
-            echo "setup-worktree: unknown argument: $_arg" >&2
+            echo "setup-worktree: unknown argument: $1" >&2
             usage >&2
             exit 2
             ;;
     esac
+    shift
 done
+if [ "$refresh" -eq 1 ] && [ -n "$pre_merge" ]; then
+    echo "setup-worktree: --refresh and --pre-merge are separate runs" >&2
+    exit 2
+fi
 
 _base="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 . "$_base/lib/git.sh"
@@ -81,8 +117,6 @@ fi
 _project_dir="$(resolve_project_dir "$_base" "$main")"
 
 manifest="$here/.envrcs/.worktree-manifest"
-mkdir -p "$here/.envrcs"
-: > "$manifest"
 changes=0
 
 . "$_base/lib/list-file.sh"
@@ -116,7 +150,19 @@ same_copy() {
 # directory as a link, so that is a copy entry like any other.
 is_real_dir() { [ ! -L "$1" ] && [ -d "$1" ]; }
 
+# Tracked in this worktree's index (a directory counts if anything under it is).
+is_tracked() { git -C "$here" ls-files --error-unmatch -- "$1" >/dev/null 2>&1; }
+
 _backup_root=""
+# Move $1 (relative to the worktree) under this run's backup set.
+backup_path() {
+    local rel="$1"
+    if [ -z "$_backup_root" ]; then
+        _backup_root="$(git -C "$here" rev-parse --absolute-git-dir)/setup-worktree-backup/$(date +%Y%m%dT%H%M%S)"
+    fi
+    mkdir -p "$_backup_root/$(dirname "$rel")"
+    mv "$here/$rel" "$_backup_root/$rel"
+}
 refresh_failed=0
 refresh_suffix=".setup-worktree-refresh"
 # A temp file refresh_copy left behind (a run killed between its two renames).
@@ -136,7 +182,6 @@ refresh_copy() {
     local tmp="$dst$refresh_suffix"
     [ "$refresh" -eq 1 ] || return 0
     is_real_dir "$src" || is_real_dir "$dst" && return 0
-    git -C "$here" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 && return 0
     [ "$src" -ef "$dst" ] && return 0
     same_copy "$src" "$dst" && return 0
     if ! cp -P "$src" "$tmp"; then
@@ -145,15 +190,83 @@ refresh_copy() {
         refresh_failed=$((refresh_failed + 1))
         return 0
     fi
-    if [ -z "$_backup_root" ]; then
-        _backup_root="$(git -C "$here" rev-parse --absolute-git-dir)/setup-worktree-backup/$(date +%Y%m%dT%H%M%S)"
-    fi
-    mkdir -p "$_backup_root/$(dirname "$rel")"
-    mv "$dst" "$_backup_root/$rel"
+    backup_path "$rel"
     mv "$tmp" "$dst"
     echo "refreshed $rel (previous copy: $_backup_root/$rel)"
     changes=$((changes + 1))
 }
+
+# --pre-merge: the untracked path that stops <ref>'s $1 landing — $1 itself, or
+# the first ancestor that is a file or a symlink (a symlinked directory: git
+# never writes through one). Fails when nothing untracked is in the way.
+merge_blocker() {
+    local path="$1" prefix="" rest="$1"
+    while :; do
+        prefix="${prefix:+$prefix/}${rest%%/*}"
+        if [ -L "$here/$prefix" ] || { [ -e "$here/$prefix" ] && { [ "$prefix" = "$path" ] || [ ! -d "$here/$prefix" ]; }; }; then
+            is_tracked "$prefix" && return 1
+            printf '%s' "$prefix"
+            return 0
+        fi
+        [ -e "$here/$prefix" ] && [ "$prefix" != "$path" ] || return 1
+        rest="${rest#*/}"
+    done
+}
+
+# --pre-merge: whether the worktree's $2 already is <ref>'s $2, so removing it
+# loses nothing. Content and link target only; a mode bit is not worth a backup.
+same_as_ref() {
+    local ref="$1" rel="$2" mode sha
+    read -r mode _ sha _ < <(git -C "$here" ls-tree "$ref" -- "$rel")
+    case "$mode" in
+        120000) [ -L "$here/$rel" ] && [ "$(readlink "$here/$rel")" = "$(git -C "$here" cat-file blob "$sha")" ] ;;
+        100644 | 100755) [ ! -L "$here/$rel" ] && [ -f "$here/$rel" ] \
+            && [ "$(git -C "$here" hash-object -- "$rel")" = "$sha" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+if [ -n "$pre_merge" ]; then
+    if ! _ref="$(git -C "$here" rev-parse --verify --quiet "$pre_merge^{commit}")"; then
+        echo "setup-worktree: --pre-merge: not a commit: $pre_merge" >&2
+        exit 2
+    fi
+    declare -A _cleared=()
+    # Paths <ref> tracks that the index does not: only those can be in the way.
+    while IFS= read -r -d '' _path; do
+        _blocker="$(merge_blocker "$_path")" || continue
+        [[ -v _cleared["$_blocker"] ]] && continue
+        _cleared["$_blocker"]=1
+        if [ -L "$here/$_blocker" ] && [[ "$(readlink -f "$here/$_blocker")" == "$main/"* ]]; then
+            rm "$here/$_blocker"
+            echo "removed $_blocker (a link into the main checkout)"
+        elif [ "$_blocker" = "$_path" ] && same_as_ref "$_ref" "$_path"; then
+            rm "$here/$_blocker"
+            echo "removed $_blocker (identical to $pre_merge)"
+        else
+            backup_path "$_blocker"
+            echo "backed up $_blocker (now: $_backup_root/$_blocker)"
+        fi
+    done < <(comm -z -23 \
+        <(git -C "$here" ls-tree -r -z --name-only "$_ref" | sort -z) \
+        <(git -C "$here" ls-files -z | sort -z))
+    # The merge makes these tracked; drop them (and anything under them) from
+    # the manifest so cleanup-worktree leaves them to git.
+    if [ "${#_cleared[@]}" -gt 0 ] && [ -f "$manifest" ]; then
+        while IFS= read -r _line; do
+            _ent="${_line#*$'\t'}"
+            for _c in "${!_cleared[@]}"; do
+                [[ "$_ent" == "$_c" || "$_ent" == "$_c/"* ]] && continue 2
+            done
+            printf '%s\n' "$_line"
+        done < "$manifest" > "$manifest.tmp"
+        mv "$manifest.tmp" "$manifest"
+    fi
+    exit 0
+fi
+
+mkdir -p "$here/.envrcs"
+: > "$manifest"
 
 # Copy paths listed in worktree-copies.txt (globs expanded against $main).
 # NUL-delimited subshell with nullglob handles filenames with spaces safely.
@@ -165,6 +278,7 @@ while IFS= read -r pattern; do
         is_present "$f" || continue
         rel="${f#"$main/"}"
         drop_refresh_tmp "$rel"
+        is_tracked "$rel" && continue
         if ! is_present "$here/$rel"; then
             mkdir -p "$here/$(dirname "$rel")"
             cp -Pv "$f" "$here/$rel"
@@ -189,13 +303,16 @@ elif [ -e "$main/.gitignore.template" ]; then
 fi
 if [ -n "$_gitignore_src" ]; then
     drop_refresh_tmp ".gitignore"
-    if ! is_present "$here/.gitignore"; then
+    if is_tracked .gitignore; then
+        :
+    elif ! is_present "$here/.gitignore"; then
         cp -v "$_gitignore_src" "$here/.gitignore"
         changes=$((changes + 1))
+        printf 'copy\t%s\n' ".gitignore" >> "$manifest"
     else
         refresh_copy "$_gitignore_src" ".gitignore"
+        printf 'copy\t%s\n' ".gitignore" >> "$manifest"
     fi
-    printf 'copy\t%s\n' ".gitignore" >> "$manifest"
 fi
 # The copy above propagates the main checkout's live rules, drift included:
 # warn — never block worktree creation — when the effective rules here break
@@ -215,6 +332,7 @@ fi
 link_from_main() {
     local target="$1"
     heal_stale_symlink "$here/$target" && changes=$((changes + 1))
+    is_tracked "$target" && return 0
     if [ -e "$main/$target" ]; then
         if ! is_present "$here/$target"; then
             mkdir -p "$(dirname "$here/$target")"
