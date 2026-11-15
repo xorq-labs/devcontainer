@@ -36,6 +36,14 @@
 # cases; the '!'-as-missing clause made `false` -> "a missing '!' rule is in
 # the append command"; ignored_set's `-gt 1` made `-gt 200` -> "a check-ignore
 # failure on the drift side exits non-zero".
+#
+# Remaining clauses (run 2026-11-15, PR 167), 38 assertions, each red alone:
+# the anchor strip made a no-op -> 35/3 (git rejects `/anchored-rule`); the
+# quote escaping made `'$r'` -> 37/1; the empty-template guard made a no-op ->
+# 37/1; the EXIT trap made a no-op -> 37/1 "leaves no scratch dir behind".
+# The `*`/`?` substitutions and `--no-index` survived their removal for every
+# input (a literal glob matches itself; scratch repos track nothing) and were
+# deleted.
 set -euo pipefail
 
 . "$(dirname "$(readlink -f "$0")")/lib/harness.sh"
@@ -202,6 +210,35 @@ cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore"
 assert_false "a check-ignore failure on the drift side exits non-zero" \
     env GIT_CONFIG_GLOBAL=/dev/null XDG_CONFIG_HOME="$tmp/xdg" "$check" "$drift_repo"
 cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore.template"
+
+# Rule shapes the real template does not carry yet, in a template of their
+# own: an anchored rule (whose probe must lose its leading `/`, or git rejects
+# it as outside the repository) and a rule holding a single quote (which the
+# printed command must escape). Each, missing from the live file, is reported
+# by a command that clears it.
+shapes_template="$(cat "$DEV_BASE/.gitignore.template"; printf '%s\n' '/anchored-rule' "it's-a-rule")"
+printf '%s\n' "$shapes_template" > "$drift_repo/.gitignore.template"
+for rule in '/anchored-rule' "it's-a-rule"; do
+    grep -vxF -- "$rule" <<<"$shapes_template" > "$drift_repo/.gitignore"
+    fix="$(warn "$drift_repo" | grep -F "printf '%s\n'" | sed 's/^ *//' || true)"
+    assert_contains "a missing rule shaped $rule is in the append command" "$rule" "$(warn "$drift_repo" || true)"
+    bash -c "$fix" 2>/dev/null || true
+    assert_eq "...and the printed command clears $rule" "" "$(warn "$drift_repo" || true)"
+done
+
+# A template of comments only has nothing to compare: no output, exit 0 (an
+# empty probe list would otherwise hand check-ignore a blank path).
+printf '# comments only\n\n' > "$drift_repo/.gitignore.template"
+assert_eq "a template with no rules draws no warning" "" "$(warn "$drift_repo")"
+
+# The scratch repos go away with the run, on the drift path and the clean one.
+mkdir -p "$tmp/tmpdir"
+cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore.template"
+grep -vxF '.kata.toml' "$DEV_BASE/.gitignore.template" > "$drift_repo/.gitignore"
+TMPDIR="$tmp/tmpdir" warn "$drift_repo" >/dev/null || true
+cp "$DEV_BASE/.gitignore.template" "$drift_repo/.gitignore"
+TMPDIR="$tmp/tmpdir" warn "$drift_repo" >/dev/null || true
+assert_eq "the drift check leaves no scratch dir behind" "" "$(ls -A "$tmp/tmpdir")"
 
 # No template, nothing to compare: a consumer repo gets no drift output.
 rm "$drift_repo/.gitignore.template"

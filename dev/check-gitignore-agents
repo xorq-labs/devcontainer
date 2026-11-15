@@ -18,8 +18,8 @@
 # added to .gitignore.template reaches an existing main checkout only by hand
 # (PR 167's .envrcs/.env.* and .kata.toml); a worktree takes main's copy, via
 # setup-worktree or its --refresh. Each template rule becomes one
-# probe path (`*` -> probe, `?` -> p; a trailing `/` stays, and check-ignore
-# reads it as a directory), and every probe the live .gitignore FILE decides
+# probe path (the rule itself, unanchored; a trailing `/` stays, and
+# check-ignore reads it as a directory), and every probe the live .gitignore FILE decides
 # differently from the template is reported with the lines to append. Each
 # side is one file in its own scratch repo with no global config, so a global
 # ignore cannot hide a rule the file lacks. A warning only: drift never changes
@@ -28,6 +28,15 @@
 # .gitignore.template. A rule whose probe
 # the template itself does not decide that way (a `[...]` class, say) compares
 # equal on both sides and so is never reported.
+#
+# Accepted limits (PR 167, decided 2026-11-15): a CRLF template's rules keep
+# their \r here, so deleting one goes unreported; a symlinked live .gitignore
+# (which git does not read) is reported as missing every rule, and the printed
+# `>>` writes through the link; a bare `/` rule, or GIT_*_PATHSPECS=1 in the
+# environment, makes check-ignore fail and the hook exit 128, blocking commits
+# (fail-closed); a checkout path holding a `'` breaks the printed command's
+# quoting; a mktemp or cp failure exits 1, which reads like a broken ADR-0003
+# probe.
 #
 # Exit: 0 = re-inclusion works (or nothing ignores the probe at all), drift or
 #       not; 1 = broken; anything else = git itself failed.
@@ -83,12 +92,13 @@ fi
 template="$dir/.gitignore.template"
 [ -f "$template" ] || exit 0
 
-# probe_for <rule> -> a path the rule matches (negation and anchor stripped)
+# probe_for <rule> -> a path the rule matches: the rule itself, negation and
+# anchor stripped. A glob needs no substitution — `*`, `**` and `?` each match
+# their own literal character — and a leading `/` must go, or git rejects the
+# path as outside the repository.
 probe_for() {
     local p="${1#!}"
-    p="${p#/}"
-    p="${p//\*/probe}"
-    printf '%s\n' "${p//\?/p}"
+    printf '%s\n' "${p#/}"
 }
 
 rules=() probes=()
@@ -121,7 +131,7 @@ sgit() {
 # check-ignore exits 1 when it ignores none, which is an answer, not a failure.
 ignored_set() {
     local got rc=0
-    got="$(printf '%s\n' "${probes[@]}" | sgit -C "$1" check-ignore --no-index --stdin 2>&1)" || rc=$?
+    got="$(printf '%s\n' "${probes[@]}" | sgit -C "$1" check-ignore --stdin 2>&1)" || rc=$?
     if [ "$rc" -gt 1 ]; then
         echo "git check-ignore failed (rc=$rc): $got" >&2
         exit "$rc"
