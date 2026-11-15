@@ -671,6 +671,17 @@ taxonomy and reads as `test:`.
   moves, so a source that cannot be read leaves the old copy in place (and the
   run exits 1). Output names paths only, never contents or diffs: copy lists
   carry secrets (`test: tests/test-setup-refresh.sh`).
+- Once upstream tracks a path a worktree holds untracked (a copy, a symlink,
+  or a symlinked ancestor), git refuses the merge if the path is not ignored
+  and silently replaces it if it is. `setup-worktree --pre-merge <ref>` is the
+  step that runs first: it removes only what the merge recreates losslessly
+  (a link into main, a file identical to `<ref>`'s), backs up everything else
+  as `--refresh` does, never touches a tracked path, and never writes THROUGH
+  a symlinked directory — which would move main's own file. No git hook runs
+  before git's untracked-overwrite check, so nothing invokes it automatically.
+  Neither it nor a plain run records a tracked path in the manifest:
+  `cleanup-worktree` restores a tracked `copy` entry with `git checkout --`
+  (`test: tests/test-setup-pre-merge.sh`).
 - Neither `dev/hooks/pre-commit` nor `dev_main_tree()` in `lib/git.sh` may pipe
   worktree listings into a reader that exits early (`| head -1`): the writer
   dies of SIGPIPE and `pipefail` fails the hook AFTER a correct assignment, so
