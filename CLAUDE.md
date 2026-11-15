@@ -572,10 +572,12 @@ taxonomy and reads as `test:`.
   authors agent files there, and the commit-time hook still fires if one
   does).
 - Every other `.gitignore.template` rule reaches an existing main checkout's
-  live file only by hand (worktrees copy main's), so the same script then WARNS (exit unchanged) about each
-  template rule the live file decides differently, printing the lines to
-  append — and with them the template's later `!` rules, which an appended
-  glob would otherwise defeat. The hook sets `verbose: true` because a warning
+  live file only by hand (worktrees copy main's), so the same script then
+  WARNS (exit unchanged) about each template rule the live FILE decides
+  differently — each side alone in a scratch repo, so no global ignore can
+  hide a missing rule — printing the lines to append, with the template's
+  later `!` rules, which an appended glob would otherwise defeat; an absent
+  live file gets one line naming the `cp`. The hook sets `verbose: true` because a warning
   on exit 0 is otherwise hidden (tool: dev/check-gitignore-agents; test:
   tests/test-gitignore-agents-reinclusion.sh, which derives one case per
   template rule by deleting it from a live copy).

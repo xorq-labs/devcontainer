@@ -37,9 +37,11 @@ migrated to it.
    layout: this repo's `.envrc.user.kenn` builds the
    toolkit from the working tree (it owns the flake), and its `.gitignore`
    model is propagated by `dev/setup-worktree` and checked by
-   `dev/check-gitignore-agents`, which xorq-envrcs' rebuild of `.gitignore`
-   from its template would compete with (at 37873f9, its root `.envrc`:
-   `_from_template .gitignore 644`).
+   `dev/check-gitignore-agents`. At 37873f9 xorq-envrcs' root `.envrc`
+   creates `.gitignore` from its template when absent (`_from_template`, which
+   never overwrites); in a new worktree that would run on the first direnv
+   load, before `dev/setup-worktree`, whose skip-if-present copy would then
+   never bring in the main checkout's live file.
 2. **Credential: one identity token per person.** An agent writes on its
    person's token and tells itself apart with `KATA_TEAMMATE`; the name is
    self-asserted (xorq-kata-infra's README, "Three credentials, not one").
@@ -77,11 +79,9 @@ migrated to it.
   validates an explicit bearer on `/api/v1/health` (`requireBearer` in kata's
   `internal/daemon/auth.go`), so a bad token fails it as `token_invalid`.
 - An existing checkout's live `.gitignore` is untracked (CLAUDE.md, "Gitignore
-  model") and does not pick up this PR's template lines. Add them before
-  creating `.envrcs/.env.local`:
-  `printf '%s\n' '.envrcs/.env.*' '!.envrcs/.env.*.template' .kata.toml
-  .kata.local.toml >> .gitignore`; `git check-ignore .envrcs/.env.local` then
-  prints the path. `dev/check-gitignore-agents` warns on every commit until
-  it is done, and prints this command for whatever is missing.
+  model") and does not pick up this PR's template lines. Before creating
+  `.envrcs/.env.local`, add them: the `gitignore-agents-reinclusion`
+  pre-commit hook (`dev/check-gitignore-agents`) lists the missing lines on
+  every commit and prints the command that appends them.
 - Turning on GitHub sync for this repo is server configuration in
   xorq-kata-infra, and a separate decision.

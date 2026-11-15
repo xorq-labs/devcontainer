@@ -19,10 +19,13 @@
 # (PR 167's .envrcs/.env.* and .kata.toml); a worktree takes main's copy, via
 # setup-worktree or its --refresh. Each template rule becomes one
 # probe path (`*` -> probe, `?` -> p; a trailing `/` stays, and check-ignore
-# reads it as a directory), and every probe the live rules decide differently
-# from the template's is reported with the lines to append. A warning only:
-# drift never changes the exit code (a failing git still does), and the check
-# is skipped where the checkout has no .gitignore.template. A rule whose probe
+# reads it as a directory), and every probe the live .gitignore FILE decides
+# differently from the template is reported with the lines to append. Each
+# side is one file in its own scratch repo with no global config, so a global
+# ignore cannot hide a rule the file lacks. A warning only: drift never changes
+# the exit code (a failing git still does); with no live file it prints one
+# line naming the cp instead, and it is skipped where the checkout has no
+# .gitignore.template. A rule whose probe
 # the template itself does not decide that way (a `[...]` class, say) compares
 # equal on both sides and so is never reported.
 #
@@ -96,11 +99,29 @@ while IFS= read -r rule || [ -n "$rule" ]; do
 done <"$template"
 [ "${#rules[@]}" -gt 0 ] || exit 0
 
-# ignored_set <git -C args...> -> the probes those rules ignore, one per line.
+# No live file is not drift of every rule: say what to do instead. (A fresh
+# clone, and every CI lint run, which checks out no untracked .gitignore.)
+if [ ! -e "$dir/.gitignore" ] && [ ! -L "$dir/.gitignore" ]; then
+    echo "note: $dir has no live .gitignore; start one with: cp .gitignore.template .gitignore" >&2
+    exit 0
+fi
+
+# The comparison is file against file: each side is one .gitignore in its own
+# scratch repo, with no global or system config, no `-c` inherited through
+# GIT_CONFIG_PARAMETERS/COUNT and no init template, so a global excludesFile
+# cannot mask a rule the live file lacks (setup_git in lib/host-bridge.sh
+# copies only user.name and user.email, so the host's does not reach the
+# container).
+sgit() {
+    env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT \
+        GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"
+}
+
+# ignored_set <scratch repo> -> the probes its .gitignore ignores, one per line.
 # check-ignore exits 1 when it ignores none, which is an answer, not a failure.
 ignored_set() {
     local got rc=0
-    got="$(printf '%s\n' "${probes[@]}" | git "$@" check-ignore --no-index --stdin 2>&1)" || rc=$?
+    got="$(printf '%s\n' "${probes[@]}" | sgit -C "$1" check-ignore --no-index --stdin 2>&1)" || rc=$?
     if [ "$rc" -gt 1 ]; then
         echo "git check-ignore failed (rc=$rc): $got" >&2
         exit "$rc"
@@ -110,27 +131,34 @@ ignored_set() {
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
-git init -q "$scratch"
-cp "$template" "$scratch/.gitignore"
-want="$(ignored_set -C "$scratch" -c core.excludesFile=/dev/null)"
-have="$(ignored_set -C "$dir")"
+sgit init -q --template= "$scratch/want"
+sgit init -q --template= "$scratch/have"
+cp "$template" "$scratch/want/.gitignore"
+# -P: a symlinked live file stays a symlink, which git ignores here as it does
+# in the checkout (it opens .gitignore O_NOFOLLOW).
+cp -P "$dir/.gitignore" "$scratch/have/.gitignore"
+want="$(ignored_set "$scratch/want")"
+have="$(ignored_set "$scratch/have")"
 
 # A missing rule appended at the end lands after every '!' rule, which then no
 # longer re-includes what it ignores (.envrcs/.env.* would swallow the tracked
 # templates). So the append list also carries each later '!' rule, in order.
+# A '!' rule whose probe the live file ignores is missing too (absent, or
+# overridden by a live extra): appending it restores the template's verdict.
 missing=() extra=() append=()
 for i in "${!rules[@]}"; do
-    probe="${probes[$i]}"
+    probe="${probes[$i]}" rule="${rules[$i]}"
     w=0 h=0
     grep -qxF -- "$probe" <<<"$want" && w=1
     grep -qxF -- "$probe" <<<"$have" && h=1
-    if [ "$w" -eq 1 ] && [ "$h" -eq 0 ]; then
-        missing+=("${rules[$i]}")
-        append+=("${rules[$i]}")
+    if { [ "$w" -eq 1 ] && [ "$h" -eq 0 ]; } ||
+       { [ "$w" -eq 0 ] && [ "$h" -eq 1 ] && [ "${rule:0:1}" = '!' ]; }; then
+        missing+=("$rule")
+        append+=("$rule")
     elif [ "$w" -eq 0 ] && [ "$h" -eq 1 ]; then
-        extra+=("${rules[$i]} (probe $probe)")
-    elif [ "${#append[@]}" -gt 0 ] && [ "${rules[$i]:0:1}" = '!' ]; then
-        append+=("${rules[$i]}")
+        extra+=("$rule (probe $probe)")
+    elif [ "${#append[@]}" -gt 0 ] && [ "${rule:0:1}" = '!' ]; then
+        append+=("$rule")
     fi
 done
 
@@ -138,7 +166,7 @@ if [ "${#missing[@]}" -gt 0 ] || [ "${#extra[@]}" -gt 0 ]; then
     {
         echo "WARNING: the live .gitignore in $dir disagrees with .gitignore.template."
         if [ "${#missing[@]}" -gt 0 ]; then
-            echo "  Not ignored live, ignored by the template:"
+            echo "  Template rules the live file lacks or overrides:"
             printf '      %s\n' "${missing[@]}"
             echo "  Append them, with the template's later '!' rules so those still apply:"
             q=""
@@ -146,7 +174,7 @@ if [ "${#missing[@]}" -gt 0 ] || [ "${#extra[@]}" -gt 0 ]; then
             echo "    printf '%s\\n'$q >> '$dir/.gitignore'"
         fi
         if [ "${#extra[@]}" -gt 0 ]; then
-            echo "  Ignored live, left alone or re-included by the template:"
+            echo "  Ignored by the live file, left alone by the template:"
             printf '    %s\n' "${extra[@]}"
         fi
         echo "  If this is a worktree, fix the main checkout too: setup-worktree copies its live file."
