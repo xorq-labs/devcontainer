@@ -177,6 +177,7 @@ jobs:
       # publish left those uncompressed blobs on ghcr, and the first publish
       # after the switch pushed them back under a rewritten manifest. Forcing
       # gzip limits reuse to gzip blobs and leaves ours byte-identical.
+      # nix/base/probe-push-reuse.sh reproduces it against a local registry.
       - name: Push per-arch image
         if: github.event_name != 'pull_request'
         run: |
