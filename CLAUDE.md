@@ -677,8 +677,12 @@ taxonomy and reads as `test:`.
   step that runs first: it removes only what the merge recreates losslessly
   (a link into main, a file identical to `<ref>`'s), backs up everything else
   as `--refresh` does, never touches a tracked path, and never writes THROUGH
-  a symlinked directory — which would move main's own file. No git hook runs
-  before git's untracked-overwrite check, so nothing invokes it automatically.
+  a symlinked directory — which would move main's own file. Nothing invokes it
+  automatically, because no hook suits: before git's untracked-overwrite
+  refusal, `checkout`/`switch` fire none, `merge`/`pull` only
+  `reference-transaction` (every ref update, never told the incoming ref), and
+  `rebase` fires `pre-rebase`, which covers rebase alone (measured once with
+  git 2.55.0; `unguarded`: git's behaviour, not this tree's).
   Neither it nor a plain run records a tracked path in the manifest:
   `cleanup-worktree` restores a tracked `copy` entry with `git checkout --`
   (`test: tests/test-setup-pre-merge.sh`).

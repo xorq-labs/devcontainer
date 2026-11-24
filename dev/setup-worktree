@@ -43,12 +43,13 @@
 # Upstream can start tracking a path a worktree already holds as a copy or a
 # symlink. Taking that commit then fails one of two ways: git refuses the merge
 # over an untracked path that is not ignored, and silently replaces one that
-# is, local edits included. --pre-merge <ref> runs before the merge (or pull,
-# rebase, checkout) of <ref> and clears every untracked path <ref> tracks:
-# a symlink into the main checkout, or a file identical to <ref>'s, is removed,
-# since nothing is lost; anything else is moved to the same backup dir
-# --refresh uses. It does not merge. No git hook runs before git's
-# untracked-overwrite check, so it has to be a step the user runs first.
+# is, local edits included. --pre-merge <ref> runs before the merge of <ref>
+# (pull, rebase and checkout should behave alike; only merge is tested) and
+# clears every untracked path <ref> tracks: a symlink into the main checkout,
+# or a file identical to <ref>'s, is removed, since nothing is lost; anything
+# else is moved to the same backup dir --refresh uses. It does not merge. It is
+# a step the user runs first: no git hook suits (CLAUDE.md, the --pre-merge
+# invariant).
 # A path the worktree tracks is never recorded in the manifest, by --pre-merge
 # or a plain run: cleanup-worktree restores a tracked `copy` entry with `git
 # checkout --`, which would discard an edit to a file upstream now owns.
