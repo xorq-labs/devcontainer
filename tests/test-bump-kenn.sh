@@ -76,6 +76,20 @@
 #     FAIL: and says why
 #   Results: 50 passed, 2 failed
 #   (mutation runs 2026-08-18)
+#   §5 later took the sibling name from the README instead of the template,
+#   and gained a check that the template names its own dev/. Re-probed:
+#   1. FORM-ONLY — pad the template's `PATH_add` with extra spaces. Green:
+#      81 passed, 0 failed.
+#   2. SEMANTIC — restore the template's old
+#      `PATH_add $direnv_root/../devcontainer/dev`, or comment the line out.
+#      Each observed red:
+#        FAIL: the template puts this checkout's own dev/ on PATH
+#      Results: 80 passed, 1 failed
+#      Rename the README's sibling to `../dc/dev`. Observed red:
+#        FAIL: the README still documents a sibling framework checkout
+#        FAIL: sibling layout resolves to the framework beside the project
+#      Results: 79 passed, 2 failed
+#   (mutation runs 2026-11-14)
 #
 # Third pair, for §6's ADR-0007 source-build shape guard (added 2026-08-20):
 #   1. FORM-ONLY — reorder SOURCE_BUILD_TOOLS's keys and add a blank line
@@ -738,21 +752,28 @@ echo "== .envrc.user.kenn checkout discovery =="
 
 # .envrcs/ is the least-guarded tier in the repo (no shared library, and until
 # this block no suite exercised a fragment at all), which is how the sibling
-# layout got missed: .envrc.user.template puts the framework's dev/ on PATH via
-# `PATH_add $direnv_root/../devcontainer/dev`, while this fragment only tried
-# $direnv_root and one absolute path — so a sibling checkout got the scripts
-# and was then told the flake did not exist.
+# layout got missed: the README's no-nix route puts the framework's dev/ on
+# PATH via `PATH_add ../devcontainer/dev` from a project beside it, while this
+# fragment only tried $direnv_root and one absolute path — so a sibling
+# checkout got the scripts and was then told the flake did not exist.
 #
 # Driven functionally rather than by grepping for the path expression: the
 # fragment is SOURCED against a stubbed direnv (use flake / log_error / PATH_add
 # are direnv stdlib, absent under bash), so what is asserted is the resolution
-# these two files must agree on, not the spelling of either.
+# these files must agree on, not the spelling of any of them.
 env_kenn="$DEV_BASE/.envrcs/.envrc.user.kenn"
 template="$DEV_BASE/.envrcs/.envrc.user.template"
+readme="$DEV_BASE/README.md"
 
-# Derive the layout the template assumes rather than restating it here.
-template_sibling="$(sed -n 's|.*PATH_add \$direnv_root/\.\./\([A-Za-z0-9_-]*\)/dev.*|\1|p' "$template")"
-assert_eq "the template still assumes a sibling framework checkout" "devcontainer" "$template_sibling"
+# Derive the layout the README documents rather than restating it here.
+readme_sibling="$(sed -n 's|^PATH_add \.\./\([A-Za-z0-9_-]*\)/dev$|\1|p' "$readme")"
+assert_eq "the README still documents a sibling framework checkout" "devcontainer" "$readme_sibling"
+
+# This repo's own template must name its own dev/. The sibling form resolves,
+# from a worktree, to the MAIN checkout's scripts, so a branch's edits to dev/
+# never ran where they were being made.
+template_paths="$(sed -n 's|^PATH_add[[:space:]]\{1,\}||p' "$template")"
+assert_eq "the template puts this checkout's own dev/ on PATH" '$direnv_root/dev' "$template_paths"
 
 # resolve <direnv_root> <fake-home> -> the DEVCONTAINER_HOME the fragment picks
 resolve() {
@@ -774,10 +795,10 @@ mkdir -p "$layouts/self/nix/kenn"
 assert_eq "in-repo layout resolves to the checkout itself" "$layouts/self" \
     "$(resolve "$layouts/self" "$layouts/nohome")"
 
-# (b) the sibling layout the template assumes: project beside the framework
-mkdir -p "$layouts/work/$template_sibling/nix/kenn" "$layouts/work/proj"
+# (b) the sibling layout the README documents: project beside the framework
+mkdir -p "$layouts/work/$readme_sibling/nix/kenn" "$layouts/work/proj"
 assert_eq "sibling layout resolves to the framework beside the project" \
-    "$layouts/work/$template_sibling" \
+    "$layouts/work/$readme_sibling" \
     "$(resolve "$layouts/work/proj" "$layouts/nohome")"
 
 # (c) neither: the conventional absolute path, which the flake really is under

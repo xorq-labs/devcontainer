@@ -11,6 +11,7 @@
   # host-facing tools the scripts shell out to.
 , bash
 , coreutils # GNU `readlink -f`, used pervasively for path resolution
+, diffutils # `cmp` (setup-worktree --refresh, init --nix)
 , git
 , gnugrep
 , gnused
@@ -32,6 +33,7 @@ let
   runtimeInputs = [
     bash
     coreutils
+    diffutils
     git
     gnugrep
     gnused

@@ -291,16 +291,18 @@ taxonomy and reads as `test:`.
   it. The generalisation — every bump tool hand-writes its own mode/option
   rejection, and none of the other four is guarded — is #144.
 - `.envrcs/.envrc.user.kenn` must find the framework checkout in every layout
-  `.envrcs/.envrc.user.template` already assumes: the template puts the
-  framework's `dev/` on PATH with `$direnv_root/../devcontainer/dev`, so a
-  project checked out BESIDE the framework gets the scripts, and a fragment
-  that skips that candidate hands it the scripts and then denies the flake
-  exists. `.envrcs/` is the repo's least-guarded tier — no shared library, and
-  before this no suite exercised a fragment at all — which is why the two files
-  drifted at introduction (`test: tests/test-bump-kenn.sh` §5, which SOURCES
-  the fragment against a stubbed direnv over four real on-disk layouts and
-  derives the sibling name from the template rather than restating it, so the
-  spelling of neither file is load-bearing).
+  that puts its `dev/` on PATH: this checkout itself (`.envrcs/.envrc.user.template`
+  names `$direnv_root/dev`), and a project BESIDE the framework (the README's
+  no-nix route, `PATH_add ../devcontainer/dev`). A fragment that skips the
+  sibling candidate hands that project the scripts and then denies the flake
+  exists. The template must not use the sibling form itself: from a worktree
+  it names the MAIN checkout's `dev/`, so a branch's edits never run. `.envrcs/`
+  is the repo's least-guarded tier — no shared library, and before this no
+  suite exercised a fragment at all — which is why the files drifted at
+  introduction (`test: tests/test-bump-kenn.sh` §5, which SOURCES the fragment
+  against a stubbed direnv over four real on-disk layouts, derives the sibling
+  name from the README rather than restating it, and pins the template to its
+  own `dev/`).
 - `.envrcs/.envrc.kata` exports the team token (`KATA_AUTH_TOKEN`) only
   together with the team server (`KATA_SERVER`), and otherwise unsets any
   inherited token, which kata would send to whatever daemon it picks; the

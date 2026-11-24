@@ -7,4 +7,8 @@ source_env .envrc.user.uv
 dotenv_if_exists .env.local
 # source_env .envrc.kata        # opt-in: kata talks to the team server (after .env.local)
 
-PATH_add $direnv_root/../devcontainer/dev
+# This checkout's own dev/, not ../devcontainer/dev: from a worktree that
+# names the MAIN checkout's scripts. Shadows an installed nix package on
+# purpose, so you run the branch you are editing. Other projects get dev/ from
+# the package or a sibling clone (README, "Adapting to another project").
+PATH_add $direnv_root/dev
